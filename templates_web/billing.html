@@ -1,0 +1,29 @@
+{% extends "base.html" %}{% block title %}{{ t('billing_title') }} · {{ brand }}{% endblock %}
+{% block body %}
+<h1>{{ icon('card',22) }} {{ t('billing_title') }}</h1>
+{% set p = plans.plan(sub.plan) %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+    <div>
+      <div class="muted" style="font-size:13px;">{{ t('current_plan') }}</div>
+      <div style="font-size:24px;font-weight:800;">{% if role=='admin' %}<span class="grad-text">{{ t('owner_unlimited') }}</span>{% else %}{{ p.name_ar if lang=='ar' else p.name_en }}
+        {% if sub.status=='active' %}<span class="pill on">{{ t('status_active') }}</span>{% elif sub.status=='expired' %}<span class="pill off">{{ t('status_expired') }}</span>{% endif %}{% endif %}
+      </div>
+      {% if sub.expires_at and sub.plan!='free' %}<div class="muted" style="font-size:13px;">{{ t('expires_on') }}: {{ (sub.expires_at)|int }}</div>{% endif %}
+    </div>
+    <a class="btn" href="{{ url_for('pricing') }}">{{ icon('bolt',16) }} {{ t('nav_pricing') }}</a>
+  </div>
+</div>
+<div class="card">
+  <h2>{{ icon('clock',18) }} {{ t('payment_history') }}</h2>
+  {% if pays %}<div style="overflow-x:auto;"><table class="table">
+    <tr><th>#</th><th>{{ t('col_plan') }}</th><th>{{ t('col_amount') }}</th><th>{{ t('col_method') }}</th><th>{{ t('col_status') }}</th></tr>
+    {% for x in pays %}<tr>
+      <td>{{ x.id }}</td><td>{{ plans.plan_name(x.plan, lang) }}</td><td>{{ x.amount }} {{ t('egp') }}</td><td>{{ x.method }}</td>
+      <td>{% if x.status=='pending' %}<span class="pill" style="background:rgba(255,210,63,.15);color:#FFD23F;">{{ t('status_pending') }}</span>
+          {% elif x.status=='approved' %}<span class="pill on">{{ t('status_approved') }}</span>
+          {% else %}<span class="pill off">{{ t('status_rejected') }}</span>{% endif %}</td>
+    </tr>{% endfor %}
+  </table></div>{% else %}<p class="muted">{{ t('no_payments') }}</p>{% endif %}
+</div>
+{% endblock %}

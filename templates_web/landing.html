@@ -1,0 +1,21 @@
+{% extends "base.html" %}{% block title %}{{ brand }} — {{ t('hero_title_a') }}{% endblock %}
+{% block body %}
+<div class="center" style="padding:30px 0 10px;">
+  <img src="{{ url_for('static', filename='logo.svg') }}" style="height:56px;" alt="BotYalla">
+  <h1 style="font-size:40px;margin-top:24px;">{{ t('hero_title_a') }} <span class="grad-text">{{ t('hero_title_b') }}</span></h1>
+  <p class="sub" style="font-size:17px;max-width:640px;margin:14px auto 26px;">{{ t('hero_sub') }}</p>
+  <a class="btn" href="{{ url_for('register') }}" style="font-size:16px;padding:14px 28px;">{{ icon('rocket',18) }} {{ t('get_started_free') }}</a>
+  <div style="margin-top:14px;"><a class="muted" href="{{ url_for('login') }}">{{ t('have_account') }} {{ t('signin_link') }}</a></div>
+</div>
+<div class="grid c4" style="margin:40px 0;">
+  <div class="card center"><div style="color:var(--cyan);">{{ icon('flow',30) }}</div><h2 style="justify-content:center;">{{ t('feat_nocode') }}</h2><p class="muted" style="font-size:14px;">{{ t('feat_nocode_d') }}</p></div>
+  <div class="card center"><div style="color:var(--cyan);">{{ icon('chart',30) }}</div><h2 style="justify-content:center;">{{ t('feat_analytics') }}</h2><p class="muted" style="font-size:14px;">{{ t('feat_analytics_d') }}</p></div>
+  <div class="card center"><div style="color:var(--cyan);">{{ icon('megaphone',30) }}</div><h2 style="justify-content:center;">{{ t('feat_campaign') }}</h2><p class="muted" style="font-size:14px;">{{ t('feat_campaign_d') }}</p></div>
+  <div class="card center"><div style="color:var(--cyan);">{{ icon('calendar',30) }}</div><h2 style="justify-content:center;">{{ t('feat_booking') }}</h2><p class="muted" style="font-size:14px;">{{ t('feat_booking_d') }}</p></div>
+</div>
+<div class="card center" style="background:var(--grad-soft);">
+  <h2 style="justify-content:center;font-size:22px;">{{ t('cta_ready') }}</h2>
+  <p class="muted">{{ t('cta_ready_sub') }}</p>
+  <a class="btn" href="{{ url_for('register') }}">{{ icon('sparkles',16) }} {{ t('register') }}</a>
+</div>
+{% endblock %}

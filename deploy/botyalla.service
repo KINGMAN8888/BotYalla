@@ -1,0 +1,16 @@
+[Unit]
+Description=BotYalla SaaS (Gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=botyalla
+WorkingDirectory=/opt/botyalla
+Environment="PATH=/opt/botyalla/venv/bin"
+EnvironmentFile=/opt/botyalla/.env
+ExecStart=/opt/botyalla/venv/bin/gunicorn -c gunicorn_conf.py wsgi:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

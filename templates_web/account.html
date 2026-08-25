@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% block title %}{{ t('account_title') }} · {{ brand }}{% endblock %}
+{% block body %}
+<h1>{{ icon('settings',22) }} {{ t('account_title') }}</h1>
+<div class="card" style="max-width:520px;">
+  <div class="badge-feat" style="margin-bottom:14px;">{{ icon('shield',14) }} {{ t('role_' + me.get('role','user')) }}</div>
+  <form method="post">
+    {{ csrf_field() }}
+    <label>{{ t('username') }}</label>
+    <input name="username" value="{{ me.username }}" required>
+    <label>{{ t('new_password') }}</label>
+    <input type="password" name="new_password" placeholder="••••••">
+    <hr class="divider">
+    <label>{{ t('current_password') }}</label>
+    <input type="password" name="current_password" required placeholder="{{ t('current_password') }}">
+    <div class="hint">{{ 'مطلوبة لتأكيد أي تعديل.' if lang=='ar' else 'Required to confirm any change.' }}</div>
+    <div style="margin-top:16px;"><button class="btn">{{ icon('check',16) }} {{ t('update_account') }}</button></div>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}{% block title %}{{ t('nav_admin') }} · {{ brand }}{% endblock %}
+{% block head %}<script src="{{ url_for('static', filename='chart.min.js') }}"></script>{% endblock %}
+{% block body %}
+<h1>{{ icon('shield',22) }} {{ t('admin_overview') }}</h1>
+<p class="sub">{{ 'تحكّم كامل ومراقبة حية لكل شيء على المنصة.' if lang=='ar' else 'Full control and live monitoring of everything on the platform.' }}</p>
+
+<div class="grid c4" style="margin-bottom:14px;">
+  <div class="stat"><div class="ic">{{ icon('users',20) }}</div><div class="n">{{ stats.users }}</div><div class="l">{{ t('st_users') }}</div></div>
+  <div class="stat"><div class="ic">{{ icon('bot',20) }}</div><div class="n">{{ stats.bots }}</div><div class="l">{{ t('st_bots') }}</div></div>
+  <div class="stat"><div class="ic">{{ icon('crown',20) }}</div><div class="n">{{ stats.paying }}</div><div class="l">{{ t('st_paying') }}</div></div>
+  <div class="stat"><div class="ic">{{ icon('wallet',20) }}</div><div class="n">{{ stats.revenue }}</div><div class="l">{{ t('st_total_rev') }} ({{ t('egp') }})</div></div>
+</div>
+<div class="grid c2" style="margin-bottom:20px;">
+  <a class="card botcard" href="{{ url_for('admin_users') }}" style="margin:0;"><div class="top"><div style="display:flex;gap:12px;align-items:center;"><div class="ic">{{ icon('users',22) }}</div><b>{{ t('admin_users_t') }}</b></div><span class="muted">{{ stats.users }}</span></div></a>
+  <a class="card botcard" href="{{ url_for('admin_payments') }}" style="margin:0;"><div class="top"><div style="display:flex;gap:12px;align-items:center;"><div class="ic">{{ icon('card',22) }}</div><b>{{ t('admin_payments_t') }}</b></div>{% if stats.pending %}<span class="pill" style="background:rgba(255,210,63,.15);color:#FFD23F;">{{ stats.pending }} {{ t('st_pending') }}</span>{% else %}<span class="muted">0</span>{% endif %}</div></a>
+</div>
+<div class="grid c2">
+  <div class="card"><h2>{{ icon('wallet',18) }} {{ t('chart_revenue') }}</h2><canvas id="rev" height="200"></canvas></div>
+  <div class="card"><h2>{{ icon('users',18) }} {{ t('chart_newusers') }}</h2><canvas id="usr" height="200"></canvas></div>
+</div>
+<script>
+Chart.defaults.color='#8C9AC4';Chart.defaults.borderColor='#26325c';Chart.defaults.font.family="{{ 'Inter' if lang=='en' else 'Cairo' }},sans-serif";
+fetch('/api/admin/stats').then(r=>r.json()).then(d=>{
+  const L=d.daily.labels.map(x=>x.slice(5));
+  new Chart(rev,{type:'bar',data:{labels:L,datasets:[{label:'{{ t("st_total_rev") }}',data:d.daily.revenue,backgroundColor:'rgba(45,212,167,.6)',borderRadius:6}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
+  new Chart(usr,{type:'line',data:{labels:L,datasets:[{label:'{{ t("st_users") }}',data:d.daily.new_users,borderColor:'#7C6CF6',backgroundColor:'rgba(124,108,246,.15)',tension:.35,fill:true}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});
+});
+</script>
+{% endblock %}

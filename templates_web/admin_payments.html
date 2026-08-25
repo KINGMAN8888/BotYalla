@@ -1,0 +1,32 @@
+{% extends "base.html" %}{% block title %}{{ t('admin_payments_t') }} · {{ brand }}{% endblock %}
+{% block body %}
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+  <h1>{{ icon('card',22) }} {{ t('admin_payments_t') }}</h1>
+  <a class="btn ghost sm" href="{{ url_for('admin_home') }}">{{ icon('back',14) }} {{ t('back') }}</a>
+</div>
+<div class="card">
+  <p class="hint">{{ view_shot if false else ('صور الإيصالات تُرسل لك على تليجرام مع أزرار الموافقة. تقدر أيضاً تبتّ من هنا.' if lang=='ar' else 'Receipts are sent to you on Telegram with buttons. You can also decide here.') }}</p>
+  {% if pays %}<div style="overflow-x:auto;"><table class="table">
+    <tr><th>#</th><th>{{ t('username') }}</th><th>{{ t('col_plan2') }}</th><th>{{ t('col_amount') }}</th><th>{{ t('col_method') }}</th><th>{{ t('auto_check_col') }}</th><th>{{ t('col_status') }}</th><th></th></tr>
+    {% for x in pays %}
+    <tr>
+      <td>{{ x.id }}</td><td>{{ x.uname }}</td><td>{{ plans.plan_name(x.plan, lang) if plans is defined else x.plan }}</td>
+      <td>{{ x.amount }} {{ t('egp') }}</td><td>{{ x.method }}</td>
+      <td>{% set v=x.auto.get('verdict') %}
+        {% if v=='auto_pass' %}<span class="pill on">✓</span>
+        {% elif v=='suspect' %}<span class="pill off">⚠ {{ x.auto.get('reason','') }}</span>
+        {% else %}<span class="pill" style="background:rgba(255,210,63,.12);color:#FFD23F;">?</span>{% endif %}</td>
+      <td>{% if x.status=='pending' %}<span class="pill" style="background:rgba(255,210,63,.15);color:#FFD23F;">{{ t('status_pending') }}</span>
+          {% elif x.status=='approved' %}<span class="pill on">{{ t('status_approved') }}</span>
+          {% else %}<span class="pill off">{{ t('status_rejected') }}</span>{% endif %}</td>
+      <td style="white-space:nowrap;">
+        {% if x.status=='pending' and role=='admin' %}
+          <a class="btn green sm" href="{{ url_for('admin_payment_decide', pid=x.id, decision='approve') }}">{{ icon('check',13) }} {{ t('approve') }}</a>
+          <a class="btn red sm" href="{{ url_for('admin_payment_decide', pid=x.id, decision='reject') }}">{{ icon('ban',13) }} {{ t('reject') }}</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table></div>{% else %}<p class="muted">{{ t('no_payments') }}</p>{% endif %}
+</div>
+{% endblock %}

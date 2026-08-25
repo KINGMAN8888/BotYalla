@@ -1,0 +1,25 @@
+<svg width="240" height="64" viewBox="0 0 240 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="BotYalla">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7C6CF6"/><stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="wm" x1="72" y1="20" x2="220" y2="44" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EAF0FF"/><stop offset="1" stop-color="#B9C6E6"/>
+    </linearGradient>
+  </defs>
+  <!-- mark: rounded chat bubble + spark -->
+  <rect x="4" y="6" width="52" height="46" rx="15" fill="url(#bg)"/>
+  <path d="M22 52 L30 52 L24 62 Z" fill="url(#bg)"/>
+  <!-- bot eyes -->
+  <circle cx="22" cy="27" r="4.4" fill="#0B1020"/>
+  <circle cx="38" cy="27" r="4.4" fill="#0B1020"/>
+  <circle cx="23.4" cy="25.6" r="1.4" fill="#fff"/>
+  <circle cx="39.4" cy="25.6" r="1.4" fill="#fff"/>
+  <!-- lightning (yalla = energy/speed) -->
+  <path d="M31.5 33 L26 41.5 L30.2 41.5 L28.5 47 L35 38.5 L30.8 38.5 Z" fill="#FFD23F" stroke="#0B1020" stroke-width="0.6" stroke-linejoin="round"/>
+  <!-- antenna -->
+  <rect x="28.6" y="9.5" width="2.8" height="6" rx="1.4" fill="#0B1020"/>
+  <circle cx="30" cy="8" r="2.6" fill="#FFD23F" stroke="#0B1020" stroke-width="0.6"/>
+  <!-- wordmark -->
+  <text x="70" y="40" font-family="'Segoe UI',Arial,sans-serif" font-size="26" font-weight="800" fill="url(#wm)">Bot<tspan fill="#22D3EE">Yalla</tspan></text>
+</svg>

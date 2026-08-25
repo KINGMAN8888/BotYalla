@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ dir }}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ brand }}{% endblock %}</title>
+<meta name="csrf-token" content="{{ csrf_token }}">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='mark.svg') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<style>body{font-family:{% if lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}</style>
+{% block head %}{% endblock %}
+</head>
+<body>
+{% if session.get('uid') %}
+<div class="topbar"><div class="inner">
+  <a class="logo" href="{{ url_for('dashboard') }}">
+    <img src="{{ url_for('static', filename='logo.svg') }}" alt="BotYalla">
+  </a>
+  <nav class="navlinks">
+    <a href="{{ url_for('dashboard') }}">{{ icon('grid',16) }} {{ t('nav_bots') }}</a>
+    <a href="{{ url_for('pricing') }}">{{ icon('tag',16) }} {{ t('nav_pricing') }}</a>
+    <a href="{{ url_for('settings') }}">{{ icon('sparkles',16) }} {{ t('nav_ai') }}</a>
+    <a href="{{ url_for('billing') }}">{{ icon('card',16) }} {{ t('nav_billing') }}</a>
+    {% if role in ('admin','support') %}<a href="{{ url_for('admin_home') }}">{{ icon('shield',16) }} {{ t('nav_admin') }}</a>{% endif %}
+    {% if role=='admin' %}<a href="{{ url_for('admin_platform') }}">{{ icon('settings',16) }} {{ t('nav_platform') }}</a>{% endif %}
+    <a class="langtog" href="{{ url_for('set_lang', code='en' if lang=='ar' else 'ar') }}">{{ icon('globe',16) }} {{ 'EN' if lang=='ar' else 'ع' }}</a>
+    <a href="{{ url_for('account') }}" class="chip" style="text-decoration:none;">{{ icon('users',14) }} {{ username }}</a>
+    <a href="{{ url_for('logout') }}">{{ icon('logout',16) }} {{ t('logout') }}</a>
+  </nav>
+</div></div>
+{% else %}
+<div class="topbar"><div class="inner">
+  <a class="logo" href="{{ url_for('landing') }}"><img src="{{ url_for('static', filename='logo.svg') }}" alt="BotYalla"></a>
+  <nav class="navlinks">
+    <a class="langtog" href="{{ url_for('set_lang', code='en' if lang=='ar' else 'ar') }}">{{ icon('globe',16) }} {{ 'EN' if lang=='ar' else 'ع' }}</a>
+    <a href="{{ url_for('login') }}">{{ t('login') }}</a>
+  </nav>
+</div></div>
+{% endif %}
+<div class="container page">
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+    {% for cat,m in msgs %}<div class="flash {{cat}}">{{ m }}</div>{% endfor %}
+  {% endwith %}
+  {% block body %}{% endblock %}
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

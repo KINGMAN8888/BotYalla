@@ -1,0 +1,69 @@
+{% extends "base.html" %}{% block title %}{{ t('pay_title') }} · {{ brand }}{% endblock %}
+{% block body %}
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+  <div><h1>{{ icon('card',22) }} {{ t('pay_title') }}</h1>
+    <p class="sub">{{ plan.name_ar if lang=='ar' else plan.name_en }} — <b class="grad-text">{{ plan.price }} {{ t('egp') }}</b>{{ t('per_month') }}</p></div>
+  <a class="btn ghost sm" href="{{ url_for('pricing') }}">{{ icon('back',14) }} {{ t('back') }}</a>
+</div>
+
+<div class="card" style="background:var(--grad-soft);">
+  <div style="font-size:14px;">{{ t('pay_amount') }}</div>
+  <div style="font-size:30px;font-weight:800;">{{ plan.price }} {{ t('egp') }}</div>
+  <div class="hint">{{ t('pay_secure_note') }}</div>
+</div>
+
+<div class="card">
+  <h2>{{ icon('wallet',18) }} {{ t('pay_method') }}</h2>
+  <div class="grid c3">
+    <!-- Vodafone Cash -->
+    <div class="card" style="margin:0;">
+      <div style="font-weight:800;color:#e60000;display:flex;align-items:center;gap:6px;">{{ icon('phone',16) }} {{ t('pay_vodafone') }}</div>
+      <div class="hint">{{ t('pay_number') }}:</div>
+      <div class="copyrow"><code id="vf">{{ plat.vodafone_number }}</code><button class="btn ghost sm" type="button" onclick="cp('vf',this)">{{ icon('copy',13) }}</button></div>
+    </div>
+    <!-- InstaPay -->
+    <div class="card" style="margin:0;">
+      <div style="font-weight:800;color:var(--violet);display:flex;align-items:center;gap:6px;">{{ icon('card',16) }} {{ t('pay_instapay') }}</div>
+      <div class="hint">{{ t('pay_scan_qr') }}</div>
+      <img src="{{ url_for('static', filename='instapay_qr.jpg') }}" alt="InstaPay QR" style="width:140px;border-radius:10px;margin:8px auto;display:block;background:#fff;padding:4px;">
+      <div class="copyrow"><code id="ip">{{ plat.instapay_handle }}</code><button class="btn ghost sm" type="button" onclick="cp('ip',this)">{{ icon('copy',13) }}</button></div>
+      {% if plat.instapay_link %}<a class="btn ghost sm block" style="margin-top:8px;" href="{{ plat.instapay_link }}" target="_blank" rel="noopener">{{ icon('link',13) }} {{ t('pay_open_link') }}</a>{% endif %}
+    </div>
+    <!-- Bank -->
+    <div class="card" style="margin:0;">
+      <div style="font-weight:800;color:var(--cyan);display:flex;align-items:center;gap:6px;">{{ icon('bank',16) }} {{ t('pay_bank') }}</div>
+      <div class="hint" style="line-height:2;">
+        {{ t('pay_holder') }}: <b>{{ plat.bank_holder }}</b><br>
+        {{ t('pay_bankname') }}: {{ plat.bank_name }}<br>
+        {{ t('pay_account') }}: <code id="acc">{{ plat.bank_account }}</code> <button class="btn ghost sm" type="button" onclick="cp('acc',this)">{{ icon('copy',12) }}</button><br>
+        {{ t('pay_iban') }}: <code id="iban" style="font-size:11px;">{{ plat.bank_iban }}</code> <button class="btn ghost sm" type="button" onclick="cp('iban',this)">{{ icon('copy',12) }}</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>{{ icon('upload',18) }} {{ t('pay_upload') }}</h2>
+  <ol class="muted" style="font-size:13px;line-height:1.9;padding-inline-start:18px;">
+    <li>{{ t('pay_step1') }}</li><li>{{ t('pay_step2') }}</li><li>{{ t('pay_step3') }}</li>
+  </ol>
+  <form method="post" enctype="multipart/form-data" action="{{ url_for('subscribe_pay', plan_id=plan_id) }}">
+    {{ csrf_field() }}
+    <div class="row">
+      <div><label>{{ t('pay_method') }}</label>
+        <select name="method">
+          <option value="vodafone">{{ t('pay_vodafone') }}</option>
+          <option value="instapay">{{ t('pay_instapay') }}</option>
+          <option value="bank">{{ t('pay_bank') }}</option>
+        </select></div>
+      <div><label>{{ t('pay_ref') }}</label><input name="ref" placeholder="#..."></div>
+    </div>
+    <label>{{ t('pay_upload') }}</label>
+    <input type="file" name="screenshot" accept="image/*" required>
+    <div style="margin-top:16px;"><button class="btn">{{ icon('shield',16) }} {{ t('pay_submit') }}</button></div>
+  </form>
+</div>
+<script>
+function cp(id,btn){const el=document.getElementById(id);navigator.clipboard.writeText(el.textContent.trim()).then(()=>{const o=btn.innerHTML;btn.textContent='✓';setTimeout(()=>btn.innerHTML=o,1000);});}
+</script>
+{% endblock %}
