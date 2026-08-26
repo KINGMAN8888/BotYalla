@@ -4,6 +4,20 @@
 import os, json, csv, io, functools
 from flask import (Flask, request, redirect, url_for, render_template,
                    session, flash, abort, jsonify, Response)
+
+# تحميل متغيرات .env تلقائياً إذا وُجد الملف
+_env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.isfile(_env_file):
+    try:
+        with open(_env_file, "r", encoding="utf-8") as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _k, _v = _line.split("=", 1)
+                    os.environ.setdefault(_k.strip(), _v.strip().strip("'\""))
+    except Exception:
+        pass
+
 import database as db
 import auth
 from bot_manager import manager
