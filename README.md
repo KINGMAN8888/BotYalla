@@ -28,6 +28,7 @@ BotYalla is a full-featured, multi-tenant SaaS platform that enables businesses,
   - [Automated Linux VPS Script](#automated-linux-vps-script)
   - [Docker Containerization](#docker-containerization)
 - [Documentation Index](#documentation-index)
+- [License](#license)
 - [Author and Contact](#author-and-contact)
 
 ---
@@ -345,11 +346,17 @@ docker run -d -p 8000:8000 --env-file .env --name botyalla_app botyalla
 
 | Documentation File | Location | Content Overview |
 |---|---|---|
+| **Security Policy** | [SECURITY.md](SECURITY.md) / [docs/SECURITY.md](docs/SECURITY.md) | Vulnerability disclosure, threat matrices, and production hardening. |
 | **User Guide** | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Platform owner workflows, client bot creation, and dashboard usage. |
 | **Deployment Guide** | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production server setup, Nginx reverse proxy, and SSL configuration. |
 | **Architecture Guide** | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Component architecture, event loops, and database design. |
-| **Security Specifications** | [docs/SECURITY.md](docs/SECURITY.md) | Security controls, session handling, authentication, and validation. |
 | **Hostinger VPS Guide** | [docs/HOSTINGER.md](docs/HOSTINGER.md) | Specific setup instructions for Hostinger infrastructure. |
+
+---
+
+## License
+
+This project is licensed under the terms of the MIT License. See the [LICENSE](LICENSE) file for complete license terms.
 
 ---
 
