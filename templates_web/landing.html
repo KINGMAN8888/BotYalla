@@ -1,4 +1,8 @@
-{% extends "base.html" %}{% block title %}{{ brand }} — {{ t('hero_title_a') }}{% endblock %}
+{% extends "base.html" %}{% block title %}{{ brand }} — {{ t('hero_title_a') }}<div class="center" style="margin-top:40px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:13px;">
+  © {{ brand }} — {{ 'جميع الحقوق محفوظة' if lang=='ar' else 'All rights reserved' }} ·
+  <a href="https://youssefalsherief.tech/" target="_blank" rel="noopener">Youssef Alsherief</a>
+</div>
+{% endblock %}
 {% block body %}
 <div class="center" style="padding:30px 0 10px;">
   <img src="{{ url_for('static', filename='logo.svg') }}" style="height:56px;" alt="BotYalla">

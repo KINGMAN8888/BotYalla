@@ -30,7 +30,8 @@ python app.py
 ```bash
 sudo bash deploy/deploy.sh https://github.com/USERNAME/botyalla.git botyalla.com
 ```
-التفاصيل الكاملة في **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+أو على **Hostinger** بضغطة: شغّل `deploy/deploy_hostinger.bat`.
+التفاصيل: **[docs/HOSTINGER.md](docs/HOSTINGER.md)** · **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
 ## 🔒 الأمان
 CSRF · تشفير كلمات المرور · تحديد محاولات الدخول · عزل صلاحيات · تحقق دفع مزدوج (لا تفعيل تلقائي).
@@ -53,5 +54,5 @@ CSRF · تشفير كلمات المرور · تحديد محاولات الدخ
 
 ---
 <div align="center">
-صُنع بواسطة <b>Reca Tech</b> · info@reca-tech.com · botyalla.com
+صُنع ومملوك بالكامل لـ <b>Youssef Alsherief</b><br>info@youssefalsherief.tech · 01097585951 · <a href="https://youssefalsherief.tech/">youssefalsherief.tech</a>
 </div>
