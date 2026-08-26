@@ -42,7 +42,7 @@
         </form>
         {% else %}<span class="pill on">{{ t('role_'+u.role) }}</span>{% endif %}
       </td>
-      <td>{% if u.role=='admin' %}<span class="grad-text">{{ t('owner_unlimited') }}</span>{% else %}{{ plans.plan_name(u.plan, lang) }}{% if u.sub_status=='expired' %} <span class="muted">({{ t('status_expired') }})</span>{% endif %}{% endif %}</td>
+      <td>{% if u.role=='admin' %}<span class="grad-text">{{ t('owner_unlimited') }}</span>{% else %}{{ plans.plan_name(u.plan, lang) }}{% if u.sub_status=='expired' %} <span class="muted">({{ t('status_expired') }})</span>{% endif %}{% if u.expires_at and u.plan!='free' %}<div class="muted" style="font-size:11px;">{{ fmt_date(u.expires_at) }} · {{ days_left(u.expires_at) }} {{ t('days_left') }}</div>{% endif %}{% endif %}</td>
       <td>{{ u.bots }}</td>
       <td>{% if u.sub_status=='active' and u.plan!='free' %}<span class="pill on">{{ t('status_active') }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
       {% if role=='admin' %}

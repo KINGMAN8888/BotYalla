@@ -36,7 +36,7 @@
   <textarea id="aiDesc" placeholder="{{ t('ai_placeholder') }}"></textarea>
   <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
     <button type="button" class="btn" id="aiBtn" onclick="runAI()">{{ icon('sparkles',16) }} {{ t('ai_run') }}</button>
-    <a class="btn ghost sm" href="{{ url_for('settings') }}">{{ icon('key',14) }} {{ t('ai_key_btn') }}</a>
+    {% if role=='admin' %}<a class="btn ghost sm" href="{{ url_for('settings') }}">{{ icon('key',14) }} {{ t('ai_key_btn') }}</a>{% endif %}
     <span id="aiMsg" class="hint"></span>
   </div>
 </div>

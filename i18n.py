@@ -258,6 +258,13 @@ T = {
  "add_user":         {"ar": "إضافة حساب جديد", "en": "Add new account"},
  "create_account_btn":{"ar": "إنشاء الحساب", "en": "Create account"},
  "owner_unlimited": {"ar": "المالك — غير محدود", "en": "Owner — Unlimited"},
+ "col_receipt":  {"ar": "الإيصال", "en": "Receipt"},
+ "view_receipt": {"ar": "عرض الإيصال", "en": "View receipt"},
+ "no_receipt":   {"ar": "لا توجد صورة", "en": "No image"},
+ "auto_note":    {"ar": "الفحص الآلي مساعد فقط — القرار النهائي بمراجعتك للصورة.", "en": "Auto-check is advisory — final decision is your visual review."},
+ "days_left":    {"ar": "يوم متبقٍ", "en": "days left"},
+ "started_on":   {"ar": "بدأ في", "en": "Started"},
+ "renews_monthly": {"ar": "يتجدّد شهرياً", "en": "Renews monthly"},
 }
 
 def t(key, lang=DEFAULT):

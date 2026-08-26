@@ -9,7 +9,13 @@
       <div style="font-size:24px;font-weight:800;">{% if role=='admin' %}<span class="grad-text">{{ t('owner_unlimited') }}</span>{% else %}{{ p.name_ar if lang=='ar' else p.name_en }}
         {% if sub.status=='active' %}<span class="pill on">{{ t('status_active') }}</span>{% elif sub.status=='expired' %}<span class="pill off">{{ t('status_expired') }}</span>{% endif %}{% endif %}
       </div>
-      {% if sub.expires_at and sub.plan!='free' %}<div class="muted" style="font-size:13px;">{{ t('expires_on') }}: {{ (sub.expires_at)|int }}</div>{% endif %}
+      {% if sub.expires_at and sub.plan!='free' and role!='admin' %}
+      <div class="muted" style="font-size:13px;margin-top:4px;">
+        {{ icon('clock',13) }} {{ t('expires_on') }}: <b>{{ fmt_date(sub.expires_at) }}</b>
+        {% set dl = days_left(sub.expires_at) %}
+        {% if sub.status=='active' %}<span style="color:{{ '#F87171' if dl<=5 else 'var(--green)' }};">({{ dl }} {{ t('days_left') }})</span>{% endif %}
+        · <span class="muted">{{ t('renews_monthly') }}</span>
+      </div>{% endif %}
     </div>
     <a class="btn" href="{{ url_for('pricing') }}">{{ icon('bolt',16) }} {{ t('nav_pricing') }}</a>
   </div>

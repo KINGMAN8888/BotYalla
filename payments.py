@@ -87,6 +87,45 @@ def auto_check(path, expected_amount, expected_refs, duplicate: bool):
         result["verdict"] = "needs_review"   # صورة سليمة وغير مكرّرة، بانتظار مراجعة الأدمن
     return result
 
+
+def check_lines(auto: dict, lang="ar"):
+    """يحوّل نتيجة الفحص الآلي إلى قائمة بنود مقروءة للأدمن: [{ok, text}]."""
+    lines = []
+    AR = lang != "en"
+    img = (auto or {}).get("image", {}) or {}
+    # 1) صحة الصورة
+    if img.get("ok"):
+        lines.append({"ok": True, "text": ("صورة صحيحة" if AR else "Valid image") + f" ({img.get('kind','')})"})
+    else:
+        reason = img.get("reason", "")
+        lines.append({"ok": False, "text": ("صورة غير صالحة" if AR else "Invalid image") + f" — {reason}"})
+    # 2) التكرار
+    if (auto or {}).get("duplicate"):
+        lines.append({"ok": False, "text": "⚠️ " + ("إيصال مكرر (استُخدم من قبل)" if AR else "Duplicate receipt (used before)")})
+    else:
+        lines.append({"ok": True, "text": ("غير مكرر" if AR else "Not a duplicate")})
+    # 3) OCR / فحص المبلغ
+    ocr = (auto or {}).get("ocr")
+    if ocr is None:
+        lines.append({"ok": None, "text": ("فحص المبلغ (OCR) غير متاح على هذا الجهاز — راجع الصورة يدوياً"
+                                           if AR else "Amount check (OCR) unavailable on this machine — review the image manually")})
+    else:
+        af = ocr.get("amount_found")
+        if af is True:
+            lines.append({"ok": True, "text": ("المبلغ ظاهر في الإيصال" if AR else "Amount found in receipt")})
+        elif af is False:
+            lines.append({"ok": False, "text": ("⚠️ المبلغ غير ظاهر في الإيصال" if AR else "Amount NOT found in receipt")})
+        rf = ocr.get("ref_found")
+        if rf is True:
+            lines.append({"ok": True, "text": ("رقم الاستلام/المُستلِم ظاهر" if AR else "Recipient/ref found")})
+    return lines
+
+VERDICT_STYLE = {
+    "auto_pass":    ("on",  "✓"),
+    "needs_review": ("mid", "؟"),
+    "suspect":      ("off", "⚠"),
+}
+
 def verdict_label(v, lang="ar"):
     m = {
         "auto_pass":   ("✅ الفحص الآلي: مبدئياً سليم", "✅ Auto-check: looks valid"),

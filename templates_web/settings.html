@@ -13,7 +13,7 @@
     </select>
     <label>{{ t('api_key') }}</label>
     <input name="ai_key" value="{{ ai_key }}" placeholder="{{ t('paste_key') }}" autocomplete="off">
-    <div class="hint">{{ t('ai_key_hint') }}</div>
+    <div class="hint">{{ 'يُحفظ لكل المنصة ويُستخدم لتوليد إعدادات بوتات جميع المستخدمين. اتركه فارغاً لاستخدام المولّد الاحتياطي المجاني.' if lang=='ar' else 'Saved platform-wide and used to generate bot settings for all users. Leave empty for the free fallback generator.' }}</div>
     <div style="margin-top:16px;"><button class="btn">{{ icon('check',16) }} {{ t('save') }}</button></div>
   </form>
 </div>

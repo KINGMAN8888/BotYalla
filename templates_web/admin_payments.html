@@ -5,20 +5,40 @@
   <a class="btn ghost sm" href="{{ url_for('admin_home') }}">{{ icon('back',14) }} {{ t('back') }}</a>
 </div>
 <div class="card">
-  <p class="hint">{{ view_shot if false else ('صور الإيصالات تُرسل لك على تليجرام مع أزرار الموافقة. تقدر أيضاً تبتّ من هنا.' if lang=='ar' else 'Receipts are sent to you on Telegram with buttons. You can also decide here.') }}</p>
+  <p class="hint">{{ 'صور الإيصالات تُرسل لك على تليجرام أيضاً مع أزرار الموافقة.' if lang=='ar' else 'Receipts are also sent to you on Telegram with buttons.' }} · <b>{{ t('auto_note') }}</b></p>
   {% if pays %}<div style="overflow-x:auto;"><table class="table">
-    <tr><th>#</th><th>{{ t('username') }}</th><th>{{ t('col_plan2') }}</th><th>{{ t('col_amount') }}</th><th>{{ t('col_method') }}</th><th>{{ t('auto_check_col') }}</th><th>{{ t('col_status') }}</th><th></th></tr>
+    <tr>
+      <th>#</th><th>{{ t('username') }}</th><th>{{ t('col_plan2') }}</th><th>{{ t('col_amount') }}</th>
+      <th>{{ t('col_method') }}</th><th>{{ t('col_receipt') }}</th><th>{{ t('auto_check_col') }}</th><th>{{ t('col_status') }}</th><th></th>
+    </tr>
     {% for x in pays %}
     <tr>
-      <td>{{ x.id }}</td><td>{{ x.uname }}</td><td>{{ plans.plan_name(x.plan, lang) if plans is defined else x.plan }}</td>
+      <td>{{ x.id }}</td><td>{{ x.uname }}</td><td>{{ plans.plan_name(x.plan, lang) }}</td>
       <td>{{ x.amount }} {{ t('egp') }}</td><td>{{ x.method }}</td>
-      <td>{% set v=x.auto.get('verdict') %}
-        {% if v=='auto_pass' %}<span class="pill on">✓</span>
-        {% elif v=='suspect' %}<span class="pill off">⚠ {{ x.auto.get('reason','') }}</span>
-        {% else %}<span class="pill" style="background:rgba(255,210,63,.12);color:#FFD23F;">?</span>{% endif %}</td>
+      <!-- الإيصال -->
+      <td>
+        {% if x.screenshot %}
+          <a href="{{ url_for('admin_payment_screenshot', pid=x.id) }}" target="_blank" rel="noopener" title="{{ t('view_receipt') }}">
+            <img src="{{ url_for('admin_payment_screenshot', pid=x.id) }}" alt="receipt"
+                 style="height:52px;width:52px;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:#fff;">
+          </a>
+        {% else %}<span class="muted">{{ t('no_receipt') }}</span>{% endif %}
+      </td>
+      <!-- الفحص الآلي المفصّل -->
+      <td style="min-width:230px;">
+        <div style="font-size:12px;line-height:1.7;">
+        {% for c in x.checks %}
+          {% if c.ok==True %}<div style="color:var(--green);">✓ {{ c.text }}</div>
+          {% elif c.ok==False %}<div style="color:var(--red);">✕ {{ c.text }}</div>
+          {% else %}<div style="color:#FFD23F;">• {{ c.text }}</div>{% endif %}
+        {% endfor %}
+        </div>
+      </td>
+      <!-- الحالة -->
       <td>{% if x.status=='pending' %}<span class="pill" style="background:rgba(255,210,63,.15);color:#FFD23F;">{{ t('status_pending') }}</span>
           {% elif x.status=='approved' %}<span class="pill on">{{ t('status_approved') }}</span>
           {% else %}<span class="pill off">{{ t('status_rejected') }}</span>{% endif %}</td>
+      <!-- الأزرار -->
       <td style="white-space:nowrap;">
         {% if x.status=='pending' and role=='admin' %}
           <a class="btn green sm" href="{{ url_for('admin_payment_decide', pid=x.id, decision='approve') }}">{{ icon('check',13) }} {{ t('approve') }}</a>

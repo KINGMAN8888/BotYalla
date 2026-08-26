@@ -3,7 +3,7 @@
 تحليلات (JSON للرسوم)، بث جماعي، حجوزات، تصدير."""
 import os, json, csv, io, functools
 from flask import (Flask, request, redirect, url_for, render_template,
-                   session, flash, abort, jsonify, Response)
+                   session, flash, abort, jsonify, Response, send_from_directory)
 import database as db
 import auth
 from bot_manager import manager
@@ -15,6 +15,7 @@ import plans
 import payments as pay
 import platform_bot as PB
 import time as _time
+import datetime as _dt
 import hashlib
 import secrets as _secrets
 from markupsafe import Markup
@@ -101,7 +102,9 @@ def inject():
             "t": lambda k: i18n.t(k, lang), "icon": icon,
             "tmpl_label": lambda key: i18n.t({"flow":"tmpl_flow","store":"tmpl_store","booking":"tmpl_booking","customer_service":"tmpl_cs"}.get(key,"tmpl_flow"), lang),
             "tmpl_icon": lambda key: {"flow":"flow","store":"store","booking":"calendar","customer_service":"phone"}.get(key,"bot"),
-            "role": session.get("role","user")}
+            "role": session.get("role","user"),
+            "fmt_date": lambda ts: (_dt.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d") if ts else "—"),
+            "days_left": lambda ts: (max(0, int((int(ts) - _time.time()) // 86400)) if ts else 0)}
 
 @app.route("/lang/<code>")
 def set_lang(code):
@@ -354,16 +357,17 @@ def export_csv(bot_id, kind):
 
 # ---------- إعدادات الذكاء الاصطناعي ----------
 @app.route("/settings", methods=["GET", "POST"])
-@login_required
+@require_roles("admin")
 def settings():
     if request.method == "POST":
-        db.set_setting(uid(), "ai_provider", request.form.get("ai_provider", "gemini"))
-        db.set_setting(uid(), "ai_key", request.form.get("ai_key", "").strip())
-        flash("تم حفظ إعدادات الذكاء الاصطناعي ✅", "ok")
+        db.set_platform("ai_provider", request.form.get("ai_provider", "gemini"))
+        db.set_platform("ai_key", request.form.get("ai_key", "").strip())
+        flash("تم حفظ إعدادات الذكاء الاصطناعي للمنصة ✅" if session.get("lang")!="en"
+              else "Platform AI settings saved ✅", "ok")
         return redirect(url_for("settings"))
     return render_template("settings.html",
-        ai_provider=db.get_setting(uid(), "ai_provider", "gemini"),
-        ai_key=db.get_setting(uid(), "ai_key", ""))
+        ai_provider=db.get_platform("ai_provider", "gemini"),
+        ai_key=db.get_platform("ai_key", ""))
 
 @app.route("/bot/<int:bot_id>/ai-setup", methods=["POST"])
 @login_required
@@ -372,8 +376,8 @@ def ai_setup(bot_id):
     desc = (request.get_json(silent=True) or {}).get("description", "").strip()
     if not desc:
         return jsonify({"ok": False, "error": "اكتب وصف نشاطك أولاً."})
-    key = db.get_setting(uid(), "ai_key", "")
-    provider = db.get_setting(uid(), "ai_provider", "gemini")
+    key = db.get_platform("ai_key", "")
+    provider = db.get_platform("ai_provider", "gemini")
     patch, source = ai.generate_bot_config(desc, b["template"], api_key=key or None, provider=provider)
     if not patch:
         return jsonify({"ok": False, "error": "تعذّر توليد الإعدادات."})
@@ -459,7 +463,10 @@ def subscribe_pay(plan_id):
     admin_id = db.get_platform("admin_chat_id", "")
     payment = db.get_payment(pid)
     lang = session.get("lang","ar")
-    caption = PB.build_caption(payment, session.get("uname",""), pay.verdict_label(ac["verdict"], "ar"))
+    _lines = pay.check_lines(ac, "ar")
+    _detail = pay.verdict_label(ac["verdict"], "ar") + "\n" + "\n".join(
+        ("✅ " if c["ok"] else ("❌ " if c["ok"] is False else "• ")) + c["text"] for c in _lines)
+    caption = PB.build_caption(payment, session.get("uname",""), _detail)
     msg_id = manager.send_payment_alert(admin_id, payment, session.get("uname",""), caption, fpath) if admin_id else None
     if msg_id: db.set_payment_msg(pid, msg_id)
     if not msg_id:
@@ -547,10 +554,14 @@ def admin_user_plan(user_id):
 def admin_payments():
     pays = db.list_payments(limit=200)
     users = {u["id"]: u["username"] for u in db.list_all_users()}
+    lang = session.get("lang", "ar")
     for x in pays:
         x["uname"] = users.get(x["user_id"], "?")
         try: x["auto"] = json.loads(x.get("auto_check") or "{}")
         except Exception: x["auto"] = {}
+        x["checks"] = pay.check_lines(x["auto"], lang)
+        st, sym = pay.VERDICT_STYLE.get(x["auto"].get("verdict", "needs_review"), ("mid", "؟"))
+        x["vstyle"] = st; x["vsym"] = sym
     return render_template("admin_payments.html", pays=pays, plans=plans)
 
 @app.route("/admin/payments/<int:pid>/<decision>")
@@ -613,6 +624,19 @@ def admin_user_add():
         flash(f"تم إنشاء الحساب «{u}» ({role}) ✅" if session.get("lang")!="en" else f"Account '{u}' ({role}) created ✅", "ok")
     return redirect(url_for("admin_users"))
 
+@app.route("/admin/payments/<int:pid>/screenshot")
+@require_roles("admin", "support")
+def admin_payment_screenshot(pid):
+    p = db.get_payment(pid)
+    if not p or not p.get("screenshot"):
+        abort(404)
+    # اسم الملف مولّد داخلياً وآمن؛ نتحقق أنه داخل مجلد الرفع
+    from werkzeug.utils import secure_filename as _sf
+    fname = _sf(p["screenshot"])
+    if not os.path.exists(os.path.join(UPLOAD_DIR, fname)):
+        abort(404)
+    return send_from_directory(UPLOAD_DIR, fname)
+
 @app.route("/landing")
 def landing():
     return render_template("landing.html")
@@ -648,8 +672,15 @@ def seed_default_admin():
     print("  ⚠️  غيّر كلمة المرور بعد أول دخول من صفحة «حسابي».")
     print("=" * 56)
 
+def _migrate_ai_key():
+    if not db.get_platform("ai_key", ""):
+        old = db.get_setting(1, "ai_key", "")
+        if old:
+            db.set_platform("ai_key", old)
+            db.set_platform("ai_provider", db.get_setting(1, "ai_provider", "gemini"))
+
 def bootstrap():
-    db.init_db(); seed_platform_defaults(); seed_default_admin()
+    db.init_db(); seed_platform_defaults(); seed_default_admin(); _migrate_ai_key()
     manager.start(); manager.resume_active_bots()
     tok = db.get_platform("platform_bot_token", "")
     if tok and db.get_platform("admin_chat_id", ""):
