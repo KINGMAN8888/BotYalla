@@ -17,6 +17,7 @@ if os.path.isfile(_env_file):
                     os.environ.setdefault(_k.strip(), _v.strip().strip("'\""))
     except Exception:
         pass
+
 import database as db
 import auth
 from bot_manager import manager
@@ -43,6 +44,9 @@ app.config.update(
     SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "0") == "1",  # فعّلها على HTTPS
     MAX_CONTENT_LENGTH=10 * 1024 * 1024,   # حد أقصى 10MB للطلب (حماية رفع الملفات)
 )
+
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ---------- حماية CSRF (خفيفة، بدون مكتبات) ----------
 _login_attempts = {}   # ip -> (count, first_ts)
@@ -653,9 +657,6 @@ def admin_payment_screenshot(pid):
 @app.route("/landing")
 def landing():
     return render_template("landing.html")
-
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 def seed_platform_defaults():
