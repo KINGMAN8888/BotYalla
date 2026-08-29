@@ -1,0 +1,51 @@
+{% extends "base.html" %}{% block title %}{{ t('req_title') }} · {{ brand }}{% endblock %}
+{% block body %}
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+  <div><h1>{{ icon('sparkles',22) }} {{ t('req_title') }}</h1><p class="sub">{{ t('req_sub') }}</p></div>
+  <a class="btn ghost sm" href="{{ url_for('dashboard') }}">{{ icon('back',14) }} {{ t('back') }}</a>
+</div>
+
+{% if sent %}
+<div class="card center" style="background:var(--grad-soft);">
+  <div style="color:var(--green);">{{ icon('check',30) }}</div>
+  <h2 style="justify-content:center;">{{ t('req_sent') }}</h2>
+</div>
+{% else %}
+<div class="card">
+  <form method="post">
+    {{ csrf_field() }}
+    <div class="row">
+      <div><label>{{ t('req_business') }}</label><input name="business" placeholder="{{ t('eg_cafe') }}"></div>
+      <div><label>{{ t('req_budget') }}</label><input name="budget" placeholder="—"></div>
+    </div>
+    <label>{{ t('req_desc') }}</label>
+    <textarea name="description" required style="min-height:120px;"
+      placeholder="{{ 'مثال: عايز بوت يستقبل حجوزات + يبعت تذكير قبل الموعد بيوم + يتكامل مع نظام نقاط الولاء عندي...' if lang=='ar' else 'e.g. I need a bot that takes bookings, sends a reminder a day before, and integrates with my loyalty system...' }}"></textarea>
+    <label>{{ t('req_contact') }}</label>
+    <input name="contact" placeholder="01xxxxxxxxx / you@email.com">
+    <div style="margin-top:16px;"><button class="btn">{{ icon('rocket',16) }} {{ t('req_submit') }}</button></div>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>{{ icon('phone',18) }} {{ t('or_contact_now') }}</h2>
+  <div class="row">
+    {% if plat.support_email %}
+    <a class="btn ghost" style="justify-content:center;" target="_blank" rel="noopener"
+       href="mailto:{{ plat.support_email }}?subject={{ 'طلب بوت مخصص - BotYalla' if lang=='ar' else 'Custom bot request - BotYalla' }}&body={{ 'مرحباً، أريد بوت مخصص:' if lang=='ar' else 'Hi, I would like a custom bot:' }}">
+      {{ icon('inbox',16) }} {{ t('contact_email') }}</a>
+    {% endif %}
+    {% if plat.support_whatsapp %}
+    <a class="btn green" style="justify-content:center;" target="_blank" rel="noopener"
+       href="https://wa.me/{{ plat.support_whatsapp }}?text={{ 'مرحباً، أريد بوت مخصص من BotYalla' if lang=='ar' else 'Hi, I want a custom bot from BotYalla' }}">
+      {{ icon('phone',16) }} {{ t('contact_whatsapp') }}</a>
+    {% endif %}
+    {% if plat.support_telegram %}
+    <a class="btn" style="justify-content:center;" target="_blank" rel="noopener"
+       href="https://t.me/{{ plat.support_telegram }}">
+      {{ icon('link',16) }} {{ t('contact_telegram') }}</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

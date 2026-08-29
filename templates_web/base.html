@@ -25,6 +25,7 @@
     {% if role=='admin' %}<a href="{{ url_for('settings') }}">{{ icon('sparkles',16) }} {{ t('nav_ai') }}</a>{% endif %}
     <a href="{{ url_for('billing') }}">{{ icon('card',16) }} {{ t('nav_billing') }}</a>
     {% if role in ('admin','support') %}<a href="{{ url_for('admin_home') }}">{{ icon('shield',16) }} {{ t('nav_admin') }}</a>{% endif %}
+    {% if role in ('admin','support') %}<a href="{{ url_for('admin_requests') }}">{{ icon('inbox',16) }} {{ t('nav_requests') }}</a>{% endif %}
     {% if role=='admin' %}<a href="{{ url_for('admin_platform') }}">{{ icon('settings',16) }} {{ t('nav_platform') }}</a>{% endif %}
     <a class="langtog" href="{{ url_for('set_lang', code='en' if lang=='ar' else 'ar') }}">{{ icon('globe',16) }} {{ 'EN' if lang=='ar' else 'ع' }}</a>
     <a href="{{ url_for('account') }}" class="chip" style="text-decoration:none;">{{ icon('users',14) }} {{ username }}</a>

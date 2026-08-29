@@ -44,7 +44,7 @@
       <div><label>{{ t('biz_name') }}</label><input name="name" required placeholder="{{ t('eg_cafe') }}"></div>
       <div><label>{{ t('bot_type') }}</label>
         <select name="template" required>
-          {% for k in ['flow','store','booking','customer_service'] %}<option value="{{k}}">{{ tmpl_label(k) }}</option>{% endfor %}
+          {% for k in ['flow','store','booking','customer_service','faq','feedback','support'] %}<option value="{{k}}">{{ tmpl_label(k) }}</option>{% endfor %}
         </select></div>
     </div>
     <label>{{ t('bot_token') }}</label>
@@ -53,15 +53,32 @@
       <a class="btn ghost sm" href="https://t.me/BotFather" target="_blank" rel="noopener">{{ icon('link',14) }} {{ t('open_botfather') }}</a>
     </div>
     <div id="tokStatus" class="hint"></div>
-    <label>{{ t('owner_id_lbl') }}</label>
-    <input name="owner_chat_id" placeholder="123456789">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px;">
+      <label style="margin:0;">{{ t('owner_id_lbl') }}</label>
+      <button type="button" class="btn ghost sm" onclick="document.getElementById('ownerTip').classList.toggle('hidden')" style="padding:4px 10px;font-size:12px;">{{ icon('help',14) }} {{ t('owner_id_help') }}</button>
+    </div>
+    <div id="ownerTip" class="hint hidden" style="background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-top:6px;">
+      {{ t('owner_id_tip') }}
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:6px;">
+      <input name="owner_chat_id" placeholder="123456789" style="flex:1;">
+      <a class="btn ghost sm" href="https://t.me/userinfobot" target="_blank" rel="noopener">{{ icon('link',14) }} {{ t('get_my_id') }}</a>
+    </div>
     <div style="margin-top:18px;"><button class="btn">{{ icon('sparkles',16) }} {{ t('create_btn') }}</button></div>
   </form>
+</div>
+
+<div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;border:1px solid var(--violet);">
+  <div>
+    <h2 style="margin:0;">{{ icon('sparkles',18) }} {{ t('custom_bot') }}</h2>
+    <p class="muted" style="margin:6px 0 0;font-size:13px;">{{ t('custom_bot_desc') }}</p>
+  </div>
+  <a class="btn" href="{{ url_for('request_bot') }}">{{ icon('rocket',16) }} {{ t('request_custom') }}</a>
 </div>
 <script>
 const CSRF=document.querySelector('meta[name=csrf-token]').content;
 const tok=document.getElementById('tok'), st=document.getElementById('tokStatus'); let tm=null;
-const T={ok:{{ 'true' }},chk:"{{ 'جاري التحقق...' if lang=='ar' else 'Checking...' }}",bad:"{{ 'تعذّر التحقق الآن' if lang=='ar' else 'Could not verify now' }}"};
+const T={ok:true,chk:"{{ 'جاري التحقق...' if lang=='ar' else 'Checking...' }}",bad:"{{ 'تعذّر التحقق الآن' if lang=='ar' else 'Could not verify now' }}"};
 tok.addEventListener('input',()=>{clearTimeout(tm);const v=tok.value.trim();
  if(v.length<20){st.textContent='';return;} st.textContent='⏳ '+T.chk;st.style.color='#8C9AC4';
  tm=setTimeout(async()=>{try{const r=await fetch('/api/validate-token',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},body:JSON.stringify({token:v})});const d=await r.json();

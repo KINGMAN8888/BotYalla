@@ -82,3 +82,77 @@ def register_common(app):
 
     app.add_handler(CommandHandler("id", id_cmd))
     app.add_handler(CommandHandler("owner", owner_cmd))
+
+
+# ============================================================
+# التكامل الرسمي مع Telegram Bot API — تهيئة بروفايل البوت
+# المصدر: https://core.telegram.org/bots/api  (setMyName/Description/Commands)
+# ملاحظة: تيليجرام لا يوفّر API لإنشاء بوت (BotFather يدوي)، لكنه يوفّر
+# رسمياً تهيئة البوت الموجود بالكامل. هذه الدوال تستخدم ذلك.
+# ============================================================
+def _tg_post(token, method, payload, timeout=15):
+    url = f"{TG_API}/bot{token}/{method}"
+    data = _json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = _json.loads(resp.read().decode("utf-8"))
+            return bool(body.get("ok")), body.get("description", "")
+    except urllib.error.HTTPError as e:
+        try:
+            body = _json.loads(e.read().decode("utf-8"))
+            return False, body.get("description", f"HTTP {e.code}")
+        except Exception:
+            return False, f"HTTP {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
+def configure_bot_profile(token, name=None, short_description=None,
+                          description=None, commands=None):
+    """تهيئة بروفايل البوت رسمياً عبر Telegram Bot API.
+    يرجّع dict بنتيجة كل خطوة: {name, short, desc, commands, errors:[]}."""
+    result = {"name": None, "short": None, "desc": None, "commands": None, "errors": []}
+    if name:
+        ok, err = _tg_post(token, "setMyName", {"name": name[:64]})
+        result["name"] = ok
+        if not ok: result["errors"].append(f"name: {err}")
+    if short_description is not None:
+        ok, err = _tg_post(token, "setMyShortDescription",
+                           {"short_description": short_description[:120]})
+        result["short"] = ok
+        if not ok: result["errors"].append(f"short: {err}")
+    if description is not None:
+        ok, err = _tg_post(token, "setMyDescription",
+                           {"description": description[:512]})
+        result["desc"] = ok
+        if not ok: result["errors"].append(f"desc: {err}")
+    if commands:
+        ok, err = _tg_post(token, "setMyCommands", {"commands": commands})
+        result["commands"] = ok
+        if not ok: result["errors"].append(f"commands: {err}")
+    result["ok"] = not result["errors"]
+    return result
+
+
+def default_commands(template):
+    """أوامر البوت الافتراضية حسب النوع (تظهر في قائمة الأوامر بتليجرام)."""
+    cmds = [{"command": "start", "description": "ابدأ / Start"}]
+    return cmds
+
+
+def build_profile_from_config(cfg, template):
+    """يشتق اسم/وصف احترافي من إعدادات البوت لإرساله لتليجرام."""
+    biz = (cfg.get("business_name") or "").strip()
+    name = biz[:64] if biz else None
+    short = (f"بوت {biz} — خدمة عملاء وطلبات على مدار الساعة." if biz else None)
+    welcome = (cfg.get("welcome") or "").strip()
+    if welcome:
+        desc = welcome[:512]
+    elif biz:
+        desc = f"مرحباً بك في {biz}! اضغط ابدأ للتعامل مع البوت."
+    else:
+        desc = None
+    return {"name": name, "short_description": short, "description": desc,
+            "commands": default_commands(template)}

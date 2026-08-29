@@ -102,6 +102,21 @@ def require_roles(*roles):
         return w
     return deco
 
+
+def sync_bot_telegram(bot_row):
+    """يهيّئ بروفايل البوت رسمياً على تليجرام من إعداداته. best-effort."""
+    try:
+        cfg = json.loads(bot_row["config_json"] or "{}")
+    except Exception:
+        cfg = {}
+    prof = tg.build_profile_from_config(cfg, bot_row["template"])
+    res = tg.configure_bot_profile(bot_row["token"], **prof)
+    cfg["tg_synced_at"] = int(_time.time())
+    cfg["tg_sync_ok"] = bool(res.get("ok"))
+    cfg["tg_sync_errors"] = res.get("errors", [])
+    db.update_bot_config(bot_row["id"], cfg)
+    return res
+
 def notify_admins(text):
     """إشعار كل الأدمنز على تليجرام بأي حركة (best-effort)."""
     try:
@@ -117,8 +132,8 @@ def inject():
             "username": session.get("uname"),
             "lang": lang, "dir": i18n.dir_for(lang), "langs": i18n.LANGS,
             "t": lambda k: i18n.t(k, lang), "icon": icon,
-            "tmpl_label": lambda key: i18n.t({"flow":"tmpl_flow","store":"tmpl_store","booking":"tmpl_booking","customer_service":"tmpl_cs"}.get(key,"tmpl_flow"), lang),
-            "tmpl_icon": lambda key: {"flow":"flow","store":"store","booking":"calendar","customer_service":"phone"}.get(key,"bot"),
+            "tmpl_label": lambda key: i18n.t({"flow":"tmpl_flow","store":"tmpl_store","booking":"tmpl_booking","customer_service":"tmpl_cs","faq":"tmpl_faq","feedback":"tmpl_feedback","support":"tmpl_support"}.get(key,"tmpl_flow"), lang),
+            "tmpl_icon": lambda key: {"flow":"flow","store":"store","booking":"calendar","customer_service":"phone","faq":"grid","feedback":"sparkles","support":"shield"}.get(key,"bot"),
             "role": session.get("role","user"),
             "fmt_date": lambda ts: (_dt.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d") if ts else "—"),
             "days_left": lambda ts: (max(0, int((int(ts) - _time.time()) // 86400)) if ts else 0)}
@@ -217,12 +232,23 @@ def bot_create():
            "welcome": "", "thanks": "", "products": [],
            "service_name": name, "days_ahead": 7, "open_hour": 10, "close_hour": 22,
            "slot_minutes": 60, "working_days": None, "flow": None, "welcome_image": "",
-           "bot_username": info.get("username"), "bot_name": info.get("name"),
+           "menu_items": [], "bot_username": info.get("username"), "bot_name": info.get("name"),
            "pending_owner_code": None}
+    # قوالب ثابتة جاهزة حسب النوع
+    if template in T.PRESET_FLOWS:
+        cfg["flow"] = json.loads(json.dumps(T.PRESET_FLOWS[template]))  # نسخة قابلة للتعديل
+    if template == "faq":
+        cfg["menu_items"] = json.loads(json.dumps(T.DEFAULT_MENU_ITEMS))
     try:
         db.create_bot(uid(), name, token, template, cfg)
         notify_admins(f"🤖 بوت جديد / New bot: «{name}» (@{info.get('username')}) — {session.get('uname')}")
-        flash(f"تم إنشاء البوت @{info.get('username')} 🎉 اضبط إعداداته ثم شغّله.", "ok")
+        # تهيئة رسمية للبوت على تليجرام
+        try:
+            _row = [b for b in db.list_bots(uid()) if b["token"] == token]
+            if _row: sync_bot_telegram(_row[0])
+        except Exception:
+            pass
+        flash(f"تم إنشاء البوت @{info.get('username')} 🎉 وتهيئته رسمياً على تليجرام. اضبط إعداداته ثم شغّله.", "ok")
     except Exception as e:
         flash(f"خطأ: {e} (قد يكون التوكن مستخدماً بالفعل).", "error")
     return redirect(url_for("dashboard"))
@@ -234,10 +260,17 @@ def bot_detail(bot_id):
     b["config"] = json.loads(b["config_json"] or "{}")
     b["running"] = manager.is_running(bot_id)
     b["stats"] = db.stats_summary(bot_id)
-    leads = db.list_leads(bot_id) if b["template"] in ("flow", "customer_service") else []
+    leads = db.list_leads(bot_id) if b["template"] in ("flow", "customer_service", "feedback", "support") else []
     orders = db.list_orders(bot_id) if b["template"] == "store" else []
     bookings = db.list_bookings(bot_id) if b["template"] == "booking" else []
-    return render_template("bot_detail.html", bot=b, leads=leads, orders=orders, bookings=bookings)
+    
+    sub = db.get_subscription(uid())
+    plan_id = sub["plan"] if sub["status"] == "active" else "free"
+    p = plans.plan(plan_id)
+    if current_role() in ("admin", "support"):
+        p = plans.plan("business") # Full access
+        
+    return render_template("bot_detail.html", bot=b, leads=leads, orders=orders, bookings=bookings, plan=p)
 
 @app.route("/bot/<int:bot_id>/config", methods=["POST"])
 @login_required
@@ -245,6 +278,12 @@ def bot_config(bot_id):
     b = _owned(bot_id); cfg = json.loads(b["config_json"] or "{}")
     for k in ("business_name", "owner_chat_id", "welcome", "thanks", "welcome_image"):
         cfg[k] = request.form.get(k, cfg.get(k, "")).strip()
+    if b["template"] == "faq":
+        items = []
+        for q, a in zip(request.form.getlist("m_q"), request.form.getlist("m_a")):
+            q = q.strip()
+            if q: items.append({"q": q[:60], "a": (a or "").strip()[:1000]})
+        cfg["menu_items"] = items
     if b["template"] == "store":
         prods = []
         imgs = request.form.getlist("p_image")
@@ -268,7 +307,9 @@ def bot_config(bot_id):
         cfg["working_days"] = [int(x) for x in wd] if wd else None
     db.update_bot_config(bot_id, cfg)
     if manager.is_running(bot_id): manager.restart_bot(bot_id)
-    flash("تم حفظ الإعدادات ✅", "ok")
+    try: sync_bot_telegram(db.get_bot(bot_id, uid()))
+    except Exception: pass
+    flash("تم حفظ الإعدادات ومزامنتها مع تليجرام ✅", "ok")
     return redirect(url_for("bot_detail", bot_id=bot_id))
 
 # ---------- باني الفلو No-Code ----------
@@ -276,8 +317,8 @@ def bot_config(bot_id):
 @login_required
 def flow_builder(bot_id):
     b = _owned(bot_id); cfg = json.loads(b["config_json"] or "{}")
-    if b["template"] not in ("flow", "customer_service"):
-        flash("باني الفلو متاح لبوتات «باني المحادثات» و«خدمة العملاء».", "error")
+    if b["template"] not in ("flow", "customer_service", "feedback", "support"):
+        flash("باني الفلو متاح لبوتات المحادثات فقط." if session.get("lang")!="en" else "Flow builder is for conversation bots only.", "error")
         return redirect(url_for("bot_detail", bot_id=bot_id))
     if request.method == "POST":
         flow = {"start_message": request.form.get("start_message", "").strip(),
@@ -336,6 +377,14 @@ def api_stats(bot_id):
 @login_required
 def broadcast(bot_id):
     b = _owned(bot_id)
+    
+    sub = db.get_subscription(uid())
+    plan_id = sub["plan"] if sub["status"] == "active" else "free"
+    p = plans.plan(plan_id)
+    if current_role() not in ("admin", "support") and not p.get("broadcast"):
+        flash("هذه الميزة غير متاحة في باقتك الحالية. يرجى الترقية." if session.get("lang")!="en" else "This feature is not available in your current plan. Please upgrade.", "error")
+        return redirect(url_for("pricing"))
+
     subs = len(db.list_bot_user_ids(bot_id))
     if request.method == "POST":
         text = request.form.get("text", "").strip()
@@ -393,8 +442,16 @@ def ai_setup(bot_id):
     desc = (request.get_json(silent=True) or {}).get("description", "").strip()
     if not desc:
         return jsonify({"ok": False, "error": "اكتب وصف نشاطك أولاً."})
+        
+    sub = db.get_subscription(uid())
+    plan_id = sub["plan"] if sub["status"] == "active" else "free"
+    p = plans.plan(plan_id)
+    
     key = db.get_platform("ai_key", "")
     provider = db.get_platform("ai_provider", "gemini")
+    
+    if current_role() not in ("admin", "support") and not p.get("ai"):
+        key = None  # Force fallback offline generator
     patch, source = ai.generate_bot_config(desc, b["template"], api_key=key or None, provider=provider)
     if not patch:
         return jsonify({"ok": False, "error": "تعذّر توليد الإعدادات."})
@@ -511,7 +568,8 @@ def admin_platform():
     if request.method == "POST":
         for k in ("vodafone_number","instapay_handle","instapay_link",
                   "bank_holder","bank_name","bank_account","bank_iban",
-                  "platform_bot_token","admin_chat_id"):
+                  "platform_bot_token","admin_chat_id",
+                  "support_email","support_whatsapp","support_telegram"):
             db.set_platform(k, request.form.get(k, "").strip())
         tok = db.get_platform("platform_bot_token",""); adm = db.get_platform("admin_chat_id","")
         if tok and adm:
@@ -595,6 +653,38 @@ def admin_payment_decide(pid, decision):
         flash("سبق البتّ في هذا الطلب." if session.get("lang")!="en" else "Already decided.", "error")
     return redirect(url_for("admin_payments"))
 
+# ---------- طلب بوت مخصّص ----------
+@app.route("/request-bot", methods=["GET", "POST"])
+@login_required
+def request_bot():
+    plat = db.all_platform()
+    if request.method == "POST":
+        business = request.form.get("business", "").strip()
+        desc = request.form.get("description", "").strip()
+        budget = request.form.get("budget", "").strip()
+        contact = request.form.get("contact", "").strip()
+        if len(desc) < 10:
+            flash("اكتب وصفاً أوضح لطلبك." if session.get("lang")!="en" else "Please describe your request more clearly.", "error")
+            return redirect(url_for("request_bot"))
+        rid = db.create_bot_request(uid(), session.get("uname", ""), business, desc, budget, contact)
+        notify_admins(f"🛠️ طلب بوت مخصّص جديد #{rid}\n👤 {session.get('uname')}\n🏢 {business}\n💬 {desc[:300]}\n📞 {contact}")
+        flash("✅ تم استلام طلبك! سنتواصل معك قريباً." if session.get("lang")!="en"
+              else "✅ Request received! We'll contact you soon.", "ok")
+        return redirect(url_for("request_bot", sent=1))
+    return render_template("request_bot.html", plat=plat, sent=request.args.get("sent"))
+
+@app.route("/admin/requests")
+@require_roles("admin", "support")
+def admin_requests():
+    return render_template("admin_requests.html", reqs=db.list_bot_requests())
+
+@app.route("/admin/requests/<int:req_id>/<status>")
+@require_roles("admin")
+def admin_request_status(req_id, status):
+    db.set_bot_request_status(req_id, status)
+    flash("تم التحديث." if session.get("lang")!="en" else "Updated.", "ok")
+    return redirect(url_for("admin_requests"))
+
 # ---------- حساب المستخدم (تعديل الاسم/كلمة المرور) ----------
 @app.route("/account", methods=["GET", "POST"])
 @login_required
@@ -654,6 +744,19 @@ def admin_payment_screenshot(pid):
         abort(404)
     return send_from_directory(UPLOAD_DIR, fname)
 
+@app.route("/bot/<int:bot_id>/sync-telegram", methods=["POST"])
+@login_required
+def sync_telegram(bot_id):
+    b = _owned(bot_id)
+    res = sync_bot_telegram(b)
+    if res.get("ok"):
+        flash("تم تحديث بروفايل البوت على تليجرام رسمياً ✅" if session.get("lang")!="en"
+              else "Bot profile updated on Telegram ✅", "ok")
+    else:
+        flash(("بعض الإعدادات لم تُحفظ: " if session.get("lang")!="en" else "Some settings failed: ")
+              + "، ".join(res.get("errors", []))[:200], "error")
+    return redirect(url_for("bot_detail", bot_id=bot_id))
+
 @app.route("/landing")
 def landing():
     return render_template("landing.html")
@@ -670,7 +773,17 @@ def seed_platform_defaults():
     db.set_platform("bank_iban", "EG160046020400000059101546889")
     db.set_platform("platform_bot_token", "")
     db.set_platform("admin_chat_id", "")
+    db.set_platform("support_email", "info@youssefalsherief.tech")
+    db.set_platform("support_whatsapp", "201097585951")
+    db.set_platform("support_telegram", "")
     db.set_platform("seeded", "1")
+
+def contact_defaults():
+    """يضمن وجود بيانات التواصل حتى لو كانت القاعدة قديمة قبل هذه الإضافة."""
+    if not db.get_platform("support_email"):
+        db.set_platform("support_email", "info@youssefalsherief.tech")
+    if not db.get_platform("support_whatsapp"):
+        db.set_platform("support_whatsapp", "201097585951")
 
 def seed_default_admin():
     """ينشئ حساب أدمن افتراضياً عند أول تشغيل (لو لا يوجد أي مستخدم)."""
@@ -694,7 +807,7 @@ def _migrate_ai_key():
             db.set_platform("ai_provider", db.get_setting(1, "ai_provider", "gemini"))
 
 def bootstrap():
-    db.init_db(); seed_platform_defaults(); seed_default_admin(); _migrate_ai_key()
+    db.init_db(); seed_platform_defaults(); contact_defaults(); seed_default_admin(); _migrate_ai_key()
     manager.start(); manager.resume_active_bots()
     tok = db.get_platform("platform_bot_token", "")
     if tok and db.get_platform("admin_chat_id", ""):

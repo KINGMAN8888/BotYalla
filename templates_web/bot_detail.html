@@ -14,12 +14,17 @@
       <a class="btn green sm" href="{{ url_for('bot_action', bot_id=bot.id, action='start') }}">{{ icon('play',14) }} {{ t('start') }}</a>
     {% endif %}
     <a class="btn ghost sm" href="{{ url_for('analytics', bot_id=bot.id) }}">{{ icon('chart',14) }} {{ t('analytics') }}</a>
-    <a class="btn ghost sm" href="{{ url_for('broadcast', bot_id=bot.id) }}">{{ icon('megaphone',14) }} {{ t('campaign') }}</a>
-    {% if bot.template in ('flow','customer_service') %}
+    {% if plan.broadcast %}
+      <a class="btn ghost sm" href="{{ url_for('broadcast', bot_id=bot.id) }}">{{ icon('megaphone',14) }} {{ t('campaign') }}</a>
+    {% else %}
+      <a class="btn ghost sm" href="{{ url_for('pricing') }}" style="opacity:0.6;" title="{{ t('upgrade_req') }}">{{ icon('lock',14) }} {{ t('campaign') }}</a>
+    {% endif %}
+    {% if bot.template in ('flow','customer_service','feedback','support') %}
       <a class="btn ghost sm" href="{{ url_for('flow_builder', bot_id=bot.id) }}">{{ icon('flow',14) }} {{ t('flow_builder') }}</a>
     {% endif %}
+    {% set del_msg = 'حذف البوت نهائياً؟' if lang=='ar' else 'Delete this bot permanently?' %}
     <a class="btn red sm" href="{{ url_for('bot_action', bot_id=bot.id, action='delete') }}"
-       onclick="return confirm('{{ 'حذف البوت نهائياً؟' if lang=='ar' else 'Delete this bot permanently?' }}')">{{ icon('trash',14) }}</a>
+       onclick="return confirm('{{ del_msg }}')">{{ icon('trash',14) }}</a>
   </div>
 </div>
 
@@ -31,7 +36,11 @@
 </div>
 
 <div class="card" style="border:1px solid var(--violet);">
-  <h2>{{ icon('sparkles',18) }} {{ t('ai_setup_title') }}</h2>
+  <h2>{{ icon('sparkles',18) }} {{ t('ai_setup_title') }}
+    {% if not plan.ai %}
+      <a href="{{ url_for('pricing') }}" class="pill off" style="text-decoration:none;font-size:11px;vertical-align:middle;margin-inline-start:8px;" title="{{ t('upgrade_req') }}">{{ icon('lock',12) }} {{ t('ai_basic_badge') }}</a>
+    {% endif %}
+  </h2>
   <p class="muted" style="margin-top:-6px;font-size:13px;">{{ t('ai_setup_desc') }}</p>
   <textarea id="aiDesc" placeholder="{{ t('ai_placeholder') }}"></textarea>
   <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
@@ -61,6 +70,15 @@
     <div style="flex:1;border-inline-start:1px solid var(--line);padding-inline-start:18px;">
       <p class="hint">{{ t('id_hint') }}</p>
       <p class="hint"><a href="https://t.me/BotFather" target="_blank" rel="noopener">{{ icon('link',13) }} {{ t('open_botfather') }}</a></p>
+      <hr class="divider" style="margin:12px 0;">
+      <div class="badge-feat" style="margin-bottom:8px;">
+        {% if bot.config.tg_synced_at %}{{ icon('check',13) }} {{ t('tg_synced') }}{% else %}{{ icon('bot',13) }} {{ t('tg_not_synced') }}{% endif %}
+      </div>
+      <p class="hint">{{ t('tg_sync_desc') }}</p>
+      <form method="post" action="{{ url_for('sync_telegram', bot_id=bot.id) }}" style="margin-top:6px;">
+        {{ csrf_field() }}
+        <button class="btn ghost sm">{{ icon('link',14) }} {{ t('tg_sync_btn') }}</button>
+      </form>
     </div>
   </div>
 </div>
@@ -71,7 +89,19 @@
     {{ csrf_field() }}
     <div class="row">
       <div><label>{{ t('biz_name') }}</label><input name="business_name" value="{{ bot.config.business_name or '' }}"></div>
-      <div><label>{{ t('owner_id_lbl') }}</label><input name="owner_chat_id" value="{{ bot.config.owner_chat_id or '' }}"></div>
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <label style="margin:0;">{{ t('owner_id_lbl') }}</label>
+          <button type="button" class="btn ghost sm" onclick="document.getElementById('ownerTipD').classList.toggle('hidden')" style="padding:4px 10px;font-size:12px;">{{ icon('help',14) }} {{ t('owner_id_help') }}</button>
+        </div>
+        <div id="ownerTipD" class="hint hidden" style="background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-top:6px;">
+          {{ t('owner_id_tip') }}
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:6px;">
+          <input name="owner_chat_id" value="{{ bot.config.owner_chat_id or '' }}" style="flex:1;">
+          <a class="btn ghost sm" href="https://t.me/userinfobot" target="_blank" rel="noopener">{{ icon('link',14) }} {{ t('get_my_id') }}</a>
+        </div>
+      </div>
     </div>
     <div class="row">
       <div><label>{{ t('welcome_msg') }}</label><textarea name="welcome">{{ bot.config.welcome or '' }}</textarea></div>
@@ -118,11 +148,25 @@
     </div>
     {% endif %}
 
+    {% if bot.template == 'faq' %}
+    <hr class="divider">
+    <h2>{{ icon('grid',18) }} {{ t('menu_items_t') }}</h2>
+    <table class="table"><tr><th style="width:34%;">{{ t('menu_q') }}</th><th>{{ t('menu_a') }}</th></tr>
+      {% for it in bot.config.menu_items %}
+      <tr><td><input name="m_q" value="{{ it.q }}"></td><td><input name="m_a" value="{{ it.a }}"></td></tr>
+      {% endfor %}
+      {% for _ in range(4) %}
+      <tr><td><input name="m_q" placeholder="{{ t('new_item') }}"></td><td><input name="m_a" placeholder="{{ t('menu_a') }}"></td></tr>
+      {% endfor %}
+    </table>
+    <div class="hint">{{ 'اترك السؤال فارغاً لتجاهل الصف. احفظ ثم أعد الفتح لإضافة صفوف أكثر.' if lang=='ar' else 'Leave the question empty to skip a row. Save then reopen for more rows.' }}</div>
+    {% endif %}
+
     <div style="margin-top:18px;"><button class="btn">{{ icon('check',16) }} {{ t('save_settings') }}</button></div>
   </form>
 </div>
 
-{% if bot.template in ('flow','customer_service') %}
+{% if bot.template in ('flow','customer_service','feedback','support') %}
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;">
     <h2 style="margin:0;">{{ icon('inbox',18) }} {{ t('customers') }} ({{ leads|length }})</h2>
@@ -163,7 +207,8 @@
 
 <script>
 const CSRF=document.querySelector('meta[name=csrf-token]').content;
-const BID={{ bot.id }};
+const BID = Number("{{ bot.id }}");
+const botIsRunning = ("{{ '1' if bot.running else '' }}" === "1");
 const L={ai_short:"{{ 'اكتب وصفاً أوضح لنشاطك.' if lang=='ar' else 'Write a clearer description.' }}",
  ai_work:"{{ 'الوكيل يعمل...' if lang=='ar' else 'Agent working...' }}",
  ai_gen:"{{ 'جاري توليد الإعدادات...' if lang=='ar' else 'Generating settings...' }}",
@@ -187,6 +232,10 @@ async function runAI(){
   }catch(e){msg.style.color='#F87171';msg.textContent=L.err;btn.disabled=false;btn.innerHTML=old;}
 }
 async function genOwner(){
+  if (!botIsRunning) {
+    alert("{{ '⚠ عذراً، يجب تشغيل البوت أولاً (من الزر بالأعلى) لتتمكن من ربط حسابك.' if lang == 'ar' else '⚠ Please start the bot first (from the top button) before linking your account.' }}");
+    return;
+  }
   const btn=document.getElementById('genBtn');btn.disabled=true;btn.textContent='⏳ '+L.prep;
   try{const r=await fetch(`/bot/${BID}/gen-owner-link`,{method:'POST',headers:{'X-CSRF-Token':CSRF}});const d=await r.json();
     if(!d.ok){alert(d.error||'');btn.disabled=false;btn.textContent=L.gen;return;}

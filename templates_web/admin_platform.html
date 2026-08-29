@@ -32,6 +32,14 @@
     <label>{{ t('plat_admin_id') }}</label>
     <input name="admin_chat_id" value="{{ plat.admin_chat_id or '' }}" placeholder="123456789">
     <div class="hint"><a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot ↗</a> {{ 'لمعرفة معرّفك.' if lang=='ar' else 'to get your ID.' }}</div>
+  </div>
+  <div class="card">
+    <h2>{{ icon('phone',18) }} {{ t('plat_contact') }}</h2>
+    <div class="row">
+      <div><label>{{ t('plat_email') }}</label><input name="support_email" value="{{ plat.support_email or '' }}" placeholder="info@youssefalsherief.tech"></div>
+      <div><label>{{ t('plat_whatsapp') }}</label><input name="support_whatsapp" value="{{ plat.support_whatsapp or '' }}" placeholder="201097585951"></div>
+      <div><label>{{ t('plat_telegram') }}</label><input name="support_telegram" value="{{ plat.support_telegram or '' }}" placeholder="username"></div>
+    </div>
     <div style="margin-top:16px;"><button class="btn">{{ icon('check',16) }} {{ t('save') }}</button></div>
   </div>
 </form>

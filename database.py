@@ -114,6 +114,17 @@ def init_db():
         CREATE TABLE IF NOT EXISTS platform(
             key TEXT PRIMARY KEY, value TEXT
         );
+        CREATE TABLE IF NOT EXISTS bot_requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            business TEXT,
+            description TEXT,
+            budget TEXT,
+            contact TEXT,
+            status TEXT NOT NULL DEFAULT 'new',   -- new | in_progress | done | rejected
+            created_at INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             bot_id INTEGER NOT NULL,
@@ -508,6 +519,29 @@ def admin_chat_ids():
     """معرّفات تليجرام لكل الأدمنز (من إعداد المنصة admin_chat_id، ويمكن التوسّع)."""
     v = get_platform("admin_chat_id", "")
     return [x.strip() for x in v.split(",") if x.strip()]
+
+# ---------- طلبات البوتات المخصّصة ----------
+def create_bot_request(user_id, username, business, description, budget, contact):
+    with get_conn() as c:
+        cur = c.execute("INSERT INTO bot_requests(user_id,username,business,description,budget,contact,status,created_at) "
+                        "VALUES(?,?,?,?,?,?, 'new', ?)",
+                        (user_id, username, business, description, budget, contact, int(time.time())))
+        return cur.lastrowid
+
+def list_bot_requests(limit=200):
+    with get_conn() as c:
+        rows = c.execute("SELECT * FROM bot_requests ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+def count_new_bot_requests():
+    with get_conn() as c:
+        return c.execute("SELECT COUNT(*) FROM bot_requests WHERE status='new'").fetchone()[0]
+
+def set_bot_request_status(req_id, status):
+    if status not in ("new", "in_progress", "done", "rejected"):
+        return
+    with get_conn() as c:
+        c.execute("UPDATE bot_requests SET status=? WHERE id=?", (status, req_id))
 
 
 if __name__ == "__main__":

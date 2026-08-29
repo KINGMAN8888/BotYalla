@@ -208,9 +208,87 @@ def build_booking(app: Application):
                 BK_PHONE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)]},
         fallbacks=[CommandHandler("cancel", cancel)]))
 
+
+# ---------- قائمة / أسئلة شائعة (menu) ----------
+MENU_STATE = 30
+def build_menu(app: Application):
+    """بوت قائمة: يعرض أزرار، وعند الضغط يرد بالإجابة، ويكرّر. مثالي للأسئلة الشائعة والروابط."""
+    def items(ctx): return _cfg(ctx).get("menu_items", [])
+    def kb(ctx):
+        rows = [[it["q"]] for it in items(ctx) if it.get("q")]
+        rows.append(["🔚 إنهاء"])
+        return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+    async def start(update, ctx):
+        await track_start(update, ctx)
+        if not items(ctx):
+            await update.message.reply_text("⚠️ لم تُضَف عناصر بعد.")
+            return ConversationHandler.END
+        await send_intro(update, ctx,
+            _cfg(ctx).get("welcome") or f"👋 أهلاً بك في «{_cfg(ctx).get('business_name','')}»! اختر من القائمة:",
+            kb(ctx))
+        return MENU_STATE
+
+    async def pick(update, ctx):
+        t = (update.message.text or "").strip()
+        if t.startswith("🔚"):
+            await update.message.reply_text(_cfg(ctx).get("thanks") or "شكراً لتواصلك! 🙏",
+                                            reply_markup=ReplyKeyboardRemove())
+            return ConversationHandler.END
+        for it in items(ctx):
+            if it.get("q") == t:
+                await update.message.reply_text(it.get("a") or "—")
+                return MENU_STATE
+        await update.message.reply_text("اختر عنصراً من الأزرار.", reply_markup=kb(ctx))
+        return MENU_STATE
+
+    async def cancel(update, ctx):
+        await update.message.reply_text("تم الإنهاء. /start للبدء.", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={MENU_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pick)]},
+        fallbacks=[CommandHandler("cancel", cancel)]))
+
+
+# ---------- الفلوهات الافتراضية للأنواع الجديدة ----------
+PRESET_FLOWS = {
+    "feedback": {
+        "start_message": "🌟 رأيك يهمّنا! ساعدنا نتحسّن في أقل من دقيقة.",
+        "steps": [
+            {"id": "s0", "type": "buttons", "prompt": "كيف تقيّم تجربتك معنا؟", "var": "التقييم",
+             "options": ["⭐ ممتاز", "🙂 جيد", "😐 مقبول", "☹️ سيئ"]},
+            {"id": "s1", "type": "question", "prompt": "✍️ اكتب ملاحظاتك أو اقتراحاتك:", "var": "الملاحظات"},
+            {"id": "s2", "type": "question", "prompt": "📱 رقمك للتواصل (اختياري):", "var": "التليفون"},
+        ],
+        "end_message": "🙏 شكراً لوقتك! رأيك وصلنا وهنستفيد منه.",
+    },
+    "support": {
+        "start_message": "🛠️ أهلاً بك في الدعم الفني. هنساعدك خطوة بخطوة.",
+        "steps": [
+            {"id": "s0", "type": "question", "prompt": "📝 اسمك:", "var": "الاسم"},
+            {"id": "s1", "type": "buttons", "prompt": "نوع المشكلة؟", "var": "النوع",
+             "options": ["مشكلة تقنية", "استفسار", "شكوى", "أخرى"]},
+            {"id": "s2", "type": "question", "prompt": "🔎 اشرح المشكلة بالتفصيل:", "var": "التفاصيل"},
+            {"id": "s3", "type": "question", "prompt": "📱 رقم للتواصل:", "var": "التليفون"},
+        ],
+        "end_message": "✅ تم فتح تذكرتك! فريق الدعم هيتواصل معك في أقرب وقت.",
+    },
+}
+
+DEFAULT_MENU_ITEMS = [
+    {"q": "🕐 مواعيد العمل", "a": "نعمل يومياً من 10 صباحاً حتى 10 مساءً."},
+    {"q": "📍 العنوان", "a": "أضف عنوانك هنا من إعدادات البوت."},
+    {"q": "📞 التواصل", "a": "للتواصل: أضف رقمك هنا من إعدادات البوت."},
+]
+
 TEMPLATES = {
     "flow":             {"label": "باني محادثات (No-Code)", "build": build_flow,     "icon": "🧩"},
     "store":            {"label": "متجر صغير",              "build": build_store,    "icon": "🛍️"},
     "booking":          {"label": "حجوزات ومواعيد",         "build": build_booking,  "icon": "📅"},
     "customer_service": {"label": "خدمة عملاء",             "build": build_flow,     "icon": "📞"},
+    "faq":              {"label": "أسئلة شائعة / قائمة",     "build": build_menu,     "icon": "❓"},
+    "feedback":         {"label": "تقييم وآراء",            "build": build_flow,     "icon": "⭐"},
+    "support":          {"label": "دعم فني / تذاكر",        "build": build_flow,     "icon": "🛟"},
 }
