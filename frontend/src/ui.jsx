@@ -155,3 +155,19 @@ export function GlassCard({ children, className = "", spot = true, ...rest }) {
     </div>
   );
 }
+
+/* ----------------------------------------------- هل حلقة الرسوم تعمل أصلاً؟
+   Motion يضع opacity:0 فوراً عند التركيب ثم يحتاج requestAnimationFrame ليرفعها.
+   لو لم تُستدعَ rAF إطلاقاً (تبويب مخفي · بيئة مدمجة · خنق شديد) يبقى المحتوى
+   غير مرئي للأبد. هذا الخطّاف يكتشف ذلك خلال 700ms ويُعيد false، فتُمرَّر
+   `initial={false}` وتظهر العناصر بلا حركة بدل ألا تظهر أبداً. */
+export function useAnimEnabled() {
+  const [ok, setOk] = useState(true);
+  useEffect(() => {
+    let fired = false;
+    const r = requestAnimationFrame(() => { fired = true; });
+    const id = setTimeout(() => { if (!fired) setOk(false); }, 700);
+    return () => { cancelAnimationFrame(r); clearTimeout(id); };
+  }, []);
+  return ok;
+}

@@ -30,8 +30,11 @@
     -webkit-text-size-adjust: 100%;
     scroll-behavior: smooth;
   }
+  /* اللون على html لا body: عناصر z-index السالب (الخلفية التفاعلية) تُرسم
+     قبل خلفيات الكتل، فخلفية body المعتمة كانت تغطّيها بالكامل. */
+  html { background: var(--color-ob-0); }
   body {
-    background: var(--color-ob-0);
+    background: transparent;
     color: var(--color-ink);
     font-family: var(--font-sans);
     line-height: 1.65;
@@ -222,4 +225,47 @@ html.js .rv.in { opacity: 1; transform: none; }
 .drift-a, .drift-b, .drift-c {
   will-change: transform;
   backface-visibility: hidden;
+}
+
+/* ------------------------------------------------ دخول البطل (CSS-first)
+   نفس مبدأ .rv: المحتوى ظاهر افتراضياً، والإخفاء مشروط بـ html.js.
+   لا يعتمد على requestAnimationFrame — فلو تجمّدت حلقة الرسوم (تبويب مخفي،
+   بيئة مدمجة، جهاز ضعيف) يبقى العنوان والأزرار مقروءة بدل صفحة سوداء. */
+.kw { display: inline-block; }
+html.js .kw {
+  opacity: 0;
+  transform: translateY(0.7em);
+  filter: blur(8px);
+  transition:
+    opacity 0.9s var(--ease-silk),
+    transform 0.9s var(--ease-silk),
+    filter 0.9s var(--ease-silk);
+}
+html.js .kw.in { opacity: 1; transform: none; filter: none; }
+
+.hr-in { }
+html.js .hr-in {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.9s var(--ease-silk), transform 0.9s var(--ease-silk);
+}
+html.js .hr-in.in { opacity: 1; transform: none; }
+
+/* لوحة المنتج تدخل من الجانب */
+html.js .hr-side {
+  opacity: 0;
+  transform: translateX(var(--side-from, 60px)) scale(0.96);
+  transition: opacity 1.2s var(--ease-silk), transform 1.2s var(--ease-silk);
+}
+html.js .hr-side.in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  html.js .kw,
+  html.js .hr-in,
+  html.js .hr-side {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+    transition: none !important;
+  }
 }

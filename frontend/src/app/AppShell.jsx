@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { BY, t, Icon, bi } from "./kit.jsx";
+import Backdrop from "../Backdrop.jsx";
 
 /* ============================================================================
    قشرة اللوحة: شريط جانبي ثابت + شريط علوي + درج للجوال + إشعارات.
@@ -112,16 +113,9 @@ export default function AppShell({ view, children }) {
 
   return (
     <>
-      {/* خلفية الشفق */}
-      <div aria-hidden="true"
-           className="pointer-events-none fixed -inset-x-[10%] -inset-y-[20%] -z-30 opacity-60 saturate-[1.2] [contain:layout_paint]">
-        <i className="drift-a absolute -start-[10vw] -top-[10vw] block size-[44vw] rounded-full mix-blend-screen
-                      bg-[radial-gradient(circle_at_30%_30%,rgb(124_108_246/0.7),transparent_62%)]" />
-        <i className="drift-b absolute -end-[6vw] top-[6vw] block size-[36vw] rounded-full mix-blend-screen
-                      bg-[radial-gradient(circle_at_60%_40%,rgb(34_211_238/0.45),transparent_60%)]" />
-      </div>
-      <div aria-hidden="true" className="veil pointer-events-none fixed inset-0 -z-20" />
-      <div aria-hidden="true" className="grain pointer-events-none fixed inset-0 -z-10 opacity-[0.14]" />
+      {/* خلفية اللوحة — أهدأ من صفحة الهبوط، ومكتوبة بمواضع صريحة
+          لأن أدوات inset السالبة السابقة لم تُطبَّق وتركت الطبقة 0×0. */}
+      <Backdrop dense={false} />
 
       <Flashes />
 

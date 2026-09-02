@@ -1,28 +1,11 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence, useScroll, useSpring, useReducedMotion } from "motion/react";
 import { BY, t, Icon, Reveal, Magnetic, GlassCard, useSpotlight } from "./ui.jsx";
-import LiveDemo from "./LiveDemo.jsx";
+import Backdrop from "./Backdrop.jsx";
+import Hero from "./Hero.jsx";
 
-/* ------------------------------------------------ خلفية الشفق المتحرّكة */
-export function Aurora() {
-  return (
-    <>
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed -inset-x-[10%] -inset-y-[20%] -z-30 opacity-70 saturate-[1.25] [contain:layout_paint]"
-      >
-        <i className="drift-a absolute -start-[6vw] -top-[8vw] block size-[46vw] rounded-full mix-blend-screen
-                      bg-[radial-gradient(circle_at_30%_30%,rgb(124_108_246/0.85),transparent_62%)]" />
-        <i className="drift-b absolute -end-[4vw] top-[2vw] block size-[40vw] rounded-full mix-blend-screen
-                      bg-[radial-gradient(circle_at_60%_40%,rgb(34_211_238/0.62),transparent_60%)]" />
-        <i className="drift-c absolute start-[22vw] top-[38vw] block size-[52vw] rounded-full mix-blend-screen
-                      bg-[radial-gradient(circle_at_50%_50%,rgb(45_212_167/0.34),transparent_62%)]" />
-      </div>
-      <div aria-hidden="true" className="veil pointer-events-none fixed inset-0 -z-20" />
-      <div aria-hidden="true" className="grain pointer-events-none fixed inset-0 -z-10 opacity-[0.16]" />
-    </>
-  );
-}
+/* الخلفية التفاعلية انتقلت إلى Backdrop.jsx — النسخة السابقة كانت تعتمد على
+   أدوات inset سالبة لم تُطبَّق فانهارت الطبقة إلى 0×0 ولم يظهر منها شيء. */
 
 /* ------------------------------------------------------ شريط تقدّم القراءة */
 export function ReadBar() {
@@ -39,47 +22,6 @@ export function ReadBar() {
   );
 }
 
-/* ------------------------------------------------------------------ البطل */
-export function Hero() {
-  return (
-    <header className="mx-auto max-w-[1240px] px-6 pt-[clamp(56px,9vw,110px)] pb-10">
-      <Reveal>
-        <span className="wide-cap mb-5 block text-[11px] font-extrabold text-ink-3">
-          {t("lp_badge")}
-        </span>
-      </Reveal>
-
-      <Reveal delay={0.09}>
-        <h1 className="tight m-0 mb-6 text-[clamp(40px,7.4vw,88px)] font-extrabold text-ink">
-          {t("hero_title_a")} <em className="hue not-italic">{t("hero_title_b")}</em>
-        </h1>
-      </Reveal>
-
-      <Reveal delay={0.18}>
-        <p className="m-0 mb-10 max-w-[56ch] text-[clamp(15px,1.5vw,19px)] leading-[1.75] text-ink-2">
-          {t("hero_sub")}
-        </p>
-      </Reveal>
-
-      <Reveal delay={0.27}>
-        <div className="flex flex-wrap gap-3.5">
-          <Magnetic href={BY.urls.register} icon="rocket">{t("get_started_free")}</Magnetic>
-          <Magnetic href={BY.urls.pricing} variant="ghost" icon="tag">{t("lp_cta_demo")}</Magnetic>
-        </div>
-      </Reveal>
-
-      <Reveal delay={0.36}>
-        <ul className="mt-10 flex flex-wrap gap-x-7 gap-y-2.5 p-0 text-[13.5px] text-ink-3">
-          {[t("lp_trust_1"), t("lp_trust_2"), t("lp_trust_3")].map((x, i) => (
-            <li key={i} className="inline-flex items-center gap-2">
-              <Icon name="check" size={15} className="text-au-teal" /> {x}
-            </li>
-          ))}
-        </ul>
-      </Reveal>
-    </header>
-  );
-}
 
 /* --------------------------------------------------------- شريط منزلق */
 export function Marquee() {
@@ -296,12 +238,9 @@ export default function App() {
   return (
     <>
       <ReadBar />
-      <Aurora />
+      <Backdrop />
       <Nav />
       <Hero />
-      <section className="mx-auto max-w-[1240px] px-6">
-        <LiveDemo />
-      </section>
       <Marquee />
       <Bento />
       <Steps />

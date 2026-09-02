@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion, useInView, useReducedMotion } from "motion/react";
 import { useRef } from "react";
-import { BY, t, Icon, Counter, useSpotlight } from "./ui.jsx";
+import { BY, t, Icon, Counter, useSpotlight, useAnimEnabled } from "./ui.jsx";
 
 /* ============================================================================
    العرض الحيّ: يختار الزائر نوع البوت فتتبدّل المحادثة والأرقام أمامه مباشرة.
@@ -13,7 +13,9 @@ export default function LiveDemo() {
   const [auto, setAuto] = useState(true);
   const ref = useRef(null);
   const inView = useInView(ref, { once: false, amount: 0.35 });
-  const reduce = useReducedMotion();
+  const animOk = useAnimEnabled();
+  // عطّل حركة الدخول لو كانت حلقة الرسوم ميتة — الظهور أهم من الحركة
+  const reduce = useReducedMotion() || !animOk;
   const onMove = useSpotlight();
 
   // تدوير تلقائي حتى يتدخّل الزائر
@@ -54,7 +56,7 @@ export default function LiveDemo() {
           <div className="grid gap-5 p-6 lg:grid-cols-[1.05fr_0.95fr]">
             {/* المحادثة */}
             <div className="flex min-h-[300px] flex-col gap-2.5 rounded-2xl bg-black/35 p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]">
-              <div key={idx} className="flex flex-1 flex-col gap-2.5">
+              <div key={`${idx}-${animOk}`} className="flex flex-1 flex-col gap-2.5">
                   {d.msgs.map((m, i) => (
                     <motion.div
                       key={i}
@@ -103,7 +105,7 @@ export default function LiveDemo() {
               <div className="mt-auto flex flex-wrap gap-1.5 pt-3">
                 {(d.kbd || []).map((b, i) => (
                   <motion.b
-                    key={`${idx}-${i}`}
+                    key={`${idx}-${i}-${animOk}`}
                     initial={reduce ? false : { opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: reduce ? 0 : 0.5 + i * 0.09, duration: 0.5 }}
@@ -123,7 +125,7 @@ export default function LiveDemo() {
               <div className="grid grid-cols-2 gap-3">
                 {(d.metrics || []).map((m, i) => (
                   <motion.div
-                    key={`${idx}-${i}`}
+                    key={`${idx}-${i}-${animOk}`}
                     initial={reduce ? false : { opacity: 0, y: 12 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: reduce ? 0 : i * 0.08, duration: 0.6 }}
@@ -148,7 +150,7 @@ export default function LiveDemo() {
                 <div className="mt-3.5 flex h-[74px] items-end gap-1.5">
                   {[38, 55, 44, 70, 58, 84, 72].map((h, i) => (
                     <motion.i
-                      key={`${idx}-${i}`}
+                      key={`${idx}-${i}-${animOk}`}
                       initial={reduce ? false : { scaleY: 0, opacity: 0 }}
                       animate={{ scaleY: 1, opacity: 1 }}
                       transition={{
