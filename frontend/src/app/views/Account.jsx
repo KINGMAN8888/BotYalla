@@ -164,12 +164,25 @@ export function Pricing() {
               )}
               <Icon name={icons[p.id] || "bot"} size={28} className="mx-auto text-au-cyan" />
               <h2 className="mt-3 mb-3 text-[19px] font-extrabold text-ink">
-                {BY.lang === "ar" ? p.name_ar : p.name_en}
+                {p.name}
               </h2>
-              <div className="mb-6 text-[34px] font-extrabold leading-none text-ink">
-                {p.price === 0
-                  ? <span className="hue text-[22px]">{t("free_forever")}</span>
-                  : <>{p.price}<span className="text-[15px] font-bold text-ink-3">{t("egp")}{t("per_month")}</span></>}
+              <div className="mb-6">
+                {p.price === 0 ? (
+                  <span className="hue text-[22px] font-extrabold">{t("free_forever")}</span>
+                ) : (
+                  <>
+                    {p.has_discount && (
+                      <div className="mb-1 flex items-center justify-center gap-2">
+                        <span className="text-[16px] text-ink-3 line-through">{p.list_price}</span>
+                        <Pill tone="on">-{Math.round(p.discount_pct)}%</Pill>
+                      </div>
+                    )}
+                    <div className="text-[34px] font-extrabold leading-none text-ink">
+                      {p.price}
+                      <span className="text-[15px] font-bold text-ink-3">{t("egp")}{t("per_month")}</span>
+                    </div>
+                  </>
+                )}
               </div>
               <ul className="mb-7 flex flex-col gap-2.5 text-start">
                 {feats.map((f, i) => (
@@ -195,8 +208,36 @@ export function Pricing() {
 
 /* ---------------------------------------------------------------- الاشتراك */
 export function Subscribe() {
-  const { plan = {}, plat = {}, qr, action } = P;
+  const { plan = {}, plat = {}, qr, action, planId } = P;
   const [copied, setCopied] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  // التسعيرة الابتدائية من الخادم؛ تُحدَّث عند تطبيق كود
+  const [q, setQ] = useState({
+    listPrice: plan.list_price ?? plan.price,
+    total: plan.price,
+    planDiscountPct: plan.discount_pct || 0,
+    promoCode: null, promoCut: 0,
+  });
+
+  async function check() {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch("/api/promo/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf },
+        body: JSON.stringify({ plan: planId, code }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setQ({ listPrice: d.listPrice, total: d.total, planDiscountPct: d.planDiscountPct,
+               promoCode: d.promoCode, promoCut: d.promoCut });
+        setErr(d.error || null);
+      }
+    } catch { setErr(null); }
+    setBusy(false);
+  }
 
   const copy = (v, k) => {
     navigator.clipboard?.writeText(v).then(() => {
@@ -222,8 +263,34 @@ export function Subscribe() {
 
       <Card className="mb-6 bg-[linear-gradient(120deg,rgb(124_108_246/0.18),rgb(34_211_238/0.06))]">
         <div className="text-[14px] text-ink-2">{t("pay_amount")}</div>
-        <div className="mt-1 text-[32px] font-extrabold text-ink">{plan.price} {t("egp")}</div>
+        <div className="mt-1 flex flex-wrap items-baseline gap-3">
+          {(q.listPrice > q.total) && (
+            <span className="text-[18px] text-ink-3 line-through">{num(q.listPrice)}</span>
+          )}
+          <span className="text-[32px] font-extrabold text-ink tnum">{num(q.total)} {t("egp")}</span>
+          {q.planDiscountPct > 0 && <Pill tone="on">-{Math.round(q.planDiscountPct)}%</Pill>}
+          {q.promoCode && <Pill tone="on" dot>{q.promoCode}</Pill>}
+        </div>
         <div className="mt-2 text-[12.5px] text-ink-3">{t("pay_secure_note")}</div>
+      </Card>
+
+      {/* كود الخصم — التسعيرة تُحسب في الخادم، والحقل يُرسَل مع النموذج */}
+      <Card className="mb-6 max-w-[560px]">
+        <SectionTitle icon="bolt">{t("promo_have")}</SectionTitle>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())}
+                 placeholder="RAMADAN25" autoComplete="off"
+                 className="max-w-[220px] uppercase" />
+          <Btn variant="ghost" type="button" onClick={check} disabled={busy}>
+            {t("promo_apply")}
+          </Btn>
+          {q.promoCode && (
+            <span className="inline-flex items-center gap-1.5 text-[13px] font-bold text-au-teal">
+              <Icon name="check" size={14} />{t("promo_applied")} — {num(q.promoCut)} {t("egp")}
+            </span>
+          )}
+          {err && <span className="text-[13px] font-bold text-red-300">{err}</span>}
+        </div>
       </Card>
 
       <Card className="mb-6">
@@ -271,6 +338,7 @@ export function Subscribe() {
           <li>{t("pay_step1")}</li><li>{t("pay_step2")}</li><li>{t("pay_step3")}</li>
         </ol>
         <Form action={action} encType="multipart/form-data">
+          <input type="hidden" name="promo" value={q.promoCode || ""} />
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label={t("pay_method")}>
               <Select name="method" defaultValue="vodafone">

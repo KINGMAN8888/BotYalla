@@ -9,6 +9,7 @@ import BotDetail from "./app/views/BotDetail.jsx";
 import { Account, Settings, Billing, Pricing, Subscribe, RequestBot } from "./app/views/Account.jsx";
 import { AdminOverview, AdminUsers, AdminPayments, AdminRequests, AdminPlatform } from "./app/views/Admin.jsx";
 import { FlowBuilder, Broadcast, Analytics, Auth } from "./app/views/Tools.jsx";
+import { AdminPricing, AdminPromos, AdminAffiliates, Affiliate } from "./app/views/Revenue.jsx";
 
 /* خريطة العرض ← المكوّن. Flask يحدّد العرض عبر data-view. */
 const VIEWS = {
@@ -28,6 +29,10 @@ const VIEWS = {
   admin_payments: AdminPayments,
   admin_requests: AdminRequests,
   admin_platform: AdminPlatform,
+  admin_pricing:    AdminPricing,
+  admin_promos:     AdminPromos,
+  admin_affiliates: AdminAffiliates,
+  affiliate:        Affiliate,
 };
 
 /* صفحات المصادقة بلا قشرة لوحة */

@@ -70,6 +70,13 @@ def _csrf_protect():
             abort(400, "CSRF token invalid")
 
 @app.before_request
+def _capture_ref():
+    """?ref=CODE على أي صفحة يُحفظ في الجلسة ويُستهلك عند التسجيل."""
+    code = request.args.get("ref")
+    if code and not session.get("uid"):
+        session["ref"] = code.strip().upper()[:32]
+
+@app.before_request
 def _revalidate_identity():
     """يعيد قراءة هوية المستخدم من قاعدة البيانات في كل طلب.
     الدور والحظر مصدرهما القاعدة لا الجلسة — حتى يسري الحظر أو تغيير الدور
@@ -192,7 +199,11 @@ def register():
             user_id = db.create_user(u, auth.hash_password(p))
             urow = db.get_user(user_id)
             session["uid"] = user_id; session["uname"] = u; session["role"] = urow["role"]
-            notify_admins(f"🆕 تسجيل مستخدم جديد / New user: {u} (#{user_id})")
+            ref_code = session.pop("ref", None)      # التُقط من ?ref= على أي صفحة
+            if ref_code:
+                db.attach_referral(user_id, ref_code)
+            notify_admins(f"🆕 تسجيل مستخدم جديد / New user: {u} (#{user_id})"
+                          + (f" — عبر إحالة {ref_code}" if ref_code else ""))
             return redirect(url_for("dashboard"))
     return react_page("register", "register")
 
@@ -535,8 +546,10 @@ def owner_status(bot_id):
 @app.route("/pricing")
 def pricing():
     sub = db.get_subscription(uid()) if uid() else {"plan":"free","status":"active"}
+    lang = session.get("lang", i18n.DEFAULT)
     return react_page("pricing", "pricing_title",
-                      {"plans": [dict(plans.PLANS[k], id=k) for k in plans.ORDER], "sub": sub})
+                      {"plans": [dict(p, name=plans.plan_name(p["id"], lang))
+                                 for p in priced_plans(lang)], "sub": sub})
 
 @app.route("/subscribe/<plan_id>", methods=["GET"])
 @login_required
@@ -545,8 +558,9 @@ def subscribe(plan_id):
         return redirect(url_for("pricing"))
     p = plans.plan(plan_id)
     plat = db.all_platform()
+    _pr = _plan_pricing(plan_id)
     return react_page("subscribe", "pay_title",
-                      {"planId": plan_id, "plan": dict(p, id=plan_id), "plat": plat,
+                      {"planId": plan_id, "plan": dict(p, id=plan_id, **_pr), "plat": plat,
                        "qr": url_for("static", filename="instapay_qr.jpg"),
                        "action": url_for("subscribe_pay", plan_id=plan_id)})
 
@@ -555,7 +569,9 @@ def subscribe(plan_id):
 def subscribe_pay(plan_id):
     if plan_id not in plans.PLANS or plan_id == "free":
         return redirect(url_for("pricing"))
-    p = plans.plan(plan_id)
+    # التسعيرة تُحسب في الخادم: سعر الباقة بعد تجاوز المالك وخصمها، ثم كود
+    # الخصم إن صحّ. لا يُقرأ أي مبلغ من الفورم (AGENTS.md §3.3).
+    q = quote(plan_id, uid(), request.form.get("promo", ""))
     method = request.form.get("method", "")
     ref = request.form.get("ref", "").strip()
     file = request.files.get("screenshot")
@@ -586,9 +602,12 @@ def subscribe_pay(plan_id):
     dup = db.img_hash_seen(img_hash)
     refs = [db.get_platform("vodafone_number",""), db.get_platform("instapay_handle",""),
             db.get_platform("bank_iban",""), db.get_platform("bank_account","")]
-    ac = pay.auto_check(fpath, p["price"], [r for r in refs if r], duplicate=dup)
-    pid = db.create_payment(uid(), plan_id, method, p["price"], ref, fname, img_hash,
-                            json.dumps(ac, ensure_ascii=False))
+    ac = pay.auto_check(fpath, q["total"], [r for r in refs if r], duplicate=dup)
+    pid = db.create_payment(uid(), plan_id, method, q["total"], ref, fname, img_hash,
+                            json.dumps(ac, ensure_ascii=False),
+                            promo_id=(q["promo"]["id"] if q["promo"] else None),
+                            discount=round(q["list_price"] - q["total"], 2),
+                            base_amount=q["list_price"])
     # تنبيه الأدمن على تليجرام بزرّي موافقة/رفض (طبقة التحقق الثانية)
     admin_id = db.get_platform("admin_chat_id", "")
     payment = db.get_payment(pid)
@@ -600,7 +619,8 @@ def subscribe_pay(plan_id):
     msg_id = manager.send_payment_alert(admin_id, payment, session.get("uname",""), caption, fpath) if admin_id else None
     if msg_id: db.set_payment_msg(pid, msg_id)
     if not msg_id:
-        notify_admins(f"💳 طلب دفع جديد #{pid} / New payment — {session.get('uname')} — {p['price']} EGP ({plan_id}). راجعه من لوحة الأدمن.")
+        notify_admins(f"💳 طلب دفع جديد #{pid} / New payment — {session.get('uname')} — {q['total']} EGP ({plan_id})"
+                      + (f" · كود {q['promo_code']}" if q["promo_code"] else "") + ". راجعه من لوحة الأدمن.")
     flash(("✅ تم استلام إثبات الدفع (#{}). سيتم تفعيل اشتراكك بعد المراجعة والموافقة."
            if lang!="en" else
            "✅ Payment proof received (#{}). Your subscription will activate after review and approval.").format(pid), "ok")
@@ -708,6 +728,8 @@ def admin_payment_decide(pid, decision):
     row = db.finalize_payment(pid, status)
     if row:
         u = db.get_user(row["user_id"])
+        if status == "approved":
+            settle_payment(row)
         notify_admins(f"{'✅ موافقة' if status=='approved' else '❌ رفض'} دفعة #{pid} — {u['username'] if u else ''} (من الويب)")
         flash(("تمت الموافقة والتفعيل." if status=="approved" else "تم الرفض.") if session.get("lang")!="en"
               else ("Approved & activated." if status=="approved" else "Rejected."), "ok")
@@ -820,6 +842,89 @@ def sync_telegram(bot_id):
               + "، ".join(res.get("errors", []))[:200], "error")
     return redirect(url_for("bot_detail", bot_id=bot_id))
 
+def settle_payment(row):
+    """إشعار المالك بعمولة الإحالة إن تحققت. التسوية نفسها تمّت داخل
+    db.finalize_payment ليشملها مسار تليجرام أيضاً."""
+    try:
+        r = db.referral_of(row["user_id"])
+        if r and r.get("payment_id") == row["id"] and r.get("commission"):
+            aff = db.get_user(r["affiliate_user_id"])
+            notify_admins(f"🤝 عمولة إحالة {r['commission']} EGP لـ "
+                          f"{aff['username'] if aff else r['affiliate_user_id']} (دفعة #{row['id']})")
+    except Exception:
+        pass
+
+
+# ============================================================================
+#  محرّك التسعير — المصدر الوحيد للمبالغ.
+#  قاعدة AGENTS.md §3.3 تبقى كما هي: المبلغ يُحسب هنا في الخادم، ولا يُقرأ
+#  من الفورم أبداً. كل ما تفعله الواجهة هو إرسال معرّف الباقة وكود الخصم.
+# ============================================================================
+
+def _plan_pricing(plan_id, overrides=None):
+    """يرجّع تسعير الباقة بعد تجاوزات المالك وخصمها المعلن."""
+    base = plans.plan(plan_id)
+    ov = (overrides if overrides is not None else db.plan_overrides()).get(plan_id) or {}
+    price = ov.get("price")
+    price = float(base["price"]) if price is None else float(price)
+    disc = float(ov.get("discount_pct") or 0)
+    final = round(price * (1 - disc / 100.0), 2)
+    return {"list_price": round(price, 2), "discount_pct": disc,
+            "price": max(0.0, final), "has_discount": disc > 0 and final < price}
+
+def priced_plans(lang=None):
+    """كل الباقات بأسعارها الفعلية — للعرض في الواجهة."""
+    lang = lang or session.get("lang", i18n.DEFAULT)
+    ov = db.plan_overrides()
+    out = []
+    for pid in plans.ORDER:
+        p = dict(plans.PLANS[pid], id=pid)
+        p.update(_plan_pricing(pid, ov))
+        out.append(p)
+    return out
+
+def validate_promo(code, plan_id, user_id):
+    """يتحقّق من كود الخصم مقابل الباقة والمستخدم.
+    يرجّع (promo_row | None, reason_key). لا يستهلك الكود — الاستهلاك عند الاعتماد."""
+    code = (code or "").strip().upper()
+    if not code:
+        return None, None
+    pr = db.get_promo_by_code(code)
+    if not pr or not pr["is_active"]:
+        return None, "promo_bad"
+    if pr["expires_at"] and pr["expires_at"] < int(_time.time()):
+        return None, "promo_expired"
+    if pr["max_uses"] is not None and pr["used"] >= pr["max_uses"]:
+        return None, "promo_exhausted"
+    if pr["plan"] and pr["plan"] != plan_id:
+        return None, "promo_wrong_plan"
+    if pr["per_user_once"] and db.promo_used_by(pr["id"], user_id):
+        return None, "promo_used"
+    return pr, None
+
+def quote(plan_id, user_id, code=None):
+    """التسعيرة النهائية: سعر الباقة بعد خصمها المعلن، ثم كود الخصم إن صحّ.
+    هذه الدالة وحدها تحدّد ما يُخزَّن في payments.amount."""
+    pricing = _plan_pricing(plan_id)
+    base = pricing["price"]
+    promo, reason = validate_promo(code, plan_id, user_id)
+    cut = 0.0
+    if promo:
+        cut = (base * float(promo["value"]) / 100.0) if promo["kind"] == "percent" else float(promo["value"])
+        cut = round(min(cut, base), 2)
+    total = round(max(0.0, base - cut), 2)
+    return {
+        "plan": plan_id,
+        "list_price": pricing["list_price"],
+        "plan_discount_pct": pricing["discount_pct"],
+        "base": base,                 # بعد خصم الباقة، قبل الكود
+        "promo": promo,
+        "promo_code": promo["code"] if promo else None,
+        "promo_cut": cut,
+        "total": total,
+        "reason": reason,             # سبب رفض الكود إن وُجد
+    }
+
 _LANDING_ICONS = ("store","calendar","shield","grid","flow","sparkles","chart","megaphone",
                   "check","rocket","tag","phone","bot","card","users","wallet","bolt")
 
@@ -843,6 +948,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
         {"k": "pricing",     "u": url_for("pricing"),      "i": "tag",      "l": i18n.t("nav_pricing", lang)},
         {"k": "billing",     "u": url_for("billing"),      "i": "card",     "l": i18n.t("nav_billing", lang)},
         {"k": "request_bot", "u": url_for("request_bot"),  "i": "sparkles", "l": i18n.t("custom_bot", lang)},
+        {"k": "affiliate",   "u": url_for("affiliate"),    "i": "crown",    "l": i18n.t("aff_title", lang)},
     ]
     admin_nav = []
     if role in ("admin", "support"):
@@ -853,9 +959,13 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
             {"k": "admin_requests", "u": url_for("admin_requests"), "i": "inbox",  "l": i18n.t("nav_requests", lang)},
         ]
         if role == "admin":
+            # مزايا المالك وحده — لا يراها الدعم إطلاقاً
             admin_nav += [
-                {"k": "settings",       "u": url_for("settings"),       "i": "sparkles", "l": i18n.t("nav_ai", lang)},
-                {"k": "admin_platform", "u": url_for("admin_platform"), "i": "settings", "l": i18n.t("nav_platform", lang)},
+                {"k": "admin_pricing",    "u": url_for("admin_pricing"),    "i": "tag",      "l": i18n.t("adm_pricing", lang)},
+                {"k": "admin_promos",     "u": url_for("admin_promos"),     "i": "bolt",     "l": i18n.t("adm_promos", lang)},
+                {"k": "admin_affiliates", "u": url_for("admin_affiliates"), "i": "users",    "l": i18n.t("adm_affiliates", lang)},
+                {"k": "settings",         "u": url_for("settings"),         "i": "sparkles", "l": i18n.t("nav_ai", lang)},
+                {"k": "admin_platform",   "u": url_for("admin_platform"),   "i": "settings", "l": i18n.t("nav_platform", lang)},
             ]
 
     payload = {
@@ -890,6 +1000,149 @@ def _icon_svg(name):
     return ('<svg viewBox="0 0 24 24" width="100%" height="100%" fill="none" '
             'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
             f'stroke-linejoin="round" aria-hidden="true">{body}</svg>')
+
+# ============================================================================
+#  لوحة المالك: التسعير · أكواد الخصم · الأفيليت
+#  كلها @require_roles("admin") — الدعم (support) لا يصل إليها إطلاقاً.
+# ============================================================================
+
+@app.route("/admin/pricing", methods=["GET", "POST"])
+@require_roles("admin")
+def admin_pricing():
+    if request.method == "POST":
+        for pid in plans.ORDER:
+            if pid == "free":
+                continue
+            db.set_plan_override(pid,
+                                 price=request.form.get(f"price_{pid}"),
+                                 discount_pct=request.form.get(f"disc_{pid}"))
+        flash("تم تحديث الأسعار." if session.get("lang") != "en" else "Pricing updated.", "ok")
+        return redirect(url_for("admin_pricing"))
+    lang = session.get("lang", i18n.DEFAULT)
+    return react_page("admin_pricing", "adm_pricing", {
+        "plans": [dict(p, name=plans.plan_name(p["id"], lang)) for p in priced_plans(lang)],
+    })
+
+
+@app.route("/admin/promos", methods=["GET", "POST"])
+@require_roles("admin")
+def admin_promos():
+    if request.method == "POST":
+        exp = request.form.get("expires_at", "").strip()
+        try:
+            exp_ts = int(_dt.datetime.strptime(exp, "%Y-%m-%d").timestamp()) if exp else None
+        except ValueError:
+            exp_ts = None
+        _, err = db.create_promo(
+            request.form.get("code", ""),
+            request.form.get("kind", "percent"),
+            request.form.get("value", 0),
+            plan=(request.form.get("plan") or None),
+            max_uses=request.form.get("max_uses") or None,
+            expires_at=exp_ts,
+            per_user_once=1 if request.form.get("per_user_once") else 0)
+        if err == "duplicate":
+            flash("هذا الكود موجود بالفعل." if session.get("lang") != "en" else "That code already exists.", "error")
+        elif err:
+            flash("بيانات الكود غير صحيحة." if session.get("lang") != "en" else "Invalid promo data.", "error")
+        else:
+            flash("تم إنشاء الكود." if session.get("lang") != "en" else "Promo created.", "ok")
+        return redirect(url_for("admin_promos"))
+
+    lang = session.get("lang", i18n.DEFAULT)
+    rows = db.list_promos()
+    for r in rows:
+        r.update(db.promo_stats(r["id"]))
+    return react_page("admin_promos", "adm_promos", {
+        "promos": rows,
+        "plans": [{"id": p, "name": plans.plan_name(p, lang)} for p in plans.ORDER if p != "free"],
+    })
+
+
+@app.route("/admin/promos/<int:promo_id>/<any(on,off,delete):action>", methods=["POST"])
+@require_roles("admin")
+def admin_promo_action(promo_id, action):
+    if action == "delete":
+        db.delete_promo(promo_id)
+    else:
+        db.set_promo_active(promo_id, action == "on")
+    flash("تم التحديث." if session.get("lang") != "en" else "Updated.", "ok")
+    return redirect(url_for("admin_promos"))
+
+
+@app.route("/admin/affiliates", methods=["GET", "POST"])
+@require_roles("admin")
+def admin_affiliates():
+    if request.method == "POST":
+        db.set_platform("aff_default_rate", request.form.get("default_rate", "20").strip())
+        flash("تم الحفظ." if session.get("lang") != "en" else "Saved.", "ok")
+        return redirect(url_for("admin_affiliates"))
+    return react_page("admin_affiliates", "adm_affiliates", {
+        "affiliates": db.list_affiliates(),
+        "defaultRate": db.get_platform("aff_default_rate", "20"),
+    })
+
+
+@app.route("/admin/affiliates/<int:user_id>/<any(rate,toggle,payout):action>", methods=["POST"])
+@require_roles("admin")
+def admin_affiliate_action(user_id, action):
+    if action == "rate":
+        db.set_affiliate(user_id, rate_pct=request.form.get("rate_pct"))
+    elif action == "toggle":
+        cur = db.get_affiliate(user_id)
+        db.set_affiliate(user_id, is_active=not (cur and cur["is_active"]))
+    elif action == "payout":
+        if not db.affiliate_payout(user_id, request.form.get("amount")):
+            flash("مبلغ الصرف غير صحيح أو يتجاوز المستحقّ."
+                  if session.get("lang") != "en" else
+                  "Payout amount is invalid or exceeds what is due.", "error")
+            return redirect(url_for("admin_affiliates"))
+    flash("تم التحديث." if session.get("lang") != "en" else "Updated.", "ok")
+    return redirect(url_for("admin_affiliates"))
+
+
+# ---------------------------------------------------------------- العميل
+@app.route("/api/promo/check", methods=["POST"])
+@login_required
+def api_promo_check():
+    """تسعيرة حيّة لصفحة الدفع. لا تستهلك الكود ولا تعتمد عليها في التسجيل —
+    المبلغ المخزَّن يُحسب من جديد داخل subscribe_pay."""
+    d = request.get_json(silent=True) or {}
+    plan_id = d.get("plan")
+    if plan_id not in plans.PLANS or plan_id == "free":
+        return jsonify({"ok": False})
+    q = quote(plan_id, uid(), d.get("code", ""))
+    lang = session.get("lang", i18n.DEFAULT)
+    return jsonify({
+        "ok": True,
+        "listPrice": q["list_price"], "base": q["base"], "total": q["total"],
+        "planDiscountPct": q["plan_discount_pct"],
+        "promoCode": q["promo_code"], "promoCut": q["promo_cut"],
+        "valid": bool(q["promo"]),
+        "error": i18n.t(q["reason"], lang) if q["reason"] else None,
+    })
+
+
+@app.route("/affiliate", methods=["GET", "POST"])
+@login_required
+def affiliate():
+    """لوحة الأفيليت للمستخدم: كوده، رابطه، إحالاته وأرباحه."""
+    me = db.get_user(uid())
+    aff = db.get_affiliate(uid())
+    if request.method == "POST":
+        if not aff:
+            rate = db.get_platform("aff_default_rate", "20")
+            base = "".join(ch for ch in (me["username"] or "").upper() if ch.isalnum())[:10]
+            code = (base or "BY") + _secrets.token_hex(2).upper()
+            aff = db.ensure_affiliate(uid(), code, rate)
+        return redirect(url_for("affiliate"))
+    return react_page("affiliate", "aff_title", {
+        "aff": aff,
+        "summary": db.affiliate_summary(uid()) if aff else {"signups": 0, "conversions": 0},
+        "link": (url_for("landing", _external=True) + "?ref=" + aff["code"]) if aff else None,
+        "defaultRate": db.get_platform("aff_default_rate", "20"),
+    })
+
 
 @app.route("/landing")
 def landing():
