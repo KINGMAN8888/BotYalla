@@ -8,9 +8,12 @@ DB_PATH = "botyalla.db"
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    # gunicorn يشغّل 4 خيوط: بدون مهلة انتظار يرمي "database is locked" فوراً
+    # عند أي تزاحم على الكتابة بدل أن ينتظر لحظة.
+    conn.execute("PRAGMA busy_timeout=15000")
     try:
         yield conn
         conn.commit()
@@ -38,6 +41,9 @@ def _migrate(c):
 
 def init_db():
     with get_conn() as c:
+        # WAL: يسمح بقراءات متزامنة مع الكتابة. إعداد دائم يُضبط مرة واحدة.
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=NORMAL")
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users(
             id INTEGER PRIMARY KEY AUTOINCREMENT,

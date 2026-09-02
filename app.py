@@ -47,6 +47,13 @@ from icons import icon
 import icons
 
 app = Flask(__name__, template_folder="templates_web", static_folder="static")
+
+# خلف nginx كل الطلبات تصل من 127.0.0.1 وبمخطّط http. بدون هذا يعدّ محدِّد
+# محاولات الدخول كل المستخدمين كعنوان واحد فيقفل الدخول على الجميع، وتُبنى
+# الروابط الخارجية بـ http رغم TLS. نثق بقفزة بروكسي واحدة فقط (nginx).
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
 app.secret_key = os.getenv("FLASK_SECRET", "botyalla-dev-secret-change-me")
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
@@ -1142,6 +1149,16 @@ def affiliate():
         "link": (url_for("landing", _external=True) + "?ref=" + aff["code"]) if aff else None,
         "defaultRate": db.get_platform("aff_default_rate", "20"),
     })
+
+
+@app.route("/healthz")
+def healthz():
+    """فحص صحّي للمراقبة: يتحقق أن القاعدة تستجيب فعلاً لا أن العملية حيّة فقط."""
+    try:
+        db.count_users()
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:120]}), 503
 
 
 @app.route("/landing")

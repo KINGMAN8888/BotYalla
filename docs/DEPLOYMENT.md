@@ -1,3 +1,5 @@
+> **دليل التشغيل الكامل: [PRODUCTION.md](PRODUCTION.md)**
+
 # 🚀 دليل النشر — BotYalla
 
 دليل خطوة بخطوة لرفع المنصة على GitHub وسيرفر حقيقي (VPS) بدومين وHTTPS.
@@ -26,7 +28,7 @@ bash deploy/push_to_github.sh https://github.com/USERNAME/botyalla.git
 اتصل بالسيرفر عبر SSH ثم:
 ```bash
 # نزّل السكربت وشغّله — يعمل كل شيء تلقائياً
-wget https://raw.githubusercontent.com/USERNAME/botyalla/main/deploy/deploy.sh
+wget https://raw.githubusercontent.com/KINGMAN8888/BotYalla/main/deploy/hostinger_deploy.sh
 sudo bash deploy.sh https://github.com/USERNAME/botyalla.git botyalla.com
 ```
 
@@ -57,7 +59,7 @@ sudo certbot --nginx -d botyalla.com -d www.botyalla.com
 
 ## التحديثات المستقبلية
 ```bash
-sudo bash /opt/botyalla/deploy/deploy.sh https://github.com/USERNAME/botyalla.git botyalla.com
+sudo bash /opt/botyalla/deploy/hostinger_deploy.sh botyalla.com
 ```
 (يسحب أحدث كود ويعيد التشغيل — بياناتك وقاعدة البيانات تبقى سليمة.)
 
