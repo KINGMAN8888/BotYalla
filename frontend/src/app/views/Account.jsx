@@ -7,6 +7,20 @@ import {
 /* ------------------------------------------------------------- حسابي */
 export function Account() {
   const me = P.me || {};
+  const [link, setLink] = useState(null);
+  const [err, setErr] = useState(null);
+
+  async function linkTelegram() {
+    setErr(null);
+    try {
+      const r = await fetch("/account/link-telegram", {
+        method: "POST", headers: { "X-CSRF-Token": BY.csrf },
+      });
+      const d = await r.json();
+      if (d.ok) setLink(d.link); else setErr(d.error);
+    } catch { setErr(null); }
+  }
+
   return (
     <>
       <PageHead icon="settings" title={t("account_title")} />
@@ -26,6 +40,36 @@ export function Account() {
           </Field>
           <div className="mt-6"><Btn icon="check" type="submit">{t("update_account")}</Btn></div>
         </Form>
+      </Card>
+
+      {/* قناة تنبيهات الاشتراك — بدونها لا يعلم العميل بانتهاء اشتراكه */}
+      <Card className="max-w-[560px]">
+        <SectionTitle icon="bot"
+          extra={P.tgLinked ? <Pill tone="on" dot>{t("tg_link_ok")}</Pill>
+               : P.tgFallback ? <Pill tone="warn">{t("aff_active")}</Pill>
+               : <Pill tone="off">{t("tg_not_synced")}</Pill>}>
+          {t("tg_link_title")}
+        </SectionTitle>
+        <p className="mt-0 mb-4 text-[13px] leading-relaxed text-ink-3">
+          {P.tgLinked ? t("tg_link_desc")
+            : P.tgFallback ? t("tg_link_via_bot")
+            : t("tg_link_none")}
+        </p>
+        {!P.tgLinked && (
+          link ? (
+            <Btn variant="green" icon="play" href={link} target="_blank" rel="noopener">
+              {t("tg_link_open")}
+            </Btn>
+          ) : (
+            <Btn icon="link" type="button" onClick={linkTelegram} disabled={!P.hasPlatformBot}>
+              {t("tg_link_btn")}
+            </Btn>
+          )
+        )}
+        {!P.hasPlatformBot && (
+          <p className="mt-3 mb-0 text-[12.5px] text-ink-3">{t("tg_link_no_bot")}</p>
+        )}
+        {err && <p className="mt-3 mb-0 text-[13px] font-bold text-red-300">{err}</p>}
       </Card>
     </>
   );

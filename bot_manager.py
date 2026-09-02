@@ -1,11 +1,13 @@
 """مدير BotYalla — يشغّل عدة بوتات في حلقة asyncio بخيط منفصل + بث جماعي."""
-import asyncio, json, threading, logging
+import asyncio, json, threading, logging, time as _time, datetime as _dt
 from telegram import Bot
 from telegram.ext import Application
 import database as db
 import templates_bot as T
 import tg_helpers as tg
 import platform_bot as PB
+import plans
+import i18n
 
 log = logging.getLogger("bot_manager")
 
@@ -18,6 +20,9 @@ class BotManager:
         if self._thread and self._thread.is_alive(): return
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start(); self._ready.wait(timeout=10)
+        # خيط التذكيرات: daemon يعمل كل 6 ساعات
+        t = threading.Thread(target=self._reminder_loop, daemon=True)
+        t.start()
 
     def _run(self):
         self._loop = asyncio.new_event_loop()
@@ -142,4 +147,80 @@ class BotManager:
         for b in db.all_active_bots():
             ok, msg = self.start_bot(b["id"]); log.info("resume %s: %s", b["id"], msg)
 
+    # ---- تذكيرات انتهاء الاشتراك ----
+    def _reminder_loop(self):
+        """حلقة خلفية تعمل كل 6 ساعات لإرسال تذكيرات الاشتراك."""
+        INTERVAL = 6 * 3600  # 6 ساعات
+        _time.sleep(30)  # انتظر 30 ثانية عند الإطلاق ليكتمل التشغيل
+        while True:
+            try:
+                self._send_reminder_cycle()
+            except Exception:
+                log.exception("reminder cycle error")
+            _time.sleep(INTERVAL)
+
+    def _send_reminder_cycle(self):
+        """يفحص الاشتراكات ويرسل التذكيرات المناسبة.
+
+        التسجيل في reminder_log يتم **فقط عند وصول رسالة فعلاً**. لو كان بوت
+        المنصة متوقفاً فلا شيء يُسجَّل وتُعاد المحاولة في الدورة التالية —
+        وإلا لأحرقت أول دورة كل التذكيرات نهائياً بسبب قيد UNIQUE.
+        """
+        admin_ids = db.admin_chat_ids()
+        if not self.platform_running():
+            log.info("reminders skipped: platform bot not running")
+            return
+
+        now = int(_time.time())
+
+        def deliver(sub, kind, user_key, admin_key, **fmt):
+            """يرسل للعميل وللأدمن. يرجّع True لو وصلت رسالة واحدة على الأقل."""
+            lang = db.user_lang(sub["user_id"])
+            plan_name = plans.plan_name(sub["plan"], lang)
+            delivered = False
+
+            tg_id = sub.get("tg_chat_id")
+            if tg_id:
+                msg = i18n.t(user_key, lang).format(plan=plan_name, **fmt)
+                if self.notify_text(tg_id, msg):
+                    delivered = True
+                else:
+                    log.warning("reminder %s: delivery to user #%s failed",
+                                kind, sub["user_id"])
+            else:
+                log.info("reminder %s: user #%s has no telegram channel",
+                         kind, sub["user_id"])
+
+            admin_msg = i18n.t(admin_key, "ar").format(
+                user=sub["username"], plan=plans.plan_name(sub["plan"], "ar"), **fmt)
+            admin_ok = False
+            for aid in admin_ids:
+                if self.notify_text(aid, admin_msg):
+                    admin_ok = True
+
+            # سجّل فقط إن وصل شيء فعلاً — وإلا أعد المحاولة لاحقاً
+            return delivered or admin_ok
+
+        # 1) اشتراكات تنتهي خلال 3 أيام
+        for sub in db.expiring_subscriptions(within_days=3):
+            days = max(0, int((sub["expires_at"] - now) / 86400))
+            kind = "pre1" if days <= 1 else "pre3"
+            if db.reminder_sent(sub["user_id"], kind):
+                continue
+            exp_date = _dt.datetime.fromtimestamp(sub["expires_at"]).strftime("%Y-%m-%d")
+            if deliver(sub, kind,
+                       "sub_reminder_1d" if kind == "pre1" else "sub_reminder_3d",
+                       "sub_admin_expiry", date=exp_date):
+                db.log_reminder(sub["user_id"], kind)
+                log.info("reminder %s sent for user #%s", kind, sub["user_id"])
+
+        # 2) اشتراكات انتهت حديثاً
+        for sub in db.recently_expired_subscriptions():
+            if db.reminder_sent(sub["user_id"], "expired"):
+                continue
+            if deliver(sub, "expired", "sub_expired", "sub_admin_expired"):
+                db.log_reminder(sub["user_id"], "expired")
+                log.info("expired reminder sent for user #%s", sub["user_id"])
+
 manager = BotManager()
+

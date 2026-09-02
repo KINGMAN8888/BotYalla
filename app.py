@@ -186,6 +186,9 @@ def inject():
 def set_lang(code):
     if code in i18n.LANGS:
         session["lang"] = code
+        # ثبّت التفضيل للمستخدم ليصله التذكير بلغته لا بالعربية دائماً
+        if session.get("uid"):
+            db.set_setting(session["uid"], "lang", code)
     ref = request.referrer or ""
     # حماية من Open Redirect: ارجع فقط لمسار داخلي
     if ref.startswith(request.host_url):
@@ -805,7 +808,30 @@ def account():
         if new_user: session["uname"] = new_user
         flash("تم تحديث بيانات حسابك ✅" if session.get("lang")!="en" else "Account updated ✅", "ok")
         return redirect(url_for("account"))
-    return react_page("account", "account_title", {"me": dict(me, pw_hash=None)})
+    return react_page("account", "account_title", {
+        "me": dict(me, pw_hash=None),
+        "tgLinked": bool(db.get_setting(uid(), "tg_chat_id")),
+        "tgFallback": bool(db.user_tg_channel(uid())),
+        "hasPlatformBot": bool(db.get_platform("platform_bot_token", "")),
+    })
+
+@app.route("/account/link-telegram", methods=["POST"])
+@login_required
+def account_link_telegram():
+    """يولّد رابط ربط لمرة واحدة عبر بوت المنصة، ليصل العميل تذكير الاشتراك."""
+    token = db.get_platform("platform_bot_token", "")
+    if not token:
+        return jsonify({"ok": False, "error": i18n.t("tg_link_no_bot",
+                        session.get("lang", i18n.DEFAULT))})
+    info = tg.validate_token(token)
+    if not info.get("ok") or not info.get("username"):
+        return jsonify({"ok": False, "error": i18n.t("tg_link_no_bot",
+                        session.get("lang", i18n.DEFAULT))})
+    code = _secrets.token_hex(4)
+    db.set_tg_link_code(uid(), code)
+    return jsonify({"ok": True,
+                    "link": f"https://t.me/{info['username']}?start=link-{code}"})
+
 
 @app.route("/admin/users/add", methods=["POST"])
 @require_roles("admin")
@@ -991,6 +1017,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
             "requestBot": url_for("request_bot"), "botCreate": url_for("bot_create"),
             "logo": url_for("static", filename="logo.svg"),
             "lang": url_for("set_lang", code="en" if lang == "ar" else "ar"),
+            "terms": url_for("terms"), "privacy": url_for("privacy"),
         },
         "templates": [{"k": k, "icon": _TMPL_ICON[k], "label": i18n.t(_TMPL_KEY[k], lang)}
                       for k in ("flow","store","booking","customer_service","faq","feedback","support")],
@@ -1161,6 +1188,22 @@ def healthz():
         return jsonify({"ok": False, "error": str(e)[:120]}), 503
 
 
+# تاريخ آخر تعديل فعلي على النصوص القانونية — حدّثه عند تغيير الشروط.
+LEGAL_UPDATED = "2026-09-02"
+
+@app.route("/terms")
+def terms():
+    return react_page("terms", "terms_title",
+                      {"email": db.get_platform("support_email", "info@youssefalsherief.tech"),
+                       "updated": LEGAL_UPDATED})
+
+@app.route("/privacy")
+def privacy():
+    return react_page("privacy", "privacy_title",
+                      {"email": db.get_platform("support_email", "info@youssefalsherief.tech"),
+                       "updated": LEGAL_UPDATED})
+
+
 @app.route("/landing")
 def landing():
     lang = session.get("lang", i18n.DEFAULT)
@@ -1169,7 +1212,7 @@ def landing():
             "lp_trust_1","lp_trust_2","lp_trust_3","lp_live","get_started_free",
             "signin_link","daily_activity","lp_feats_t","lp_feats_sub","lp_how_t",
             "lp_how_sub","lp_faq_t","lp_final_t","lp_final_sub","nav_pricing","login",
-            "brand_tag")
+            "brand_tag","footer_terms","footer_privacy")
     payload = i18n.landing_payload(lang)
     plat = db.all_platform()
     payload.update({
@@ -1181,7 +1224,8 @@ def landing():
         "urls": {"register": url_for("register"), "login": url_for("login"),
                  "pricing": url_for("pricing"), "home": url_for("landing"),
                  "logo": url_for("static", filename="logo.svg"),
-                 "lang": url_for("set_lang", code="en" if lang == "ar" else "ar")},
+                 "lang": url_for("set_lang", code="en" if lang == "ar" else "ar"),
+                 "terms": url_for("terms"), "privacy": url_for("privacy")},
         "contact": [
             {"l": plat.get("support_email", ""), "h": "mailto:" + plat.get("support_email", "")},
             {"l": "WhatsApp", "h": "https://wa.me/" + plat.get("support_whatsapp", "")},

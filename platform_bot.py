@@ -5,6 +5,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 import database as db
 import plans
+import i18n
 
 log = logging.getLogger("platform_bot")
 
@@ -57,6 +58,16 @@ def register_admin_commands(app: Application):
         return update.effective_user and _is_admin(update.effective_user.id)
 
     async def cmd_start(update, ctx):
+        # ربط حساب العميل: /start link-CODE  → نحفظ chat_id لإرسال التذكيرات
+        args = getattr(ctx, "args", None) or []
+        if args and args[0].startswith("link-"):
+            uid_ = db.claim_tg_link(args[0][5:], update.effective_user.id)
+            if uid_:
+                lang = db.user_lang(uid_)
+                await update.message.reply_text(i18n.t("tg_link_done", lang))
+            else:
+                await update.message.reply_text(i18n.t("tg_link_bad", "ar"))
+            return
         if not await guard(update):
             await update.message.reply_text("👋 هذا بوت إدارة المنصة (للمالك فقط).")
             return

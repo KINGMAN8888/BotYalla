@@ -208,6 +208,16 @@ def init_db():
             FOREIGN KEY(affiliate_user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY(referred_user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+
+        -- سجل التذكيرات: يمنع تكرار إرسال نفس التذكير لنفس المستخدم في نفس الدورة.
+        CREATE TABLE IF NOT EXISTS reminder_log(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,          -- 'pre3' | 'pre1' | 'expired'
+            sent_at INTEGER NOT NULL,
+            UNIQUE(user_id, kind),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
         """)
         _migrate(c)
 
@@ -444,6 +454,8 @@ def activate_subscription(user_id, plan, days=30):
                   "ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan, status='active', "
                   "started_at=excluded.started_at, expires_at=excluded.expires_at",
                   (user_id, plan, started, exp))
+    # تجديد الاشتراك يمسح سجل التذكيرات ليسمح بتذكيرات الدورة التالية
+    clear_reminder_log(user_id)
     return exp
 
 # ---------- payments ----------
@@ -862,3 +874,113 @@ def referral_of(referred_user_id):
         r = c.execute("SELECT * FROM referrals WHERE referred_user_id=?",
                       (referred_user_id,)).fetchone()
         return dict(r) if r else None
+
+
+# ---------- تذكيرات الاشتراك ----------
+def reminder_sent(user_id, kind):
+    """هل أُرسل هذا النوع من التذكير لهذا المستخدم في الدورة الحالية؟"""
+    with get_conn() as c:
+        return c.execute("SELECT COUNT(*) FROM reminder_log WHERE user_id=? AND kind=?",
+                         (user_id, kind)).fetchone()[0] > 0
+
+def log_reminder(user_id, kind):
+    """يسجّل إرسال تذكير. UNIQUE يمنع التكرار."""
+    with get_conn() as c:
+        try:
+            c.execute("INSERT INTO reminder_log(user_id,kind,sent_at) VALUES(?,?,?)",
+                      (user_id, kind, int(time.time())))
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+def clear_reminder_log(user_id):
+    """يمسح سجل التذكيرات عند تجديد الاشتراك."""
+    with get_conn() as c:
+        c.execute("DELETE FROM reminder_log WHERE user_id=?", (user_id,))
+
+def expiring_subscriptions(within_days=3):
+    """يجلب الاشتراكات المدفوعة التي تنتهي خلال N يوم (ولم تنتهِ بعد).
+    يرجّع [{user_id, username, plan, expires_at, tg_chat_id}, ...].
+    tg_chat_id: الربط الصريح من settings، وإلا owner_chat_id لأول بوت للمستخدم
+    (يكون قد ربطه كأدمن للبوت، وهو نفس حسابه على تليجرام)."""
+    now = int(time.time())
+    cutoff = now + within_days * 86400
+    with get_conn() as c:
+        rows = c.execute("""
+            SELECT s.user_id, u.username, s.plan, s.expires_at,
+COALESCE(
+                     (SELECT st.value FROM settings st
+                       WHERE st.user_id=s.user_id AND st.key='tg_chat_id'),
+                     (SELECT json_extract(b.config_json,'$.owner_chat_id') FROM bots b
+                       WHERE b.owner_id=s.user_id
+                         AND json_extract(b.config_json,'$.owner_chat_id') IS NOT NULL
+                         AND json_extract(b.config_json,'$.owner_chat_id') <> ''
+                       ORDER BY b.id LIMIT 1)
+                   ) AS tg_chat_id
+            FROM subscriptions s JOIN users u ON u.id=s.user_id
+            WHERE s.plan<>'free' AND s.expires_at IS NOT NULL
+              AND s.expires_at > ? AND s.expires_at <= ?
+        """, (now, cutoff)).fetchall()
+        return [dict(r) for r in rows]
+
+def recently_expired_subscriptions():
+    """يجلب الاشتراكات المنتهية خلال آخر 48 ساعة (للتذكير الأخير)."""
+    now = int(time.time())
+    since = now - 48 * 3600
+    with get_conn() as c:
+        rows = c.execute("""
+            SELECT s.user_id, u.username, s.plan, s.expires_at,
+COALESCE(
+                     (SELECT st.value FROM settings st
+                       WHERE st.user_id=s.user_id AND st.key='tg_chat_id'),
+                     (SELECT json_extract(b.config_json,'$.owner_chat_id') FROM bots b
+                       WHERE b.owner_id=s.user_id
+                         AND json_extract(b.config_json,'$.owner_chat_id') IS NOT NULL
+                         AND json_extract(b.config_json,'$.owner_chat_id') <> ''
+                       ORDER BY b.id LIMIT 1)
+                   ) AS tg_chat_id
+            FROM subscriptions s JOIN users u ON u.id=s.user_id
+            WHERE s.plan<>'free' AND s.expires_at IS NOT NULL
+              AND s.expires_at <= ? AND s.expires_at >= ?
+        """, (now, since)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def user_lang(user_id, default="ar"):
+    """لغة المستخدم المحفوظة عند آخر تبديل. التذكيرات تُرسَل بها."""
+    return get_setting(user_id, "lang", default) or default
+
+def user_tg_channel(user_id):
+    """قناة تليجرام التي نصل بها للمستخدم: ربط صريح، وإلا أول بوت ربطه كأدمن."""
+    v = get_setting(user_id, "tg_chat_id")
+    if v:
+        return v
+    with get_conn() as c:
+        r = c.execute(
+            "SELECT json_extract(config_json,'$.owner_chat_id') v FROM bots "
+            "WHERE owner_id=? AND json_extract(config_json,'$.owner_chat_id') IS NOT NULL "
+            "AND json_extract(config_json,'$.owner_chat_id') <> '' ORDER BY id LIMIT 1",
+            (user_id,)).fetchone()
+        return r["v"] if r else None
+
+# ---- ربط حساب تليجرام الشخصي بحساب المنصة (عبر بوت المنصة) ----
+def set_tg_link_code(user_id, code):
+    set_setting(user_id, "tg_link_code", code)
+
+def claim_tg_link(code, chat_id):
+    """يربط chat_id بالمستخدم صاحب هذا الكود. يرجّع user_id أو None.
+    الكود يُستهلك فوراً فلا يُعاد استخدامه."""
+    code = (code or "").strip()
+    if not code:
+        return None
+    with get_conn() as c:
+        r = c.execute("SELECT user_id FROM settings WHERE key='tg_link_code' AND value=?",
+                      (code,)).fetchone()
+        if not r:
+            return None
+        uid_ = r["user_id"]
+        c.execute("INSERT INTO settings(user_id,key,value) VALUES(?,'tg_chat_id',?) "
+                  "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
+                  (uid_, str(chat_id)))
+        c.execute("DELETE FROM settings WHERE user_id=? AND key='tg_link_code'", (uid_,))
+        return uid_

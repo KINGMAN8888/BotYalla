@@ -36,6 +36,19 @@ find "$DEST" -type f -mtime "+$KEEP_DAYS" -delete 2>/dev/null || true
 
 echo "[$(date -Is)] backup ok → $DEST (db + uploads + env), keeping ${KEEP_DAYS}d"
 
+# -- نسخ خارجي (اختياري) --
+# للنسخ لـ Google Drive مثلاً:
+# 1. ثبّت rclone: curl https://rclone.org/install.sh | bash
+# 2. قم بإعداده: rclone config (وسمّي الوجهة gdrive)
+# 3. عيّن المتغير RCLONE_REMOTE="gdrive:botyalla_backups" في بيئة التشغيل أو هنا:
+# RCLONE_REMOTE="gdrive:botyalla_backups"
+
+if [[ -n "${RCLONE_REMOTE:-}" ]] && command -v rclone &> /dev/null; then
+  echo "[$(date -Is)] syncing to external remote: $RCLONE_REMOTE"
+  rclone sync "$DEST" "$RCLONE_REMOTE"
+  echo "[$(date -Is)] external sync ok"
+fi
+
 # ---------------------------------------------------------------------------
 #  الاستعادة:
 #    systemctl stop botyalla

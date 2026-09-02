@@ -357,7 +357,17 @@ export function Footer() {
 
         <div className="mt-10 flex flex-wrap items-center justify-between gap-4 pt-6
                         text-[13px] text-ink-3 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
-          <span>© {BY.brand} — {BY.lang === "ar" ? "جميع الحقوق محفوظة" : "All rights reserved"}</span>
+          <div className="flex flex-wrap items-center gap-4">
+            <span>© {BY.brand} — {BY.lang === "ar" ? "جميع الحقوق محفوظة" : "All rights reserved"}</span>
+            <span className="hidden text-ink-5 md:inline">•</span>
+            <a href={BY.urls.terms} className="text-ink-3 no-underline transition-colors hover:text-au-cyan">
+              {t("footer_terms")}
+            </a>
+            <span className="hidden text-ink-5 md:inline">•</span>
+            <a href={BY.urls.privacy} className="text-ink-3 no-underline transition-colors hover:text-au-cyan">
+              {t("footer_privacy")}
+            </a>
+          </div>
           <a href="https://youssefalsherief.tech/" target="_blank" rel="noopener"
              className="text-ink-3 no-underline transition-colors hover:text-au-cyan">
             Youssef Alsherief

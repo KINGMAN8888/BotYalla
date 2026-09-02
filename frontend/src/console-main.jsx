@@ -10,6 +10,7 @@ import { Account, Settings, Billing, Pricing, Subscribe, RequestBot } from "./ap
 import { AdminOverview, AdminUsers, AdminPayments, AdminRequests, AdminPlatform } from "./app/views/Admin.jsx";
 import { FlowBuilder, Broadcast, Analytics, Auth } from "./app/views/Tools.jsx";
 import { AdminPricing, AdminPromos, AdminAffiliates, Affiliate } from "./app/views/Revenue.jsx";
+import { Terms, Privacy } from "./app/views/Legal.jsx";
 
 /* خريطة العرض ← المكوّن. Flask يحدّد العرض عبر data-view. */
 const VIEWS = {
@@ -33,6 +34,8 @@ const VIEWS = {
   admin_promos:     AdminPromos,
   admin_affiliates: AdminAffiliates,
   affiliate:        Affiliate,
+  terms:            Terms,
+  privacy:          Privacy,
 };
 
 /* صفحات المصادقة بلا قشرة لوحة */

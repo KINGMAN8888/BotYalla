@@ -11,6 +11,9 @@
   --color-ink: #f2f5fc;
   --color-ink-2: #aeb9d4;
   --color-ink-3: #7b87a8;
+  /* درجتان أخفت للنصوص الثانوية جداً والفواصل */
+  --color-ink-4: #5c6683;
+  --color-ink-5: #3d4559;
 
   --color-au-violet: #7c6cf6;
   --color-au-cyan: #22d3ee;
