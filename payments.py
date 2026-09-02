@@ -118,6 +118,9 @@ def check_lines(auto: dict, lang="ar"):
         rf = ocr.get("ref_found")
         if rf is True:
             lines.append({"ok": True, "text": ("رقم الاستلام/المُستلِم ظاهر" if AR else "Recipient/ref found")})
+        elif rf is False:
+            lines.append({"ok": False, "text": "⚠️ " + ("رقم الاستلام/المُستلِم غير ظاهر في الإيصال"
+                                                        if AR else "Recipient/ref NOT found in receipt")})
     return lines
 
 VERDICT_STYLE = {

@@ -315,6 +315,66 @@ T = {
                   "en": "Officially sets the bot's name, description and commands on Telegram (Bot API) from your settings — automatically."},
  "tg_synced":    {"ar": "مُزامَن مع تليجرام", "en": "Synced with Telegram"},
  "tg_not_synced":{"ar": "لم تتم المزامنة بعد", "en": "Not synced yet"},
+
+ # ---------------- صفحة الهبوط (Landing) ----------------
+ "lp_badge":       {"ar": "بدون برمجة · يعمل خلال دقائق", "en": "No code · Live in minutes"},
+ "lp_cta_demo":    {"ar": "شوف الباقات", "en": "See pricing"},
+ "lp_trust_1":     {"ar": "بدون بطاقة ائتمان", "en": "No credit card"},
+ "lp_trust_2":     {"ar": "عربي وإنجليزي", "en": "Arabic & English"},
+ "lp_trust_3":     {"ar": "دفع محلي (فودافون كاش / انستاباي)", "en": "Local payment methods"},
+
+ "lp_preview_bot": {"ar": "بوت مطعم الشيف", "en": "Chef's Restaurant Bot"},
+ "lp_chat_1":      {"ar": "أهلاً بيك في مطعم الشيف 👋 تحب تطلب إيه النهاردة؟",
+                    "en": "Welcome to Chef's Restaurant 👋 What would you like today?"},
+ "lp_chat_2":      {"ar": "عايز أحجز ترابيزة", "en": "I'd like to book a table"},
+ "lp_chat_3":      {"ar": "تمام ✅ اختار الميعاد المناسب ليك:",
+                    "en": "Great ✅ Pick a time that works for you:"},
+ "lp_kb_1":        {"ar": "🍽️ اطلب دلوقتي", "en": "🍽️ Order now"},
+ "lp_kb_2":        {"ar": "📅 احجز ترابيزة", "en": "📅 Book a table"},
+ "lp_kb_3":        {"ar": "📞 كلّمنا", "en": "📞 Contact us"},
+ "lp_live":        {"ar": "يعمل الآن", "en": "Live"},
+
+ "lp_feats_t":     {"ar": "كل اللي نشاطك محتاجه في مكان واحد",
+                    "en": "Everything your business needs, in one place"},
+ "lp_feats_sub":   {"ar": "أدوات جاهزة تشتغل من أول دقيقة — مش محتاج مبرمج ولا خبرة تقنية.",
+                    "en": "Ready-made tools that work from minute one — no developer, no technical background."},
+
+ "lp_how_t":       {"ar": "3 خطوات وبوتك شغّال", "en": "Three steps and you're live"},
+ "lp_how_sub":     {"ar": "من غير تنصيب ولا إعدادات معقّدة.", "en": "No installs, no complicated setup."},
+ "lp_step1":       {"ar": "اعمل بوت من BotFather", "en": "Create a bot in BotFather"},
+ "lp_step1_d":     {"ar": "افتح BotFather على تليجرام واكتب /newbot، هيديك توكن. انسخه — دي الخطوة الوحيدة اللي بره المنصة.",
+                    "en": "Open BotFather on Telegram, send /newbot, and copy the token it gives you. It's the only step outside the platform."},
+ "lp_step2":       {"ar": "الصق التوكن واختار النوع", "en": "Paste the token, pick a type"},
+ "lp_step2_d":     {"ar": "نتحقق من التوكن فوراً ونجهّزلك قالب جاهز حسب نشاطك: متجر، حجوزات، خدمة عملاء، أسئلة شائعة…",
+                    "en": "We verify the token instantly and load a ready template for your business: store, bookings, support, FAQ…"},
+ "lp_step3":       {"ar": "شغّله واستقبل عملاءك", "en": "Turn it on and start selling"},
+ "lp_step3_d":     {"ar": "اضغط تشغيل، وابدأ تستقبل الطلبات والحجوزات — مع تنبيه على تليجرام بكل طلب جديد.",
+                    "en": "Hit start and begin receiving orders and bookings — with a Telegram alert on every new one."},
+
+ "lp_tmpl_t":      {"ar": "قوالب جاهزة لكل نشاط", "en": "A ready template for every business"},
+ "lp_tmpl_sub":    {"ar": "اختار القالب وابدأ — كله قابل للتعديل بالكامل بعدين.",
+                    "en": "Pick one and start — everything stays fully editable."},
+
+ "lp_faq_t":       {"ar": "أسئلة بتتسأل كتير", "en": "Frequently asked questions"},
+ "lp_q1":          {"ar": "محتاج أعرف برمجة؟", "en": "Do I need to know how to code?"},
+ "lp_a1":          {"ar": "لا خالص. كل حاجة بتتعمل بالضغط والكتابة العادية — تختار قالب، تعدّل الرسائل، وتشغّل. لو حابب، وكيل الذكاء الاصطناعي يكتبلك محتوى البوت كله من وصف نشاطك في سطر واحد.",
+                    "en": "Not at all. Everything is done by clicking and typing — pick a template, edit the messages, turn it on. If you like, the AI agent writes the whole bot for you from a one-line description of your business."},
+ "lp_q2":          {"ar": "إزاي بجيب توكن البوت؟", "en": "How do I get a bot token?"},
+ "lp_a2":          {"ar": "من BotFather الرسمي على تليجرام: ابعتله /newbot، اختار اسم ويوزر، هيبعتلك التوكن. تليجرام مايسمحش بإنشاء البوتات تلقائياً، فالخطوة دي يدوية وبتاخد أقل من دقيقة — وفيه زرّ في المنصة يوديك له مباشرة.",
+                    "en": "From the official BotFather on Telegram: send /newbot, choose a name and username, and it replies with your token. Telegram doesn't allow creating bots automatically, so this step is manual — it takes under a minute, and there's a button in the platform that takes you straight there."},
+ "lp_q3":          {"ar": "أقدر أغيّر كلام البوت بعد التشغيل؟", "en": "Can I change the bot's messages later?"},
+ "lp_a3":          {"ar": "طبعاً، في أي وقت. تعدّل الرسائل أو الأسئلة أو المنتجات وتحفظ، والبوت بيتحدّث فوراً من غير ما توقفه.",
+                    "en": "Of course, any time. Edit the messages, questions or products and save — the bot updates immediately without stopping it."},
+ "lp_q4":          {"ar": "الدفع بيتم إزاي؟", "en": "How does payment work?"},
+ "lp_a4":          {"ar": "بالطرق المحلية: فودافون كاش، انستاباي، أو تحويل بنكي. بترفع صورة الإيصال وبنراجعها يدوياً وبنفعّل اشتراكك بعد التأكيد. الباقة المجانية شغّالة على طول من غير أي دفع.",
+                    "en": "Through local methods: Vodafone Cash, InstaPay, or bank transfer. You upload the receipt, we review it manually and activate your subscription after confirmation. The free plan works right away with no payment at all."},
+ "lp_q5":          {"ar": "بياناتي وبيانات عملائي في أمان؟", "en": "Is my data safe?"},
+ "lp_a5":          {"ar": "بيانات كل بوت معزولة عن غيرها، وصور الإيصالات متاحة للإدارة فقط ومش منشورة على الإنترنت. إحنا كمان مابنطلبش أبداً بيانات دخول حسابك على تليجرام — التوكن الرسمي بس.",
+                    "en": "Each bot's data is isolated from every other, and receipt images are visible to admins only — never published. We also never ask for your Telegram account credentials — only the official bot token."},
+
+ "lp_final_t":     {"ar": "خلّي عملاءك يلاقوك على تليجرام", "en": "Let your customers reach you on Telegram"},
+ "lp_final_sub":   {"ar": "ابدأ مجاناً دلوقتي — أول بوت مجاني للأبد، وتقدر تترقّى في أي وقت.",
+                    "en": "Start free today — your first bot is free forever, and you can upgrade any time."},
 }
 
 def t(key, lang=DEFAULT):
@@ -324,3 +384,173 @@ def t(key, lang=DEFAULT):
     return e.get(lang) or e.get("ar") or key
 
 def dir_for(lang):  return "rtl" if lang == "ar" else "ltr"
+
+
+# ============================================================================
+# بيانات صفحة الهبوط التفاعلية (React). منفصلة عن T لأنها بنية لا نصوص مفردة.
+# ============================================================================
+LANDING = {
+ "demos": [
+   {"icon": "store", "handle": "chef_restaurant_bot",
+    "name": {"ar": "متجر ومطعم", "en": "Store & restaurant"},
+    "msgs": [
+      {"me": False, "ar": "أهلاً بيك في مطعم الشيف 👋 تحب تطلب إيه النهاردة؟",
+       "en": "Welcome to Chef's Restaurant 👋 What would you like today?"},
+      {"me": True, "ar": "عايز بيتزا مارجريتا وسط", "en": "One medium Margherita, please"},
+      {"me": False, "ar": "تمام ✅ الإجمالي 145 جنيه. أبعتلي العنوان وهيوصلك خلال 30 دقيقة.",
+       "en": "Done ✅ Total is 145 EGP. Send your address and it arrives in 30 minutes."}],
+    "kbd": [{"ar": "🍽️ المنيو", "en": "🍽️ Menu"},
+            {"ar": "🛒 سلّتي", "en": "🛒 My cart"},
+            {"ar": "📞 كلّمنا", "en": "📞 Contact"}],
+    "metrics": [{"k": "stat_subs", "v": 1284, "d": "+18%"},
+                {"k": "stat_orders", "v": 342, "d": "+24%"},
+                {"k": "stat_revenue", "v": 19750, "d": "+31%"},
+                {"k": "stat_leads", "v": 96, "d": "+12%"}]},
+
+   {"icon": "calendar", "handle": "dr_sara_clinic_bot",
+    "name": {"ar": "حجوزات ومواعيد", "en": "Bookings"},
+    "msgs": [
+      {"me": False, "ar": "أهلاً بيك في عيادة د. سارة 🩺 تحب تحجز إمتى؟",
+       "en": "Welcome to Dr. Sara's clinic 🩺 When would you like to book?"},
+      {"me": True, "ar": "بكرة بالليل لو ينفع", "en": "Tomorrow evening if possible"},
+      {"me": False, "ar": "متاح بكرة 7:00 و 8:30 مساءً — اختار الميعاد وهأكّدلك فوراً.",
+       "en": "Tomorrow 7:00 PM and 8:30 PM are open — pick one and I'll confirm instantly."}],
+    "kbd": [{"ar": "📅 احجز", "en": "📅 Book"},
+            {"ar": "🕒 مواعيدي", "en": "🕒 My bookings"},
+            {"ar": "❌ إلغاء", "en": "❌ Cancel"}],
+    "metrics": [{"k": "stat_subs", "v": 640, "d": "+9%"},
+                {"k": "stat_bookings", "v": 187, "d": "+27%"},
+                {"k": "stat_revenue", "v": 11200, "d": "+15%"},
+                {"k": "stat_leads", "v": 54, "d": "+8%"}]},
+
+   {"icon": "shield", "handle": "noor_support_bot",
+    "name": {"ar": "دعم فني", "en": "Support"},
+    "msgs": [
+      {"me": False, "ar": "أهلاً 👋 اكتبلي مشكلتك وهفتحلك تذكرة فوراً.",
+       "en": "Hi 👋 Describe your issue and I'll open a ticket right away."},
+      {"me": True, "ar": "الكورس مش بيفتح معايا", "en": "The course won't open for me"},
+      {"me": False, "ar": "فتحت تذكرة #4192 ✅ فريق الدعم هيرد عليك خلال ساعة.",
+       "en": "Ticket #4192 opened ✅ Our team will reply within an hour."}],
+    "kbd": [{"ar": "🎫 تذكرة جديدة", "en": "🎫 New ticket"},
+            {"ar": "📂 تذاكري", "en": "📂 My tickets"},
+            {"ar": "💬 محادثة", "en": "💬 Chat"}],
+    "metrics": [{"k": "stat_subs", "v": 2140, "d": "+22%"},
+                {"k": "stat_leads", "v": 418, "d": "+35%"},
+                {"k": "stat_orders", "v": 73, "d": "+6%"},
+                {"k": "stat_revenue", "v": 8400, "d": "+11%"}]},
+
+   {"icon": "grid", "handle": "mira_faq_bot",
+    "name": {"ar": "أسئلة شائعة", "en": "FAQ"},
+    "msgs": [
+      {"me": False, "ar": "اختار سؤالك من القائمة وهجاوبك على طول 👇",
+       "en": "Pick your question from the menu and I'll answer instantly 👇"},
+      {"me": True, "ar": "الشحن بياخد قد إيه؟", "en": "How long does shipping take?"},
+      {"me": False, "ar": "الشحن داخل القاهرة من 24 لـ 48 ساعة، وباقي المحافظات 3 أيام 🚚",
+       "en": "Cairo: 24–48 hours. Other governorates: about 3 days 🚚"}],
+    "kbd": [{"ar": "🚚 الشحن", "en": "🚚 Shipping"},
+            {"ar": "↩️ الإرجاع", "en": "↩️ Returns"},
+            {"ar": "💳 الدفع", "en": "💳 Payment"}],
+    "metrics": [{"k": "stat_subs", "v": 970, "d": "+14%"},
+                {"k": "stat_leads", "v": 265, "d": "+19%"},
+                {"k": "stat_orders", "v": 128, "d": "+21%"},
+                {"k": "stat_revenue", "v": 6300, "d": "+9%"}]},
+ ],
+
+ "bento": [
+   {"icon": "flow",      "t": "feat_nocode",    "d": "feat_nocode_d"},
+   {"icon": "sparkles",  "t": "ai_setup_title", "d": "ai_setup_desc"},
+   {"icon": "chart",     "t": "feat_analytics", "d": "feat_analytics_d"},
+   {"icon": "megaphone", "t": "feat_campaign",  "d": "feat_campaign_d"},
+   {"icon": "calendar",  "t": "feat_booking",   "d": "feat_booking_d"},
+ ],
+
+ "steps": [
+   {"t": "lp_step1", "d": "lp_step1_d"},
+   {"t": "lp_step2", "d": "lp_step2_d"},
+   {"t": "lp_step3", "d": "lp_step3_d"},
+ ],
+
+ "faq": [{"q": "lp_q1", "a": "lp_a1"}, {"q": "lp_q2", "a": "lp_a2"},
+         {"q": "lp_q3", "a": "lp_a3"}, {"q": "lp_q4", "a": "lp_a4"},
+         {"q": "lp_q5", "a": "lp_a5"}],
+}
+
+
+def landing_payload(lang=DEFAULT):
+    """يبني بيانات صفحة الهبوط الجاهزة للحقن في React (كلها مترجمة)."""
+    pick = lambda v: v.get(lang) or v.get("ar") if isinstance(v, dict) else v
+    return {
+        "demos": [{
+            "icon": d["icon"], "handle": d["handle"], "name": pick(d["name"]),
+            "msgs": [{"me": m["me"], "text": pick(m)} for m in d["msgs"]],
+            "kbd": [pick(b) for b in d["kbd"]],
+            "metrics": [{"k": t(m["k"], lang), "v": m["v"], "d": m["d"]} for m in d["metrics"]],
+        } for d in LANDING["demos"]],
+        "bento": [{"icon": c["icon"], "t": t(c["t"], lang), "d": t(c["d"], lang)}
+                  for c in LANDING["bento"]],
+        "steps": [{"t": t(s["t"], lang), "d": t(s["d"], lang)} for s in LANDING["steps"]],
+        "faq": [{"q": t(x["q"], lang), "a": t(x["a"], lang)} for x in LANDING["faq"]],
+    }
+
+# ---------------- التسعير والعروض والأفيليت (لوحة المالك) ----------------
+T.update({
+ "adm_pricing":    {"ar": "الأسعار والخصومات", "en": "Pricing & discounts"},
+ "adm_pricing_sub":{"ar": "تحكّم في سعر كل باقة وخصمها المعلن. التغيير يسري فوراً على صفحة الباقات وصفحة الدفع.",
+                    "en": "Control each plan's price and public discount. Changes apply immediately to pricing and checkout."},
+ "adm_promos":     {"ar": "أكواد الخصم", "en": "Promo codes"},
+ "adm_promos_sub": {"ar": "أنشئ أكواداً بنسبة أو مبلغ ثابت، بحد استخدام وتاريخ انتهاء. الكود لا يُستهلك إلا عند اعتماد الدفعة.",
+                    "en": "Create percentage or fixed-amount codes with usage limits and expiry. A code is only consumed when a payment is approved."},
+ "adm_affiliates": {"ar": "الأفيليت", "en": "Affiliates"},
+ "adm_affiliates_sub":{"ar": "نسبة العمولة الافتراضية، ومتابعة إحالات كل شريك وأرباحه وصرف مستحقّاته.",
+                       "en": "Default commission rate, plus each partner's referrals, earnings and payouts."},
+
+ "list_price":     {"ar": "السعر الأساسي", "en": "List price"},
+ "final_price":    {"ar": "السعر النهائي", "en": "Final price"},
+ "discount_pct":   {"ar": "الخصم %", "en": "Discount %"},
+ "save_pricing":   {"ar": "حفظ الأسعار", "en": "Save pricing"},
+ "price_hint":     {"ar": "اتركه فارغاً للرجوع للسعر الأساسي في الكود.", "en": "Leave empty to fall back to the built-in price."},
+
+ "promo_code":     {"ar": "كود الخصم", "en": "Promo code"},
+ "promo_have":     {"ar": "عندك كود خصم؟", "en": "Have a promo code?"},
+ "promo_apply":    {"ar": "تطبيق", "en": "Apply"},
+ "promo_applied":  {"ar": "تم تطبيق الكود", "en": "Code applied"},
+ "promo_bad":      {"ar": "كود غير صحيح أو غير مفعّل.", "en": "Invalid or inactive code."},
+ "promo_expired":  {"ar": "انتهت صلاحية هذا الكود.", "en": "This code has expired."},
+ "promo_exhausted":{"ar": "استُنفد هذا الكود.", "en": "This code has reached its limit."},
+ "promo_wrong_plan":{"ar": "هذا الكود لا ينطبق على هذه الباقة.", "en": "This code does not apply to this plan."},
+ "promo_used":     {"ar": "استخدمت هذا الكود من قبل.", "en": "You have already used this code."},
+ "promo_kind":     {"ar": "النوع", "en": "Type"},
+ "promo_percent":  {"ar": "نسبة %", "en": "Percent %"},
+ "promo_fixed":    {"ar": "مبلغ ثابت", "en": "Fixed amount"},
+ "promo_value":    {"ar": "القيمة", "en": "Value"},
+ "promo_plan":     {"ar": "الباقة", "en": "Plan"},
+ "promo_all_plans":{"ar": "كل الباقات", "en": "All plans"},
+ "promo_max_uses": {"ar": "حد الاستخدام", "en": "Max uses"},
+ "promo_expires":  {"ar": "ينتهي في", "en": "Expires on"},
+ "promo_once":     {"ar": "مرة واحدة لكل عميل", "en": "Once per customer"},
+ "promo_create":   {"ar": "إنشاء كود", "en": "Create code"},
+ "promo_uses":     {"ar": "الاستخدامات", "en": "Uses"},
+ "promo_saved":    {"ar": "إجمالي الخصم", "en": "Total discounted"},
+ "no_promos":      {"ar": "لا توجد أكواد بعد.", "en": "No codes yet."},
+ "unlimited_uses": {"ar": "بلا حد", "en": "Unlimited"},
+
+ "aff_title":      {"ar": "برنامج الشركاء", "en": "Affiliate program"},
+ "aff_sub":        {"ar": "شارك رابطك واكسب عمولة على كل اشتراك مدفوع يأتي منك.",
+                    "en": "Share your link and earn a commission on every paid subscription you bring."},
+ "aff_join":       {"ar": "فعّل حسابي كشريك", "en": "Activate my partner account"},
+ "aff_code":       {"ar": "كودك", "en": "Your code"},
+ "aff_link":       {"ar": "رابط الإحالة", "en": "Referral link"},
+ "aff_rate":       {"ar": "نسبة العمولة", "en": "Commission rate"},
+ "aff_signups":    {"ar": "تسجيلات", "en": "Signups"},
+ "aff_conversions":{"ar": "اشتراكات مدفوعة", "en": "Paid conversions"},
+ "aff_earned":     {"ar": "إجمالي الأرباح", "en": "Total earned"},
+ "aff_paid":       {"ar": "المصروف", "en": "Paid out"},
+ "aff_due":        {"ar": "المستحقّ", "en": "Due"},
+ "aff_default_rate":{"ar": "النسبة الافتراضية للشركاء الجدد", "en": "Default rate for new partners"},
+ "aff_payout":     {"ar": "صرف", "en": "Pay out"},
+ "aff_none":       {"ar": "لا يوجد شركاء بعد.", "en": "No partners yet."},
+ "aff_how":        {"ar": "العمولة تُحتسب مرة واحدة عند اعتماد أول اشتراك مدفوع للعميل الذي أحلته.",
+                    "en": "Commission is credited once, when the first paid subscription from your referral is approved."},
+ "aff_active":     {"ar": "مفعّل", "en": "Active"},
+ "aff_paused":     {"ar": "موقوف", "en": "Paused"},
+})

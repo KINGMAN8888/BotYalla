@@ -318,11 +318,11 @@ Navigate to `http://127.0.0.1:5000` in your browser.
 
 ### Automated Linux VPS Script
 
-An automated deployment script is available in `deploy/deploy.sh` for Ubuntu/Debian servers. It manages package installation, user isolation, virtual environments, systemd daemonization, and Nginx reverse proxy configuration.
+An automated deployment script is available in `deploy/hostinger_deploy.sh` for Ubuntu/Debian servers. It manages package installation, user isolation, virtual environments, the frontend build, systemd daemonization, Nginx, firewall, and daily backups. It is idempotent — running it twice is safe. See `docs/PRODUCTION.md` for the full runbook.
 
 ```bash
 # Run automated setup script
-sudo bash deploy/deploy.sh https://github.com/USERNAME/BotYalla.git yourdomain.com
+sudo bash deploy/hostinger_deploy.sh yourdomain.com
 
 # Configure SSL certificate via Let's Encrypt
 sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
