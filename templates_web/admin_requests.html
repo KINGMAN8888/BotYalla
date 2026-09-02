@@ -20,9 +20,12 @@
       </td>
       {% if role=='admin' %}
       <td style="white-space:nowrap;">
-        <a class="btn ghost sm" href="{{ url_for('admin_request_status', req_id=r.id, status='in_progress') }}">{{ t('req_status_in_progress') }}</a>
-        <a class="btn green sm" href="{{ url_for('admin_request_status', req_id=r.id, status='done') }}">{{ t('req_status_done') }}</a>
-        <a class="btn red sm" href="{{ url_for('admin_request_status', req_id=r.id, status='rejected') }}">{{ icon('ban',13) }}</a>
+        <form method="post" action="{{ url_for('admin_request_status', req_id=r.id, status='in_progress') }}" style="display:inline;">
+          {{ csrf_field() }}<button class="btn ghost sm">{{ t('req_status_in_progress') }}</button></form>
+        <form method="post" action="{{ url_for('admin_request_status', req_id=r.id, status='done') }}" style="display:inline;">
+          {{ csrf_field() }}<button class="btn green sm">{{ t('req_status_done') }}</button></form>
+        <form method="post" action="{{ url_for('admin_request_status', req_id=r.id, status='rejected') }}" style="display:inline;">
+          {{ csrf_field() }}<button class="btn red sm">{{ icon('ban',13) }}</button></form>
       </td>
       {% endif %}
     </tr>

@@ -1,13 +1,27 @@
 {% extends "base.html" %}{% block title %}{{ t('nav_bots') }} · {{ brand }}{% endblock %}
 {% block body %}
-<h1>{{ t('welcome_user') }} {{ username }}</h1>
-<p class="sub">{{ t('dash_sub') }}</p>
 
-<div class="grid c4" style="margin-bottom:24px;">
-  <div class="stat"><div class="ic">{{ icon('users',20) }}</div><div class="n">{{ total.subscribers }}</div><div class="l">{{ t('stat_subs') }}</div></div>
-  <div class="stat"><div class="ic">{{ icon('store',20) }}</div><div class="n">{{ total.orders }}</div><div class="l">{{ t('stat_orders') }}</div></div>
-  <div class="stat"><div class="ic">{{ icon('calendar',20) }}</div><div class="n">{{ total.bookings }}</div><div class="l">{{ t('stat_bookings') }}</div></div>
-  <div class="stat"><div class="ic">{{ icon('wallet',20) }}</div><div class="n">{{ total.revenue }}</div><div class="l">{{ t('stat_revenue') }}</div></div>
+<div class="between" style="margin-bottom:var(--s6);">
+  <div>
+    <h1>{{ t('welcome_user') }} {{ username }}</h1>
+    <p class="sub" style="margin:0;">{{ t('dash_sub') }}</p>
+  </div>
+  <a class="btn" href="#create">{{ icon('plus',16) }} {{ t('create_bot') }}</a>
+</div>
+
+<div class="grid c4" style="margin-bottom:var(--s6);">
+  <div class="stat"><div class="ic">{{ icon('users',20) }}</div>
+    <div class="n"><span data-count="{{ total.subscribers }}">{{ total.subscribers }}</span></div>
+    <div class="l">{{ t('stat_subs') }}</div></div>
+  <div class="stat"><div class="ic">{{ icon('store',20) }}</div>
+    <div class="n"><span data-count="{{ total.orders }}">{{ total.orders }}</span></div>
+    <div class="l">{{ t('stat_orders') }}</div></div>
+  <div class="stat"><div class="ic">{{ icon('calendar',20) }}</div>
+    <div class="n"><span data-count="{{ total.bookings }}">{{ total.bookings }}</span></div>
+    <div class="l">{{ t('stat_bookings') }}</div></div>
+  <div class="stat"><div class="ic">{{ icon('wallet',20) }}</div>
+    <div class="n"><span data-count="{{ total.revenue }}">{{ total.revenue }}</span></div>
+    <div class="l">{{ t('stat_revenue') }}</div></div>
 </div>
 
 <div class="card">
@@ -15,14 +29,17 @@
   {% if bots %}
   <div class="grid c2">
     {% for b in bots %}
-    <a class="card botcard" href="{{ url_for('bot_detail', bot_id=b.id) }}" style="margin:0;">
+    <a class="card botcard flush" href="{{ url_for('bot_detail', bot_id=b.id) }}">
       <div class="top">
-        <div style="display:flex;align-items:center;gap:12px;">
+        <div style="display:flex;align-items:center;gap:12px;min-width:0;">
           <div class="ic">{{ icon(tmpl_icon(b.template),22) }}</div>
-          <div><div style="font-weight:800;">{{ b.name }}</div>
-          <div class="muted" style="font-size:12px;">{{ tmpl_label(b.template) }}</div></div>
+          <div style="min-width:0;">
+            <div style="font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ b.name }}</div>
+            <div class="muted" style="font-size:12px;">{{ tmpl_label(b.template) }}</div>
+          </div>
         </div>
-        {% if b.running %}<span class="pill on">{{ t('running') }}</span>{% else %}<span class="pill off">{{ t('stopped') }}</span>{% endif %}
+        {% if b.running %}<span class="pill on dot">{{ t('running') }}</span>
+        {% else %}<span class="pill off">{{ t('stopped') }}</span>{% endif %}
       </div>
       <div class="mini">
         <span>{{ icon('users',14) }} <b>{{ b.stats.subscribers }}</b></span>
@@ -33,56 +50,119 @@
     </a>
     {% endfor %}
   </div>
-  {% else %}<p class="muted">{{ t('no_bots') }}</p>{% endif %}
+  {% else %}
+  <div class="empty">
+    <div class="ic">{{ icon('bot',30) }}</div>
+    <h3>{{ t('no_bots') }}</h3>
+    <p>{{ t('lp_step1_d') }}</p>
+    <a class="btn" href="#create">{{ icon('plus',16) }} {{ t('create_bot') }}</a>
+  </div>
+  {% endif %}
 </div>
 
-<div class="card">
+{# ================= معالج الإنشاء — 3 خطوات مرقّمة وواضحة ================= #}
+<div class="card" id="create">
   <h2>{{ icon('plus',18) }} {{ t('create_bot') }}</h2>
+  <p class="sub" style="margin-bottom:var(--s5);">{{ t('lp_how_sub') }}</p>
+
   <form method="post" action="{{ url_for('bot_create') }}">
     {{ csrf_field() }}
-    <div class="row">
-      <div><label>{{ t('biz_name') }}</label><input name="name" required placeholder="{{ t('eg_cafe') }}"></div>
-      <div><label>{{ t('bot_type') }}</label>
-        <select name="template" required>
-          {% for k in ['flow','store','booking','customer_service','faq','feedback','support'] %}<option value="{{k}}">{{ tmpl_label(k) }}</option>{% endfor %}
-        </select></div>
+
+    {# --- الخطوة 1: التوكن (الأصعب على غير التقنيين → أولاً وبأوضح شرح) --- #}
+    <div class="wizard-step">
+      <span class="num">1</span>
+      <div class="body">
+        <h3>{{ t('lp_step1') }}</h3>
+        <p class="hint" style="margin:4px 0 12px;">{{ t('lp_step1_d') }}</p>
+        <a class="btn soft sm" href="https://t.me/BotFather" target="_blank" rel="noopener">
+          {{ icon('link',14) }} {{ t('open_botfather') }}</a>
+
+        <label for="tok">{{ t('bot_token') }}</label>
+        <div class="field-row">
+          <input name="token" id="tok" required placeholder="123456789:AAE-xxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                 autocomplete="off" spellcheck="false" aria-describedby="tokStatus">
+        </div>
+        <div id="tokStatus" class="hint" role="status" aria-live="polite"></div>
+      </div>
     </div>
-    <label>{{ t('bot_token') }}</label>
-    <div style="display:flex;gap:10px;align-items:center;">
-      <input name="token" id="tok" required placeholder="123456:ABC-DEF..." style="flex:1;">
-      <a class="btn ghost sm" href="https://t.me/BotFather" target="_blank" rel="noopener">{{ icon('link',14) }} {{ t('open_botfather') }}</a>
+
+    {# --- الخطوة 2: الاسم والنوع --- #}
+    <div class="wizard-step">
+      <span class="num">2</span>
+      <div class="body">
+        <h3>{{ t('lp_step2') }}</h3>
+        <div class="row" style="margin-top:8px;">
+          <div>
+            <label for="bname">{{ t('biz_name') }}</label>
+            <input name="name" id="bname" required placeholder="{{ t('eg_cafe') }}">
+          </div>
+          <div>
+            <label for="btype">{{ t('bot_type') }}</label>
+            <select name="template" id="btype" required>
+              {% for k in ['flow','store','booking','customer_service','faq','feedback','support'] %}
+              <option value="{{k}}">{{ tmpl_label(k) }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+      </div>
     </div>
-    <div id="tokStatus" class="hint"></div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px;">
-      <label style="margin:0;">{{ t('owner_id_lbl') }}</label>
-      <button type="button" class="btn ghost sm" onclick="document.getElementById('ownerTip').classList.toggle('hidden')" style="padding:4px 10px;font-size:12px;">{{ icon('help',14) }} {{ t('owner_id_help') }}</button>
+
+    {# --- الخطوة 3: معرّف الأدمن (اختياري) --- #}
+    <div class="wizard-step">
+      <span class="num">3</span>
+      <div class="body">
+        <h3>{{ t('owner_id_lbl') }} <span class="muted" style="font-weight:600;font-size:13px;">({{ t('optional') }})</span></h3>
+        <p class="hint" style="margin:4px 0 12px;">{{ t('owner_id_tip') }}</p>
+        <div class="field-row">
+          <input name="owner_chat_id" placeholder="123456789" inputmode="numeric" autocomplete="off">
+          <a class="btn ghost sm" href="https://t.me/userinfobot" target="_blank" rel="noopener">
+            {{ icon('link',14) }} {{ t('get_my_id') }}</a>
+        </div>
+      </div>
     </div>
-    <div id="ownerTip" class="hint hidden" style="background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-top:6px;">
-      {{ t('owner_id_tip') }}
+
+    <div style="margin-top:var(--s6);">
+      <button class="btn lg">{{ icon('sparkles',18) }} {{ t('create_btn') }}</button>
     </div>
-    <div style="display:flex;gap:10px;align-items:center;margin-top:6px;">
-      <input name="owner_chat_id" placeholder="123456789" style="flex:1;">
-      <a class="btn ghost sm" href="https://t.me/userinfobot" target="_blank" rel="noopener">{{ icon('link',14) }} {{ t('get_my_id') }}</a>
-    </div>
-    <div style="margin-top:18px;"><button class="btn">{{ icon('sparkles',16) }} {{ t('create_btn') }}</button></div>
   </form>
 </div>
 
-<div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;border:1px solid var(--violet);">
+<div class="card between" style="border-color:var(--line-strong);background:var(--grad-soft);">
   <div>
     <h2 style="margin:0;">{{ icon('sparkles',18) }} {{ t('custom_bot') }}</h2>
     <p class="muted" style="margin:6px 0 0;font-size:13px;">{{ t('custom_bot_desc') }}</p>
   </div>
   <a class="btn" href="{{ url_for('request_bot') }}">{{ icon('rocket',16) }} {{ t('request_custom') }}</a>
 </div>
+
 <script>
-const CSRF=document.querySelector('meta[name=csrf-token]').content;
-const tok=document.getElementById('tok'), st=document.getElementById('tokStatus'); let tm=null;
-const T={ok:true,chk:"{{ 'جاري التحقق...' if lang=='ar' else 'Checking...' }}",bad:"{{ 'تعذّر التحقق الآن' if lang=='ar' else 'Could not verify now' }}"};
-tok.addEventListener('input',()=>{clearTimeout(tm);const v=tok.value.trim();
- if(v.length<20){st.textContent='';return;} st.textContent='⏳ '+T.chk;st.style.color='#8C9AC4';
- tm=setTimeout(async()=>{try{const r=await fetch('/api/validate-token',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},body:JSON.stringify({token:v})});const d=await r.json();
-   if(d.ok){st.textContent='✓ @'+d.username+' — '+d.name;st.style.color='#2DD4A7';}else{st.textContent='✕ '+d.error;st.style.color='#F87171';}
- }catch(e){st.textContent=T.bad;st.style.color='#8C9AC4';}},600);});
+(function(){
+  var CSRF = document.querySelector('meta[name=csrf-token]').content;
+  var tok = document.getElementById('tok'), st = document.getElementById('tokStatus'), tm = null;
+  if (!tok) return;
+  var T = {
+    chk:  {{ ('"جاري التحقق من التوكن…"' if lang=='ar' else '"Checking the token…"')|safe }},
+    bad:  {{ ('"تعذّر التحقق الآن — تقدر تكمّل عادي"' if lang=='ar' else '"Could not verify right now — you can still continue"')|safe }},
+    short:{{ ('"الصق التوكن كامل زي ما BotFather بعته"' if lang=='ar' else '"Paste the full token exactly as BotFather sent it"')|safe }}
+  };
+  function set(msg, color){ st.textContent = msg; st.style.color = color; }
+  tok.addEventListener('input', function(){
+    clearTimeout(tm);
+    var v = tok.value.trim();
+    if (!v) { set('', ''); tok.removeAttribute('aria-invalid'); return; }
+    if (v.length < 20) { set(T.short, 'var(--muted2)'); return; }
+    set('⏳ ' + T.chk, 'var(--muted)');
+    tm = setTimeout(function(){
+      fetch('/api/validate-token', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json','X-CSRF-Token':CSRF},
+        body: JSON.stringify({token: v})
+      }).then(function(r){ return r.json(); }).then(function(d){
+        if (d.ok) { set('✓ @' + d.username + ' — ' + d.name, 'var(--green)'); tok.removeAttribute('aria-invalid'); }
+        else { set('✕ ' + d.error, 'var(--red)'); tok.setAttribute('aria-invalid','true'); }
+      }).catch(function(){ set(T.bad, 'var(--muted2)'); });
+    }, 600);
+  });
+})();
 </script>
 {% endblock %}

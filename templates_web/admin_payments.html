@@ -41,8 +41,12 @@
       <!-- الأزرار -->
       <td style="white-space:nowrap;">
         {% if x.status=='pending' and role=='admin' %}
-          <a class="btn green sm" href="{{ url_for('admin_payment_decide', pid=x.id, decision='approve') }}">{{ icon('check',13) }} {{ t('approve') }}</a>
-          <a class="btn red sm" href="{{ url_for('admin_payment_decide', pid=x.id, decision='reject') }}">{{ icon('ban',13) }} {{ t('reject') }}</a>
+          {% set ok_msg = 'تأكيد الموافقة وتفعيل الاشتراك؟' if lang=='ar' else 'Approve and activate this subscription?' %}
+          <form method="post" action="{{ url_for('admin_payment_decide', pid=x.id, decision='approve') }}"
+                style="display:inline;" data-confirm="{{ ok_msg }}" data-confirm-icon="warn" data-confirm-ok-class="btn green sm">
+            {{ csrf_field() }}<button class="btn green sm">{{ icon('check',13) }} {{ t('approve') }}</button></form>
+          <form method="post" action="{{ url_for('admin_payment_decide', pid=x.id, decision='reject') }}" style="display:inline;">
+            {{ csrf_field() }}<button class="btn red sm">{{ icon('ban',13) }} {{ t('reject') }}</button></form>
         {% endif %}
       </td>
     </tr>

@@ -56,9 +56,11 @@
           </select>
         </form>
         {% if u.is_blocked %}
-          <a class="btn green sm" href="{{ url_for('admin_user_block', user_id=u.id, val=0) }}">{{ t('action_unblock') }}</a>
+          <form method="post" action="{{ url_for('admin_user_block', user_id=u.id, val=0) }}" style="display:inline;">
+            {{ csrf_field() }}<button class="btn green sm">{{ t('action_unblock') }}</button></form>
         {% else %}
-          <a class="btn red sm" href="{{ url_for('admin_user_block', user_id=u.id, val=1) }}">{{ icon('ban',13) }} {{ t('action_block') }}</a>
+          <form method="post" action="{{ url_for('admin_user_block', user_id=u.id, val=1) }}" style="display:inline;">
+            {{ csrf_field() }}<button class="btn red sm">{{ icon('ban',13) }} {{ t('action_block') }}</button></form>
         {% endif %}
         {% endif %}
       </td>

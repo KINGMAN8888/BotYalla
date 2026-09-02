@@ -4,49 +4,148 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ brand }}{% endblock %}</title>
+<meta name="description" content="{{ t('hero_sub') }}">
+<meta name="theme-color" content="#080C18">
 <meta name="csrf-token" content="{{ csrf_token }}">
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='mark.svg') }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script>document.documentElement.className+=' js';</script>
 <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 <style>body{font-family:{% if lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}</style>
 {% block head %}{% endblock %}
 </head>
 <body>
+<a class="skip-link" href="#main">{{ 'تخطّي إلى المحتوى' if lang=='ar' else 'Skip to content' }}</a>
+
 {% if session.get('uid') %}
-<div class="topbar"><div class="inner">
-  <a class="logo" href="{{ url_for('dashboard') }}">
-    <img src="{{ url_for('static', filename='logo.svg') }}" alt="BotYalla">
+{# ============ هيكل التطبيق: شريط جانبي ثابت + منطقة محتوى ============ #}
+<div class="shell">
+  <div class="scrim"></div>
+
+  <aside class="sidebar" aria-label="{{ 'التنقّل الرئيسي' if lang=='ar' else 'Main navigation' }}">
+    <a class="brandrow logo" href="{{ url_for('dashboard') }}">
+      <img src="{{ url_for('static', filename='logo.svg') }}" alt="{{ brand }}">
+    </a>
+
+    <nav class="navgroup">
+      <div class="lbl">{{ 'المنصة' if lang=='ar' else 'Workspace' }}</div>
+      <a class="navlink" href="{{ url_for('dashboard') }}">{{ icon('grid',18) }} {{ t('nav_bots') }}</a>
+      <a class="navlink" href="{{ url_for('pricing') }}">{{ icon('tag',18) }} {{ t('nav_pricing') }}</a>
+      <a class="navlink" href="{{ url_for('billing') }}">{{ icon('card',18) }} {{ t('nav_billing') }}</a>
+      <a class="navlink" href="{{ url_for('request_bot') }}">{{ icon('sparkles',18) }} {{ t('custom_bot') }}</a>
+    </nav>
+
+    {% if role in ('admin','support') %}
+    <nav class="navgroup">
+      <div class="lbl">{{ 'الإدارة' if lang=='ar' else 'Admin' }}</div>
+      <a class="navlink" href="{{ url_for('admin_home') }}">{{ icon('shield',18) }} {{ t('nav_admin') }}</a>
+      <a class="navlink" href="{{ url_for('admin_users') }}">{{ icon('users',18) }} {{ t('admin_users_t') }}</a>
+      <a class="navlink" href="{{ url_for('admin_payments') }}">{{ icon('wallet',18) }} {{ t('admin_payments_t') }}</a>
+      <a class="navlink" href="{{ url_for('admin_requests') }}">{{ icon('inbox',18) }} {{ t('nav_requests') }}</a>
+      {% if role=='admin' %}
+      <a class="navlink" href="{{ url_for('settings') }}">{{ icon('sparkles',18) }} {{ t('nav_ai') }}</a>
+      <a class="navlink" href="{{ url_for('admin_platform') }}">{{ icon('settings',18) }} {{ t('nav_platform') }}</a>
+      {% endif %}
+    </nav>
+    {% endif %}
+
+    <div class="foot">
+      <a class="navlink" href="{{ url_for('account') }}">{{ icon('users',18) }} {{ username }}</a>
+      <a class="navlink" href="{{ url_for('logout') }}">{{ icon('logout',18) }} {{ t('logout') }}</a>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar"><div class="inner">
+      <button class="navtoggle" type="button" aria-expanded="false"
+              aria-label="{{ 'القائمة' if lang=='ar' else 'Menu' }}"><span></span></button>
+      <a class="logo only-sm" href="{{ url_for('dashboard') }}">
+        <img src="{{ url_for('static', filename='logo.svg') }}" alt="{{ brand }}" style="height:30px;">
+      </a>
+      <nav class="navlinks push">
+        <a class="langtog" href="{{ url_for('set_lang', code='en' if lang=='ar' else 'ar') }}">
+          {{ icon('globe',16) }} {{ 'EN' if lang=='ar' else 'ع' }}</a>
+        <a class="chip hide-sm" href="{{ url_for('account') }}">{{ icon('users',14) }} {{ username }}</a>
+      </nav>
+    </div></header>
+{% else %}
+{# ==================== إطار تسويقي للزائر غير المسجّل ==================== #}
+<header class="topbar"><div class="inner">
+  <a class="logo" href="{{ url_for('landing') }}">
+    <img src="{{ url_for('static', filename='logo.svg') }}" alt="{{ brand }}">
   </a>
   <nav class="navlinks">
-    <a href="{{ url_for('dashboard') }}">{{ icon('grid',16) }} {{ t('nav_bots') }}</a>
-    <a href="{{ url_for('pricing') }}">{{ icon('tag',16) }} {{ t('nav_pricing') }}</a>
-    {% if role=='admin' %}<a href="{{ url_for('settings') }}">{{ icon('sparkles',16) }} {{ t('nav_ai') }}</a>{% endif %}
-    <a href="{{ url_for('billing') }}">{{ icon('card',16) }} {{ t('nav_billing') }}</a>
-    {% if role in ('admin','support') %}<a href="{{ url_for('admin_home') }}">{{ icon('shield',16) }} {{ t('nav_admin') }}</a>{% endif %}
-    {% if role in ('admin','support') %}<a href="{{ url_for('admin_requests') }}">{{ icon('inbox',16) }} {{ t('nav_requests') }}</a>{% endif %}
-    {% if role=='admin' %}<a href="{{ url_for('admin_platform') }}">{{ icon('settings',16) }} {{ t('nav_platform') }}</a>{% endif %}
-    <a class="langtog" href="{{ url_for('set_lang', code='en' if lang=='ar' else 'ar') }}">{{ icon('globe',16) }} {{ 'EN' if lang=='ar' else 'ع' }}</a>
-    <a href="{{ url_for('account') }}" class="chip" style="text-decoration:none;">{{ icon('users',14) }} {{ username }}</a>
-    <a href="{{ url_for('logout') }}">{{ icon('logout',16) }} {{ t('logout') }}</a>
-  </nav>
-</div></div>
-{% else %}
-<div class="topbar"><div class="inner">
-  <a class="logo" href="{{ url_for('landing') }}"><img src="{{ url_for('static', filename='logo.svg') }}" alt="BotYalla"></a>
-  <nav class="navlinks">
-    <a class="langtog" href="{{ url_for('set_lang', code='en' if lang=='ar' else 'ar') }}">{{ icon('globe',16) }} {{ 'EN' if lang=='ar' else 'ع' }}</a>
+    <a class="hide-sm" href="{{ url_for('pricing') }}">{{ icon('tag',16) }} {{ t('nav_pricing') }}</a>
+    <a class="langtog" href="{{ url_for('set_lang', code='en' if lang=='ar' else 'ar') }}">
+      {{ icon('globe',16) }} {{ 'EN' if lang=='ar' else 'ع' }}</a>
     <a href="{{ url_for('login') }}">{{ t('login') }}</a>
+    <a class="btn sm" href="{{ url_for('register') }}">{{ icon('rocket',14) }} {{ t('get_started_free') }}</a>
   </nav>
-</div></div>
+</div></header>
 {% endif %}
-<div class="container page">
+
+<main id="main" class="container page">
   {% with msgs = get_flashed_messages(with_categories=true) %}
-    {% for cat,m in msgs %}<div class="flash {{cat}}">{{ m }}</div>{% endfor %}
+    {% for cat,m in msgs %}<div class="flash {{cat}}" role="alert">{{ m }}</div>{% endfor %}
   {% endwith %}
   {% block body %}{% endblock %}
+</main>
+
+{% if session.get('uid') %}
+  </div>{# .main #}
+</div>{# .shell #}
+{% else %}
+<footer class="footer">
+  <div class="container">
+    <div class="cols">
+      <div>
+        <a class="logo" href="{{ url_for('landing') }}">
+          <img src="{{ url_for('static', filename='logo.svg') }}" alt="{{ brand }}"></a>
+        <p class="muted" style="margin:12px 0 0;max-width:320px;font-size:14px;">{{ t('brand_tag') }}</p>
+      </div>
+      <div>
+        <h4>{{ 'المنتج' if lang=='ar' else 'Product' }}</h4>
+        <a href="{{ url_for('pricing') }}">{{ t('nav_pricing') }}</a>
+        <a href="{{ url_for('register') }}">{{ t('register') }}</a>
+        <a href="{{ url_for('login') }}">{{ t('login') }}</a>
+      </div>
+      <div>
+        <h4>{{ 'تواصل' if lang=='ar' else 'Contact' }}</h4>
+        <a href="mailto:info@youssefalsherief.tech">info@youssefalsherief.tech</a>
+        <a href="https://wa.me/201097585951" target="_blank" rel="noopener">WhatsApp</a>
+        <a href="https://youssefalsherief.tech/" target="_blank" rel="noopener">youssefalsherief.tech</a>
+      </div>
+    </div>
+    <div class="bottom">
+      <span>© {{ brand }} — {{ 'جميع الحقوق محفوظة' if lang=='ar' else 'All rights reserved' }}</span>
+      <a href="https://youssefalsherief.tech/" target="_blank" rel="noopener">Youssef Alsherief</a>
+    </div>
+  </div>
+</footer>
+{% endif %}
+
+<!-- مودال تأكيد احترافي (يُستدعى عبر JS بدل confirm() القبيح) -->
+<div class="confirm-overlay" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="confirm-box">
+    <div class="confirm-icon" id="confirmIcon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+    </div>
+    <div class="confirm-title" id="confirmTitle">{{ 'تأكيد' if lang=='ar' else 'Confirm' }}</div>
+    <div class="confirm-msg" id="confirmMsg"></div>
+    <div class="confirm-actions">
+      <button class="btn ghost sm" id="confirmCancel" type="button">{{ 'إلغاء' if lang=='ar' else 'Cancel' }}</button>
+      <button class="btn red sm" id="confirmOk" type="button">{{ 'تأكيد' if lang=='ar' else 'Confirm' }}</button>
+    </div>
+  </div>
 </div>
+
+<div class="toasts" aria-live="polite" aria-atomic="false"></div>
+<script src="{{ url_for('static', filename='app.js') }}" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

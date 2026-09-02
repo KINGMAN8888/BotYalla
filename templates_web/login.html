@@ -1,18 +1,23 @@
 {% extends "base.html" %}{% block title %}{{ t('login') }} · {{ brand }}{% endblock %}
 {% block body %}
-<div class="authwrap">
-  <div class="logo"><img src="{{ url_for('static', filename='logo.svg') }}" alt="BotYalla"></div>
+<div class="authwrap reveal">
+  <div class="logo"><img src="{{ url_for('static', filename='logo.svg') }}" alt="{{ brand }}"></div>
   <div class="card">
     <h1 class="center">{{ t('login') }}</h1>
     <p class="sub center">{{ t('login_sub') }}</p>
     <form method="post">
-    {{ csrf_field() }}
-      <label>{{ t('username') }}</label><input name="username" required autofocus>
-      <label>{{ t('password') }}</label><input type="password" name="password" required>
-      <div style="margin-top:18px;"><button class="btn block">{{ icon('logout',16) }} {{ t('login') }}</button></div>
+      {{ csrf_field() }}
+      <label for="u">{{ t('username') }}</label>
+      <input id="u" name="username" required autofocus autocomplete="username">
+      <label for="p">{{ t('password') }}</label>
+      <input id="p" type="password" name="password" required autocomplete="current-password">
+      <div style="margin-top:var(--s5);">
+        <button class="btn block lg">{{ icon('lock',16) }} {{ t('login') }}</button>
+      </div>
     </form>
-    <p class="center muted" style="margin-top:16px;font-size:13px;">
-      {{ t('no_account') }} <a href="{{ url_for('register') }}">{{ t('signup_link') }}</a></p>
+    <p class="center muted" style="margin:var(--s5) 0 0;font-size:13px;">
+      {{ t('no_account') }} <a href="{{ url_for('register') }}">{{ t('signup_link') }}</a>
+    </p>
   </div>
 </div>
 {% endblock %}

@@ -103,12 +103,13 @@ def register_admin_commands(app: Application):
 def register(app: Application):
     async def on_decision(update, ctx: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
-        await q.answer()
         admin_id = db.get_platform("admin_chat_id", "")
-        # التفويض: الأدمن فقط
+        # التفويض: الأدمن فقط. لا تُجب على الاستعلام قبل هذا الفحص —
+        # تليجرام يقبل إجابة واحدة فقط، وإجابة مبكرة تبتلع تنبيه «غير مصرّح».
         if not admin_id or str(q.from_user.id) != str(admin_id):
             await q.answer("غير مصرّح / Not authorized", show_alert=True)
             return
+        await q.answer()
         action, _, sid = q.data.partition(":")
         try: pid = int(sid)
         except ValueError: return

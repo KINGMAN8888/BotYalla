@@ -6,11 +6,12 @@
 </div>
 <div class="card">
   <div class="badge-feat">{{ icon('users',14) }} {{ subs }} {{ t('subs_will_get') }}</div>
-  <form method="post" style="margin-top:14px;">
+  {% set bcast_msg = 'إرسال الحملة لكل المشتركين؟' if lang=='ar' else 'Send to all subscribers?' %}
+  <form method="post" style="margin-top:14px;" data-confirm="{{ bcast_msg }}" data-confirm-icon="warn">
     {{ csrf_field() }}
     <label>{{ t('msg_text') }}</label>
     <textarea name="text" required style="min-height:120px;"></textarea>
-    <div style="margin-top:16px;"><button class="btn" onclick="return confirm('{{ 'إرسال الحملة لكل المشتركين؟' if lang=='ar' else 'Send to all subscribers?' }}')">{{ icon('rocket',16) }} {{ t('send_campaign') }}</button></div>
+    <div style="margin-top:16px;"><button class="btn">{{ icon('rocket',16) }} {{ t('send_campaign') }}</button></div>
   </form>
 </div>
 {% endblock %}

@@ -1,9 +1,18 @@
 """BotYalla — لوحة التحكم (Flask).
 حسابات مستخدمين بتشفير، إنشاء/تشغيل بوتات، باني فلو No-Code،
 تحليلات (JSON للرسوم)، بث جماعي، حجوزات، تصدير."""
-import os, json, csv, io, functools
+import os, sys, json, csv, io, functools
+
+# على ويندوز عند إعادة توجيه الخرج (ملف/أنبوب/خدمة) يصير الترميز cp1252،
+# فأي print فيه عربي أو إيموجي يرمي UnicodeEncodeError ويُسقط bootstrap().
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from flask import (Flask, request, redirect, url_for, render_template,
-                   session, flash, abort, jsonify, Response, send_from_directory)
+                   session, flash, abort, jsonify, Response, send_from_directory, g,
+                   get_flashed_messages)
 
 # تحميل متغيرات .env تلقائياً إذا وُجد الملف
 _env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -35,6 +44,7 @@ import secrets as _secrets
 from markupsafe import Markup
 from werkzeug.utils import secure_filename
 from icons import icon
+import icons
 
 app = Flask(__name__, template_folder="templates_web", static_folder="static")
 app.secret_key = os.getenv("FLASK_SECRET", "botyalla-dev-secret-change-me")
@@ -58,6 +68,27 @@ def _csrf_protect():
         sent = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
         if not token or not sent or not _secrets.compare_digest(str(token), str(sent)):
             abort(400, "CSRF token invalid")
+
+@app.before_request
+def _revalidate_identity():
+    """يعيد قراءة هوية المستخدم من قاعدة البيانات في كل طلب.
+    الدور والحظر مصدرهما القاعدة لا الجلسة — حتى يسري الحظر أو تغيير الدور
+    فوراً على الجلسات المفتوحة، بدل انتظار خروج المستخدم وعودته."""
+    g.user = None
+    if request.endpoint == "static" or not session.get("uid"):
+        return
+    row = db.get_user(session["uid"])
+    if not row or row.get("is_blocked"):
+        # الحساب حُذف أو حُظر أثناء الجلسة → أنهِ الجلسة فوراً (مع إبقاء اللغة)
+        lang = session.get("lang")
+        session.clear()
+        if lang: session["lang"] = lang
+        flash("تم حظر هذا الحساب." if lang != "en" else "This account is blocked.", "error")
+        return
+    g.user = row
+    # مزامنة الجلسة مع القاعدة (قد يكون الأدمن غيّر الدور أو الاسم)
+    if session.get("role") != row["role"]: session["role"] = row["role"]
+    if session.get("uname") != row["username"]: session["uname"] = row["username"]
 
 @app.context_processor
 def _csrf_ctx():
@@ -86,10 +117,9 @@ def login_required(f):
 def uid(): return session.get("uid")
 
 def current_role():
-    return session.get("role", "user")
-
-def is_platform_admin():
-    return current_role() == "admin"
+    """الدور الحقيقي من القاعدة (يملؤه `_revalidate_identity`)، والجلسة احتياطياً."""
+    u = getattr(g, "user", None)
+    return u["role"] if u else session.get("role", "user")
 
 def require_roles(*roles):
     from functools import wraps
@@ -134,7 +164,7 @@ def inject():
             "t": lambda k: i18n.t(k, lang), "icon": icon,
             "tmpl_label": lambda key: i18n.t({"flow":"tmpl_flow","store":"tmpl_store","booking":"tmpl_booking","customer_service":"tmpl_cs","faq":"tmpl_faq","feedback":"tmpl_feedback","support":"tmpl_support"}.get(key,"tmpl_flow"), lang),
             "tmpl_icon": lambda key: {"flow":"flow","store":"store","booking":"calendar","customer_service":"phone","faq":"grid","feedback":"sparkles","support":"shield"}.get(key,"bot"),
-            "role": session.get("role","user"),
+            "role": current_role(),
             "fmt_date": lambda ts: (_dt.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d") if ts else "—"),
             "days_left": lambda ts: (max(0, int((int(ts) - _time.time()) // 86400)) if ts else 0)}
 
@@ -164,25 +194,25 @@ def register():
             session["uid"] = user_id; session["uname"] = u; session["role"] = urow["role"]
             notify_admins(f"🆕 تسجيل مستخدم جديد / New user: {u} (#{user_id})")
             return redirect(url_for("dashboard"))
-    return render_template("register.html")
+    return react_page("register", "register")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         if _rate_limited(request.remote_addr or "?"):
             flash("محاولات كثيرة. انتظر قليلاً." if session.get("lang")!="en" else "Too many attempts. Please wait.", "error")
-            return render_template("login.html")
+            return react_page("login", "login")
         u = request.form.get("username", "").strip()
         p = request.form.get("password", "")
         row = db.get_user_by_name(u)
         if row and row.get("is_blocked"):
             flash("تم حظر هذا الحساب." if session.get("lang")!="en" else "This account is blocked.", "error")
-            return render_template("login.html")
+            return react_page("login", "login")
         if row and auth.verify_password(p, row["pw_hash"]):
             session["uid"] = row["id"]; session["uname"] = u; session["role"] = row.get("role","user")
             return redirect(url_for("dashboard"))
         flash("بيانات دخول غير صحيحة.", "error")
-    return render_template("login.html")
+    return react_page("login", "login")
 
 @app.route("/logout")
 def logout():
@@ -199,7 +229,7 @@ def dashboard():
         b["stats"] = db.stats_summary(b["id"])
         for k in total: total[k] += b["stats"].get(k, 0)
     total["revenue"] = round(total["revenue"], 2)
-    return render_template("dashboard.html", bots=bots, total=total)
+    return react_page("dashboard", "nav_bots", {"bots": bots, "total": total})
 
 def _owned(bot_id):
     b = db.get_bot(bot_id, uid())
@@ -248,9 +278,14 @@ def bot_create():
             if _row: sync_bot_telegram(_row[0])
         except Exception:
             pass
-        flash(f"تم إنشاء البوت @{info.get('username')} 🎉 وتهيئته رسمياً على تليجرام. اضبط إعداداته ثم شغّله.", "ok")
+        _uname = info.get('username')
+        flash((f"تم إنشاء البوت @{_uname} 🎉 وتهيئته رسمياً على تليجرام. اضبط إعداداته ثم شغّله."
+               if session.get("lang") != "en" else
+               f"Bot @{_uname} created 🎉 and officially configured on Telegram. Adjust its settings then start it."), "ok")
     except Exception as e:
-        flash(f"خطأ: {e} (قد يكون التوكن مستخدماً بالفعل).", "error")
+        flash((f"خطأ: {e} (قد يكون التوكن مستخدماً بالفعل)."
+               if session.get("lang") != "en" else
+               f"Error: {e} (the token may already be in use)."), "error")
     return redirect(url_for("dashboard"))
 
 @app.route("/bot/<int:bot_id>")
@@ -270,7 +305,9 @@ def bot_detail(bot_id):
     if current_role() in ("admin", "support"):
         p = plans.plan("business") # Full access
         
-    return render_template("bot_detail.html", bot=b, leads=leads, orders=orders, bookings=bookings, plan=p)
+    return react_page("bot_detail", "nav_bots",
+                      {"bot": b, "leads": leads, "orders": orders, "bookings": bookings, "plan": p},
+                      title=b["name"])
 
 @app.route("/bot/<int:bot_id>/config", methods=["POST"])
 @login_required
@@ -343,10 +380,11 @@ def flow_builder(bot_id):
         flash("تم حفظ الفلو ✅", "ok")
         return redirect(url_for("flow_builder", bot_id=bot_id))
     flow = cfg.get("flow") or {"start_message": "", "end_message": "", "steps": []}
-    return render_template("flow_builder.html", bot=b, flow=flow)
+    return react_page("flow", "flow_title", {"bot": b, "flow": flow},
+                      title=i18n.t("flow_title", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
 
 # ---------- تشغيل / إيقاف / حذف ----------
-@app.route("/bot/<int:bot_id>/<action>")
+@app.route("/bot/<int:bot_id>/<any(start,stop,delete):action>", methods=["POST"])
 @login_required
 def bot_action(bot_id, action):
     _owned(bot_id)
@@ -364,7 +402,8 @@ def bot_action(bot_id, action):
 @login_required
 def analytics(bot_id):
     b = _owned(bot_id); b["stats"] = db.stats_summary(bot_id)
-    return render_template("analytics.html", bot=b)
+    return react_page("analytics", "analytics", {"bot": b}, needs_chart=True,
+                      title=i18n.t("analytics", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
 
 @app.route("/api/bot/<int:bot_id>/stats")
 @login_required
@@ -394,7 +433,8 @@ def broadcast(bot_id):
             sent, failed = manager.broadcast(bot_id, text)
             flash(f"📢 تم الإرسال إلى {sent} مشترك (فشل {failed}).", "ok")
         return redirect(url_for("broadcast", bot_id=bot_id))
-    return render_template("broadcast.html", bot=b, subs=subs)
+    return react_page("broadcast", "campaign_title", {"bot": b, "subs": subs},
+                      title=i18n.t("campaign_title", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
 
 # ---------- تصدير CSV ----------
 @app.route("/bot/<int:bot_id>/export/<kind>")
@@ -431,9 +471,9 @@ def settings():
         flash("تم حفظ إعدادات الذكاء الاصطناعي للمنصة ✅" if session.get("lang")!="en"
               else "Platform AI settings saved ✅", "ok")
         return redirect(url_for("settings"))
-    return render_template("settings.html",
-        ai_provider=db.get_platform("ai_provider", "gemini"),
-        ai_key=db.get_platform("ai_key", ""))
+    return react_page("settings", "ai_settings",
+                      {"aiProvider": db.get_platform("ai_provider", "gemini"),
+                       "aiKey": db.get_platform("ai_key", "")})
 
 @app.route("/bot/<int:bot_id>/ai-setup", methods=["POST"])
 @login_required
@@ -495,7 +535,8 @@ def owner_status(bot_id):
 @app.route("/pricing")
 def pricing():
     sub = db.get_subscription(uid()) if uid() else {"plan":"free","status":"active"}
-    return render_template("pricing.html", plans=plans, sub=sub)
+    return react_page("pricing", "pricing_title",
+                      {"plans": [dict(plans.PLANS[k], id=k) for k in plans.ORDER], "sub": sub})
 
 @app.route("/subscribe/<plan_id>", methods=["GET"])
 @login_required
@@ -504,7 +545,10 @@ def subscribe(plan_id):
         return redirect(url_for("pricing"))
     p = plans.plan(plan_id)
     plat = db.all_platform()
-    return render_template("subscribe.html", plan_id=plan_id, plan=p, plat=plat)
+    return react_page("subscribe", "pay_title",
+                      {"planId": plan_id, "plan": dict(p, id=plan_id), "plat": plat,
+                       "qr": url_for("static", filename="instapay_qr.jpg"),
+                       "action": url_for("subscribe_pay", plan_id=plan_id)})
 
 @app.route("/subscribe/<plan_id>", methods=["POST"])
 @login_required
@@ -525,6 +569,18 @@ def subscribe_pay(plan_id):
     fname = f"pay_{uid()}_{int(_time.time())}{ext}"
     fpath = os.path.join(UPLOAD_DIR, secure_filename(fname))
     file.save(fpath)
+    # فحص توقيع الملف قبل تسجيل أي شيء: ما ليس صورة ليس إيصالاً،
+    # فلا يُحفظ على القرص ولا يُنشأ له طلب دفع (AGENTS.md §3.7).
+    imgchk = pay.validate_image(fpath)
+    if not imgchk["ok"]:
+        try: os.remove(fpath)
+        except OSError: pass
+        _reason = {"not_an_image": ("الملف ليس صورة صالحة.", "The file is not a valid image."),
+                   "too_small":    ("الصورة صغيرة جداً.", "The image is too small."),
+                   "too_large":    ("الصورة كبيرة جداً (الحد 8 ميجابايت).", "The image is too large (8MB max)."),
+                   }.get(imgchk.get("reason"), ("تعذّر قراءة الصورة.", "Could not read the image."))
+        flash(_reason[0] if session.get("lang")!="en" else _reason[1], "error")
+        return redirect(url_for("subscribe", plan_id=plan_id))
     # الفحص الآلي
     img_hash = pay.file_sha256(fpath)
     dup = db.img_hash_seen(img_hash)
@@ -558,13 +614,14 @@ def billing():
     for x in pays:
         try: x["auto"] = json.loads(x.get("auto_check") or "{}")
         except Exception: x["auto"] = {}
-    return render_template("billing.html", sub=sub, pays=pays, plans=plans)
+    return react_page("billing", "billing_title",
+                      {"sub": sub, "pays": pays,
+                       "planName": plans.plan_name(sub["plan"], session.get("lang", i18n.DEFAULT)),
+                       "names": {k: plans.plan_name(k, session.get("lang", i18n.DEFAULT)) for k in plans.PLANS}})
 
 @app.route("/admin/platform", methods=["GET", "POST"])
-@login_required
+@require_roles("admin")
 def admin_platform():
-    if not is_platform_admin():
-        abort(403)
     if request.method == "POST":
         for k in ("vodafone_number","instapay_handle","instapay_link",
                   "bank_holder","bank_name","bank_account","bank_iban",
@@ -578,14 +635,14 @@ def admin_platform():
         else:
             flash("تم الحفظ." if session.get("lang")!="en" else "Saved.", "ok")
         return redirect(url_for("admin_platform"))
-    return render_template("admin_platform.html", plat=db.all_platform(),
-                           platform_running=manager.platform_running())
+    return react_page("admin_platform", "platform_title",
+                      {"plat": db.all_platform(), "running": manager.platform_running()})
 
 # ---------- لوحة تحكم الأدمن ----------
 @app.route("/admin")
 @require_roles("admin", "support")
 def admin_home():
-    return render_template("admin_overview.html", stats=db.platform_stats(), plans=plans)
+    return react_page("admin_overview", "nav_admin", {"stats": db.platform_stats()}, needs_chart=True)
 
 @app.route("/api/admin/stats")
 @require_roles("admin", "support")
@@ -595,7 +652,10 @@ def api_admin_stats():
 @app.route("/admin/users")
 @require_roles("admin", "support")
 def admin_users():
-    return render_template("admin_users.html", users=db.list_all_users(), plans=plans)
+    return react_page("admin_users", "admin_users_t",
+                      {"users": db.list_all_users(),
+                       "plans": [{"id": k, "name": plans.plan_name(k, session.get("lang", i18n.DEFAULT))}
+                                 for k in plans.ORDER]})
 
 @app.route("/admin/users/<int:user_id>/role", methods=["POST"])
 @require_roles("admin")
@@ -604,7 +664,7 @@ def admin_user_role(user_id):
     flash("تم تحديث الدور." if session.get("lang")!="en" else "Role updated.", "ok")
     return redirect(url_for("admin_users"))
 
-@app.route("/admin/users/<int:user_id>/block/<int:val>")
+@app.route("/admin/users/<int:user_id>/block/<int:val>", methods=["POST"])
 @require_roles("admin")
 def admin_user_block(user_id, val):
     db.set_user_blocked(user_id, bool(val))
@@ -637,9 +697,11 @@ def admin_payments():
         x["checks"] = pay.check_lines(x["auto"], lang)
         st, sym = pay.VERDICT_STYLE.get(x["auto"].get("verdict", "needs_review"), ("mid", "؟"))
         x["vstyle"] = st; x["vsym"] = sym
-    return render_template("admin_payments.html", pays=pays, plans=plans)
+    return react_page("admin_payments", "admin_payments_t",
+                      {"pays": pays,
+                       "names": {k: plans.plan_name(k, session.get("lang", i18n.DEFAULT)) for k in plans.PLANS}})
 
-@app.route("/admin/payments/<int:pid>/<decision>")
+@app.route("/admin/payments/<int:pid>/<any(approve,reject):decision>", methods=["POST"])
 @require_roles("admin")
 def admin_payment_decide(pid, decision):
     status = "approved" if decision == "approve" else "rejected"
@@ -671,14 +733,15 @@ def request_bot():
         flash("✅ تم استلام طلبك! سنتواصل معك قريباً." if session.get("lang")!="en"
               else "✅ Request received! We'll contact you soon.", "ok")
         return redirect(url_for("request_bot", sent=1))
-    return render_template("request_bot.html", plat=plat, sent=request.args.get("sent"))
+    return react_page("request_bot", "req_title",
+                      {"plat": plat, "sent": bool(request.args.get("sent"))})
 
 @app.route("/admin/requests")
 @require_roles("admin", "support")
 def admin_requests():
-    return render_template("admin_requests.html", reqs=db.list_bot_requests())
+    return react_page("admin_requests", "admin_requests_t", {"reqs": db.list_bot_requests()})
 
-@app.route("/admin/requests/<int:req_id>/<status>")
+@app.route("/admin/requests/<int:req_id>/<any(new,in_progress,done,rejected):status>", methods=["POST"])
 @require_roles("admin")
 def admin_request_status(req_id, status):
     db.set_bot_request_status(req_id, status)
@@ -713,7 +776,7 @@ def account():
         if new_user: session["uname"] = new_user
         flash("تم تحديث بيانات حسابك ✅" if session.get("lang")!="en" else "Account updated ✅", "ok")
         return redirect(url_for("account"))
-    return render_template("account.html", me=me)
+    return react_page("account", "account_title", {"me": dict(me, pw_hash=None)})
 
 @app.route("/admin/users/add", methods=["POST"])
 @require_roles("admin")
@@ -757,9 +820,114 @@ def sync_telegram(bot_id):
               + "، ".join(res.get("errors", []))[:200], "error")
     return redirect(url_for("bot_detail", bot_id=bot_id))
 
+_LANDING_ICONS = ("store","calendar","shield","grid","flow","sparkles","chart","megaphone",
+                  "check","rocket","tag","phone","bot","card","users","wallet","bolt")
+
+# ---------------------------------------------------------------------------
+#  طبقة تقديم React: Flask يبقى مسؤولاً عن التوجيه والصلاحيات والنماذج،
+#  و React يرسم الواجهة فقط. لا API جديدة ولا SPA — النماذج تبقى POST عادية
+#  بـ CSRF، فلا تتغيّر أي ضمانة أمنية.
+# ---------------------------------------------------------------------------
+_TMPL_ICON = {"flow":"flow","store":"store","booking":"calendar","customer_service":"phone",
+              "faq":"grid","feedback":"sparkles","support":"shield"}
+_TMPL_KEY  = {"flow":"tmpl_flow","store":"tmpl_store","booking":"tmpl_booking",
+              "customer_service":"tmpl_cs","faq":"tmpl_faq","feedback":"tmpl_feedback",
+              "support":"tmpl_support"}
+
+def react_page(view, title_key, props=None, needs_chart=False, title=None):
+    """يرسم صفحة React مع قشرة اللوحة وبياناتها."""
+    lang = session.get("lang", i18n.DEFAULT)
+    role = current_role()
+    nav = [
+        {"k": "dashboard",   "u": url_for("dashboard"),    "i": "grid",     "l": i18n.t("nav_bots", lang)},
+        {"k": "pricing",     "u": url_for("pricing"),      "i": "tag",      "l": i18n.t("nav_pricing", lang)},
+        {"k": "billing",     "u": url_for("billing"),      "i": "card",     "l": i18n.t("nav_billing", lang)},
+        {"k": "request_bot", "u": url_for("request_bot"),  "i": "sparkles", "l": i18n.t("custom_bot", lang)},
+    ]
+    admin_nav = []
+    if role in ("admin", "support"):
+        admin_nav = [
+            {"k": "admin_overview", "u": url_for("admin_home"),     "i": "shield", "l": i18n.t("nav_admin", lang)},
+            {"k": "admin_users",    "u": url_for("admin_users"),    "i": "users",  "l": i18n.t("admin_users_t", lang)},
+            {"k": "admin_payments", "u": url_for("admin_payments"), "i": "wallet", "l": i18n.t("admin_payments_t", lang)},
+            {"k": "admin_requests", "u": url_for("admin_requests"), "i": "inbox",  "l": i18n.t("nav_requests", lang)},
+        ]
+        if role == "admin":
+            admin_nav += [
+                {"k": "settings",       "u": url_for("settings"),       "i": "sparkles", "l": i18n.t("nav_ai", lang)},
+                {"k": "admin_platform", "u": url_for("admin_platform"), "i": "settings", "l": i18n.t("nav_platform", lang)},
+            ]
+
+    payload = {
+        "view": view, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
+        "csrf": session.get("_csrf", ""),
+        "user": {"name": session.get("uname"), "role": role},
+        "t": {k: i18n.t(k, lang) for k in i18n.T},
+        "icons": {n: _icon_svg(n) for n in icons._P},
+        "nav": nav, "adminNav": admin_nav,
+        "flashes": [{"c": c, "m": m} for c, m in get_flashed_messages(with_categories=True)],
+        "urls": {
+            "dashboard": url_for("dashboard"), "pricing": url_for("pricing"),
+            "billing": url_for("billing"), "account": url_for("account"),
+            "logout": url_for("logout"), "login": url_for("login"),
+            "register": url_for("register"), "landing": url_for("landing"),
+            "requestBot": url_for("request_bot"), "botCreate": url_for("bot_create"),
+            "logo": url_for("static", filename="logo.svg"),
+            "lang": url_for("set_lang", code="en" if lang == "ar" else "ar"),
+        },
+        "templates": [{"k": k, "icon": _TMPL_ICON[k], "label": i18n.t(_TMPL_KEY[k], lang)}
+                      for k in ("flow","store","booking","customer_service","faq","feedback","support")],
+        "props": props or {},
+    }
+    return render_template("react_app.html", view=view,
+                           page_title=title or i18n.t(title_key, lang), brand="BotYalla",
+                           lang=lang, dir=i18n.dir_for(lang), needs_chart=needs_chart,
+                           by_json=json.dumps(payload, ensure_ascii=False, default=str))
+
+def _icon_svg(name):
+    """SVG خام (يملأ حاويته) لحقنه داخل مكوّنات React."""
+    body = icons._P.get(name) or icons._P["grid"]
+    return ('<svg viewBox="0 0 24 24" width="100%" height="100%" fill="none" '
+            'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+            f'stroke-linejoin="round" aria-hidden="true">{body}</svg>')
+
 @app.route("/landing")
 def landing():
-    return render_template("landing.html")
+    lang = session.get("lang", i18n.DEFAULT)
+    # كل نصوص الواجهة تُحقن من الخادم — لا نص مكتوب داخل حزمة React
+    keys = ("hero_title_a","hero_title_b","hero_sub","lp_badge","lp_cta_demo",
+            "lp_trust_1","lp_trust_2","lp_trust_3","lp_live","get_started_free",
+            "signin_link","daily_activity","lp_feats_t","lp_feats_sub","lp_how_t",
+            "lp_how_sub","lp_faq_t","lp_final_t","lp_final_sub","nav_pricing","login",
+            "brand_tag")
+    payload = i18n.landing_payload(lang)
+    plat = db.all_platform()
+    payload.update({
+        "lang": lang,
+        "dir": i18n.dir_for(lang),
+        "brand": "BotYalla",
+        "t": {k: i18n.t(k, lang) for k in keys},
+        "icons": {n: _icon_svg(n) for n in _LANDING_ICONS},
+        "urls": {"register": url_for("register"), "login": url_for("login"),
+                 "pricing": url_for("pricing"), "home": url_for("landing"),
+                 "logo": url_for("static", filename="logo.svg"),
+                 "lang": url_for("set_lang", code="en" if lang == "ar" else "ar")},
+        "contact": [
+            {"l": plat.get("support_email", ""), "h": "mailto:" + plat.get("support_email", "")},
+            {"l": "WhatsApp", "h": "https://wa.me/" + plat.get("support_whatsapp", "")},
+            {"l": "youssefalsherief.tech", "h": "https://youssefalsherief.tech/"},
+        ],
+        "templates": [
+            {"icon": {"flow":"flow","store":"store","booking":"calendar",
+                      "customer_service":"phone","faq":"grid","feedback":"sparkles",
+                      "support":"shield"}.get(k, "bot"),
+             "name": i18n.t({"flow":"tmpl_flow","store":"tmpl_store","booking":"tmpl_booking",
+                             "customer_service":"tmpl_cs","faq":"tmpl_faq",
+                             "feedback":"tmpl_feedback","support":"tmpl_support"}[k], lang)}
+            for k in ("flow","store","booking","customer_service","faq","feedback","support")
+        ],
+    })
+    return render_template("landing.html", by_json=json.dumps(payload, ensure_ascii=False))
 
 
 def seed_platform_defaults():
@@ -815,4 +983,6 @@ def bootstrap():
 
 if __name__ == "__main__":
     bootstrap()
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    try: _port = int(os.getenv("PORT", "5000"))
+    except ValueError: _port = 5000
+    app.run(host=os.getenv("HOST", "127.0.0.1"), port=_port, debug=False)

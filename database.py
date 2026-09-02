@@ -166,7 +166,7 @@ def create_bot(owner_id, name, token, template, config):
 
 def list_bots(owner_id):
     with get_conn() as c:
-        rows = c.execute("SELECT * FROM bots WHERE owner_id=? ORDER BY created_at DESC",
+        rows = c.execute("SELECT * FROM bots WHERE owner_id=? ORDER BY created_at DESC, id DESC",
                          (owner_id,)).fetchall()
         return [dict(r) for r in rows]
 
@@ -222,7 +222,7 @@ def add_lead(bot_id, tg_user_id, data: dict):
 
 def list_leads(bot_id):
     with get_conn() as c:
-        rows = c.execute("SELECT * FROM leads WHERE bot_id=? ORDER BY created_at DESC LIMIT 300",
+        rows = c.execute("SELECT * FROM leads WHERE bot_id=? ORDER BY created_at DESC, id DESC LIMIT 300",
                          (bot_id,)).fetchall()
         out = []
         for r in rows:
@@ -242,7 +242,7 @@ def add_order(bot_id, tg_user_id, customer, phone, address, items, total):
 
 def list_orders(bot_id):
     with get_conn() as c:
-        rows = c.execute("SELECT * FROM orders WHERE bot_id=? ORDER BY created_at DESC LIMIT 300",
+        rows = c.execute("SELECT * FROM orders WHERE bot_id=? ORDER BY created_at DESC, id DESC LIMIT 300",
                          (bot_id,)).fetchall()
         out = []
         for r in rows:
@@ -271,7 +271,7 @@ def taken_slots(bot_id):
 
 def list_bookings(bot_id):
     with get_conn() as c:
-        rows = c.execute("SELECT * FROM bookings WHERE bot_id=? ORDER BY slot DESC LIMIT 300",
+        rows = c.execute("SELECT * FROM bookings WHERE bot_id=? ORDER BY slot DESC, id DESC LIMIT 300",
                          (bot_id,)).fetchall()
         return [dict(r) for r in rows]
 
@@ -352,12 +352,24 @@ def get_subscription(user_id):
         return d
 
 def activate_subscription(user_id, plan, days=30):
-    now = int(time.time()); exp = now + days * 86400
+    """يفعّل الاشتراك ويرجّع تاريخ الانتهاء.
+    التجديد المبكر على **نفس** الباقة يُضاف إلى المتبقّي بدل أن يلغيه (العميل
+    دفع عن 30 يوماً فيأخذها كاملة). تغيير الباقة أو اشتراك منتهٍ يبدأ من الآن."""
+    now = int(time.time())
+    base, started = now, now
+    if plan != "free":
+        with get_conn() as c:
+            r = c.execute("SELECT plan, started_at, expires_at FROM subscriptions WHERE user_id=?",
+                          (user_id,)).fetchone()
+        if r and r["plan"] == plan and r["expires_at"] and r["expires_at"] > now:
+            base = r["expires_at"]                      # مدّد من نهاية الفترة الحالية
+            started = r["started_at"] or now            # واحتفظ ببداية الاشتراك الأصلية
+    exp = base + days * 86400
     with get_conn() as c:
         c.execute("INSERT INTO subscriptions(user_id,plan,status,started_at,expires_at) VALUES(?,?, 'active',?,?) "
                   "ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan, status='active', "
                   "started_at=excluded.started_at, expires_at=excluded.expires_at",
-                  (user_id, plan, now, exp))
+                  (user_id, plan, started, exp))
     return exp
 
 # ---------- payments ----------
@@ -378,13 +390,17 @@ def set_payment_msg(pid, msg_id):
         c.execute("UPDATE payments SET admin_msg_id=? WHERE id=?", (msg_id, pid))
 
 def decide_payment(pid, status):
-    """يحدّث حالة الدفعة إن كانت لسه pending. يرجّع dict الدفعة أو None لو سبق البتّ فيها."""
+    """يحدّث حالة الدفعة إن كانت لسه pending. يرجّع dict الدفعة أو None لو سبق البتّ فيها.
+    **ذرّي:** التحديث المشروط (`AND status='pending'`) هو القفل نفسه — SQLite يسلسل
+    الكتابة، فطلبان متزامنان (gunicorn threads=4 / زر تليجرام + الويب معاً) لا يمكن
+    أن ينجحا معاً؛ الثاني يجد rowcount=0 فيرجّع None ولا يُفعَّل الاشتراك مرتين."""
     with get_conn() as c:
-        r = c.execute("SELECT * FROM payments WHERE id=?", (pid,)).fetchone()
-        if not r or r["status"] != "pending":
+        cur = c.execute("UPDATE payments SET status=?, decided_at=? WHERE id=? AND status='pending'",
+                        (status, int(time.time()), pid))
+        if cur.rowcount != 1:
             return None
-        c.execute("UPDATE payments SET status=?, decided_at=? WHERE id=?", (status, int(time.time()), pid))
-        return dict(r)
+        r = c.execute("SELECT * FROM payments WHERE id=?", (pid,)).fetchone()
+        return dict(r) if r else None
 
 def finalize_payment(pid, status):
     """قرار نهائي مشترك (ويب/بوت): يبتّ الدفعة ويفعّل الاشتراك عند الموافقة. ذرّي."""
@@ -406,9 +422,9 @@ def img_hash_seen(img_hash, exclude_id=None):
 def list_payments(user_id=None, limit=100):
     with get_conn() as c:
         if user_id:
-            rows = c.execute("SELECT * FROM payments WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (user_id, limit)).fetchall()
+            rows = c.execute("SELECT * FROM payments WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?", (user_id, limit)).fetchall()
         else:
-            rows = c.execute("SELECT * FROM payments ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+            rows = c.execute("SELECT * FROM payments ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
 
 def count_user_bots(user_id):
@@ -512,7 +528,7 @@ def revenue_daily(days=14):
 def all_pending_payments():
     with get_conn() as c:
         rows = c.execute("""SELECT p.*, u.username FROM payments p JOIN users u ON u.id=p.user_id
-                            WHERE p.status='pending' ORDER BY p.created_at DESC""").fetchall()
+                            WHERE p.status='pending' ORDER BY p.created_at DESC, p.id DESC""").fetchall()
         return [dict(r) for r in rows]
 
 def admin_chat_ids():
@@ -530,7 +546,7 @@ def create_bot_request(user_id, username, business, description, budget, contact
 
 def list_bot_requests(limit=200):
     with get_conn() as c:
-        rows = c.execute("SELECT * FROM bot_requests ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        rows = c.execute("SELECT * FROM bot_requests ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
 
 def count_new_bot_requests():

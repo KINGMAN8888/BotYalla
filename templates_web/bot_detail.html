@@ -9,9 +9,11 @@
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
     {% if bot.running %}
-      <a class="btn ghost sm" href="{{ url_for('bot_action', bot_id=bot.id, action='stop') }}">{{ icon('stop',14) }} {{ t('stop') }}</a>
+      <form method="post" action="{{ url_for('bot_action', bot_id=bot.id, action='stop') }}" style="display:inline;">
+        {{ csrf_field() }}<button class="btn ghost sm">{{ icon('stop',14) }} {{ t('stop') }}</button></form>
     {% else %}
-      <a class="btn green sm" href="{{ url_for('bot_action', bot_id=bot.id, action='start') }}">{{ icon('play',14) }} {{ t('start') }}</a>
+      <form method="post" action="{{ url_for('bot_action', bot_id=bot.id, action='start') }}" style="display:inline;">
+        {{ csrf_field() }}<button class="btn green sm">{{ icon('play',14) }} {{ t('start') }}</button></form>
     {% endif %}
     <a class="btn ghost sm" href="{{ url_for('analytics', bot_id=bot.id) }}">{{ icon('chart',14) }} {{ t('analytics') }}</a>
     {% if plan.broadcast %}
@@ -23,8 +25,9 @@
       <a class="btn ghost sm" href="{{ url_for('flow_builder', bot_id=bot.id) }}">{{ icon('flow',14) }} {{ t('flow_builder') }}</a>
     {% endif %}
     {% set del_msg = 'حذف البوت نهائياً؟' if lang=='ar' else 'Delete this bot permanently?' %}
-    <a class="btn red sm" href="{{ url_for('bot_action', bot_id=bot.id, action='delete') }}"
-       onclick="return confirm('{{ del_msg }}')">{{ icon('trash',14) }}</a>
+    <form method="post" action="{{ url_for('bot_action', bot_id=bot.id, action='delete') }}"
+          style="display:inline;" data-confirm="{{ del_msg }}">
+      {{ csrf_field() }}<button class="btn red sm">{{ icon('trash',14) }}</button></form>
   </div>
 </div>
 

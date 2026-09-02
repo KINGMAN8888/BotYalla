@@ -1,0 +1,225 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   BotYalla — نظام التصميم (Tailwind v4 theme tokens)
+   ========================================================================== */
+@theme {
+  --color-ob-0: #05070d;
+  --color-ob-1: #080b14;
+  --color-ob-2: #0b0f1a;
+
+  --color-ink: #f2f5fc;
+  --color-ink-2: #aeb9d4;
+  --color-ink-3: #7b87a8;
+
+  --color-au-violet: #7c6cf6;
+  --color-au-cyan: #22d3ee;
+  --color-au-teal: #2dd4a7;
+  --color-au-pink: #f472b6;
+
+  --font-sans: "Cairo", "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  --ease-silk: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* ------------------------------------------------------------ الأساسيات */
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+  body {
+    background: var(--color-ob-0);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-au-cyan);
+    outline-offset: 3px;
+    border-radius: 8px;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--color-au-violet) 45%, transparent);
+    color: #fff;
+  }
+}
+
+/* ------------------------------------------------------------ المرافق */
+@layer utilities {
+  /* زجاج متعدّد الطبقات مع حدّ متدرّج حقيقي 1px */
+  .glass {
+    position: relative;
+    background: linear-gradient(
+      165deg,
+      rgb(255 255 255 / 0.055),
+      rgb(255 255 255 / 0.03) 45%,
+      rgb(255 255 255 / 0.015)
+    );
+    backdrop-filter: blur(22px) saturate(150%);
+    -webkit-backdrop-filter: blur(22px) saturate(150%);
+    box-shadow:
+      inset 0 1px 0 0 rgb(255 255 255 / 0.07),
+      inset 0 -1px 0 0 rgb(0 0 0 / 0.35),
+      0 30px 70px -30px rgb(0 0 0 / 0.9);
+  }
+  .glass::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      150deg,
+      rgb(255 255 255 / 0.3),
+      rgb(255 255 255 / 0.05) 38%,
+      transparent 62%,
+      rgb(124 108 246 / 0.28)
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* بقعة ضوء تتبع المؤشّر */
+  .spot::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.45s var(--ease-silk);
+    background: radial-gradient(
+      460px circle at var(--mx, 50%) var(--my, 50%),
+      rgb(124 108 246 / 0.2),
+      rgb(34 211 238 / 0.07) 32%,
+      transparent 58%
+    );
+  }
+  .spot:hover::after {
+    opacity: 1;
+  }
+
+  /* حبيبات فيلمية تكسر مظهر التدرّج الاصطناعي */
+  .grain {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.45'/%3E%3C/svg%3E");
+  }
+
+  /* شبكة هندسية دقيقة */
+  .veil {
+    background-image:
+      linear-gradient(to right, rgb(255 255 255 / 0.028) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(255 255 255 / 0.028) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse 90% 55% at 50% 0%, #000 20%, transparent 78%);
+    -webkit-mask-image: radial-gradient(ellipse 90% 55% at 50% 0%, #000 20%, transparent 78%);
+  }
+
+  /* عنوان ضخم متدرّج متحرّك */
+  .hue {
+    background: linear-gradient(
+      100deg,
+      var(--color-au-violet),
+      var(--color-au-cyan) 45%,
+      var(--color-au-teal)
+    );
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    animation: hue-slide 9s var(--ease-silk) infinite alternate;
+  }
+  @keyframes hue-slide {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 100% 50%; }
+  }
+
+  /* أرقام جدولية للإحصاءات */
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* تتبّع الحروف: الإنجليزية تتحمّل تضييقاً أكبر من العربية */
+  .tight { letter-spacing: -0.045em; line-height: 0.99; }
+  html[dir="rtl"] .tight { letter-spacing: -0.02em; line-height: 1.12; }
+  .wide-cap { letter-spacing: 0.34em; text-transform: uppercase; }
+  html[dir="rtl"] .wide-cap { letter-spacing: 0.12em; }
+}
+
+/* ---------------------------------------------------- حقول الشفق المتحرّكة */
+@keyframes drift-a {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(9vw, 7vw, 0) scale(1.22); }
+}
+@keyframes drift-b {
+  0%   { transform: translate3d(0, 0, 0) scale(1.1); }
+  100% { transform: translate3d(-11vw, 10vw, 0) scale(0.88); }
+}
+@keyframes drift-c {
+  0%   { transform: translate3d(0, 0, 0) scale(0.9); }
+  100% { transform: translate3d(7vw, -9vw, 0) scale(1.18); }
+}
+.drift-a { animation: drift-a 26s var(--ease-silk) infinite alternate; }
+.drift-b { animation: drift-b 32s var(--ease-silk) infinite alternate; }
+.drift-c { animation: drift-c 38s var(--ease-silk) infinite alternate; }
+
+/* شريط منزلق لا نهائي */
+@keyframes slide-x {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.marquee-row { animation: slide-x 40s linear infinite; }
+.marquee-wrap:hover .marquee-row { animation-play-state: paused; }
+html[dir="rtl"] .marquee-row { animation-direction: reverse; }
+
+/* نبض نقطة "يعمل الآن" */
+@keyframes blip {
+  0%, 60%, 100% { opacity: 0.28; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-5px); }
+}
+.blip { animation: blip 1.3s ease-in-out infinite; }
+
+/* ------------------------------------------- احترام تقليل الحركة (إلزامي) */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .drift-a, .drift-b, .drift-c, .marquee-row, .hue { animation: none !important; }
+}
+
+/* ------------------------------------------------ الظهور التدريجي (CSS-first)
+   المحتوى ظاهر افتراضياً. الإخفاء يحدث فقط عندما نتأكّد أن JS يعمل (html.js)،
+   والحركة انتقال CSS لا حلقة رسوم — فلا تختفي الصفحة إن تعثّر أي شيء. */
+.rv { opacity: 1; }
+html.js .rv {
+  opacity: 0;
+  transform: translateY(34px);
+  transition:
+    opacity 0.95s var(--ease-silk),
+    transform 0.95s var(--ease-silk);
+}
+html.js .rv.in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  html.js .rv { opacity: 1 !important; transform: none !important; transition: none !important; }
+}
+
+/* الأداء: الطبقات المنجرفة تُرفَع للـ GPU وتُعزل، بلا filter:blur مكلف.
+   التدرّجات الشعاعية ناعمة أصلاً فلا حاجة لتمويه طبقة بحجم الشاشة كل إطار. */
+.drift-a, .drift-b, .drift-c {
+  will-change: transform;
+  backface-visibility: hidden;
+}
