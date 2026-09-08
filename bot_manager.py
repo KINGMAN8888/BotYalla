@@ -301,6 +301,13 @@ class BotManager:
                 n = db.purge_seen_msgs()
                 if n:
                     log.info("purged %s seen message ids", n)
+                # ملفات محادثات لم تكتمل: لا lead يشير إليها، وتبقى على القرص للأبد
+                import media_store
+                orphans = db.orphan_media()
+                if orphans:
+                    media_store.delete_files(orphans)
+                    db.drop_media([o["id"] for o in orphans])
+                    log.info("purged %s orphan media files", len(orphans))
             except Exception:
                 log.exception("housekeeping error")
             _time.sleep(INTERVAL)

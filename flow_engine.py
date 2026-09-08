@@ -72,7 +72,7 @@ async def handle_message(bot_row, channel, msg):
         return
 
     if msg["kind"] == "unsupported":
-        # صورة أو صوت أو موقع: لا نص فيها. حفظها كإجابة فارغة يقفز خطوة
+        # موقع أو جهة اتصال: لا نص ولا ملف. حفظها كإجابة فارغة يقفز خطوة
         # ويُفسد الـ lead — نطلب نصاً ونبقى في نفس الخطوة.
         db.touch_bot_user(bot_id, peer)
         await channel.send_text(peer, "📝 من فضلك أرسل إجابتك كنص.")
@@ -113,9 +113,25 @@ async def _on_input(bot_row, channel, peer, f, steps, state, msg):
         return await _finish(bot_row, channel, peer, f, data)
 
     step = steps[i]
+    stype = step.get("type")
     ans = msg["text"]
+
+    if stype == "media":
+        if msg["kind"] != "media":
+            await channel.send_text(peer, step.get("hint") or "📎 من فضلك أرسل الملف نفسه.")
+            return
+        ans = await _store_media(bot_row, channel, peer, msg)
+        if ans is None:
+            return                       # الرسالة أُرسلت للعميل داخل _store_media
+    elif msg["kind"] == "media":
+        # وسائط في خطوة نصية: نقبل التعليق إن وُجد، ولا نحفظ ملفاً لم يُطلب
+        # (القرص مورد محدود، وحفظ كل ما يصل بابُ إغراق).
+        if not ans:
+            await channel.send_text(peer, "📝 هذه الخطوة تحتاج إجابة نصية.")
+            return
+
     opts = step.get("options") or []
-    if step.get("type") == "buttons" and opts and ans not in opts:
+    if stype == "buttons" and opts and ans not in opts:
         # واتساب يعرض الخيارات الطويلة كقائمة مرقّمة، فنقبل الرقم كإجابة.
         if ans.strip().isdigit() and 1 <= int(ans.strip()) <= len(opts):
             ans = opts[int(ans.strip()) - 1]
@@ -126,6 +142,45 @@ async def _on_input(bot_row, channel, peer, f, steps, state, msg):
     data[step.get("var") or step.get("id")] = ans
     db.set_chat_state(bot_id, peer, i + 1, data)
     await _present(bot_row, channel, peer, f, steps, i + 1, data)
+
+
+MEDIA_ERRORS = {
+    "quota": "⚠️ انتهى حدّ الملفات المسموح لهذا الشهر. تواصل مع صاحب النشاط.",
+    "too_large": "⚠️ الملف كبير جداً — أرسل نسخة أصغر.",
+    "too_small": "⚠️ الملف صغير جداً أو فارغ.",
+    "type": "⚠️ نوع الملف غير مدعوم. أرسل صورة أو تسجيلاً صوتياً.",
+    "disk": "⚠️ تعذّر حفظ الملف الآن. حاول بعد قليل.",
+    "download": "⚠️ تعذّر تحميل الملف. أرسله مرة أخرى.",
+}
+
+
+async def _store_media(bot_row, channel, peer, msg):
+    """ينزّل الملف ويحفظه. يرجّع مرجعاً يُخزَّن في الـ lead، أو None بعد إبلاغ العميل."""
+    import media_store, plans
+    owner_id = bot_row["owner_id"]
+    owner = db.get_user(owner_id) or {}
+    sub = db.get_subscription(owner_id)
+    plan_id = sub["plan"] if sub and sub.get("status") == "active" else "free"
+    quota = media_store.quota_left(owner_id, owner.get("role", "user"), plan_id)
+
+    if quota is not None and quota <= 0:
+        await channel.send_text(peer, MEDIA_ERRORS["quota"])
+        log.warning("media quota exhausted for owner #%s", owner_id)
+        return None
+
+    data, mime = await channel.fetch_media(msg.get("media") or {})
+    if not data:
+        await channel.send_text(peer, MEDIA_ERRORS["download"])
+        return None
+
+    res = media_store.save(bot_row, peer, data, declared_mime=mime,
+                           caption=msg.get("text", ""), quota=quota)
+    if not res.get("ok"):
+        await channel.send_text(peer, MEDIA_ERRORS.get(res.get("reason"), MEDIA_ERRORS["disk"]))
+        return None
+
+    caption = (msg.get("text") or "").strip()
+    return f"media:{res['id']}" + (f" — {caption}" if caption else "")
 
 
 async def _present(bot_row, channel, peer, f, steps, i, data):
@@ -141,8 +196,11 @@ async def _present(bot_row, channel, peer, f, steps, i, data):
         return await _finish(bot_row, channel, peer, f, data)
 
     step = steps[i]
-    if step.get("type") == "buttons" and step.get("options"):
+    stype = step.get("type")
+    if stype == "buttons" and step.get("options"):
         await channel.send_buttons(peer, step.get("prompt", "اختر:"), step["options"])
+    elif stype == "media":
+        await channel.remove_keyboard(peer, step.get("prompt", "📎 أرسل الملف:"))
     else:
         await channel.remove_keyboard(peer, step.get("prompt", "اكتب:"))
 
@@ -151,7 +209,10 @@ async def _finish(bot_row, channel, peer, f, data):
     bot_id = bot_row["id"]
     cfg = _cfg_of(bot_row)
 
-    db.add_lead(bot_id, _peer_num(peer), data)
+    lead_id = db.add_lead(bot_id, _peer_num(peer), data)
+    # الملفات وصلت أثناء المحادثة قبل وجود الـ lead — تُربط به الآن،
+    # وما يبقى بلا lead هو محادثة لم تكتمل ويُنظَّف دورياً.
+    db.attach_media_to_lead(bot_id, peer, lead_id)
     db.clear_chat_state(bot_id, peer)
     await channel.remove_keyboard(peer, f.get("end_message", "✅ تم الاستلام، شكراً لك!"))
 

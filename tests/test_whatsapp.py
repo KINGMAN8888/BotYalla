@@ -34,11 +34,18 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual([m["text"] for m in msgs], ["أحمد", "0100"])
         self.assertEqual([m["id"] for m in msgs], ["m1", "m2"])
 
-    def test_media_is_flagged_not_silently_emptied(self):
+    def test_media_carries_a_reference_not_an_empty_string(self):
         msgs = self.ch.normalize_all(payload(
-            {"id": "m3", "from": "201001234567", "type": "image", "image": {"id": "x"}}))
+            {"id": "m3", "from": "201001234567", "type": "image",
+             "image": {"id": "x", "mime_type": "image/jpeg"}}))
+        self.assertEqual(msgs[0]["kind"], "media")
+        self.assertEqual(msgs[0]["media"]["ref"], "x")
+
+    def test_a_location_has_no_file_so_it_stays_unsupported(self):
+        msgs = self.ch.normalize_all(payload(
+            {"id": "m4", "from": "201001234567", "type": "location",
+             "location": {"latitude": 30, "longitude": 31}}))
         self.assertEqual(msgs[0]["kind"], "unsupported")
-        self.assertEqual(msgs[0]["media"], "image")
 
     def test_greeting_starts_the_flow(self):
         for word in ("مرحبا", "hi", "/start", "ابدأ"):

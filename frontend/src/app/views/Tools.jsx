@@ -29,6 +29,7 @@ export function FlowBuilder() {
   const TYPES = [
     { v: "question", l: t("step_q") },
     { v: "buttons",  l: t("step_b") },
+    { v: "media",    l: t("step_f") },
     { v: "message",  l: t("step_m") },
   ];
 
@@ -96,6 +97,12 @@ export function FlowBuilder() {
                            disabled={s.type !== "buttons"} placeholder="A, B, C" />
                   </Field>
                 </div>
+                {s.type === "media" && (
+                  <p className="mt-3 mb-0 text-[12.5px] leading-relaxed text-ink-3">
+                    <Icon name="image" size={13} className="me-1 inline align-[-2px] text-au-cyan" />
+                    {t("step_f_hint")}
+                  </p>
+                )}
               </motion.div>
             ))}
           </AnimatePresence>

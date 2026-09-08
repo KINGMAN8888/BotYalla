@@ -27,23 +27,57 @@ class TelegramChannel(Channel):
             return int(peer[3:])
         return int(peer)
 
+    def _media_of(self, msg):
+        """يستخرج (file_id, mime) من أول نوع وسائط موجود في الرسالة."""
+        if msg.photo:
+            # PhotoSize مرتّبة تصاعدياً — الأخيرة أعلى دقة
+            return msg.photo[-1].file_id, "image/jpeg"
+        for attr, mime in (("voice", "audio/ogg"), ("audio", ""), ("video", "video/mp4"),
+                           ("video_note", "video/mp4"), ("document", ""), ("sticker", "image/webp")):
+            obj = getattr(msg, attr, None)
+            if obj:
+                return obj.file_id, (getattr(obj, "mime_type", "") or mime)
+        return None, None
+
+    async def fetch_media(self, media):
+        ref = (media or {}).get("ref")
+        if not ref:
+            return None, None
+        try:
+            f = await self.bot.get_file(ref)
+            data = await f.download_as_bytearray()
+            return bytes(data), media.get("mime", "")
+        except Exception:
+            return None, None
+
     def normalize(self, update) -> dict:
         if not update or not update.effective_user:
             return None
         user = update.effective_user
         msg = update.message
-        text = msg.text.strip() if msg and msg.text else ""
-        
+        if not msg:
+            return None
+        text = msg.text.strip() if msg.text else ""
+
         kind = "text"
         if text.startswith("/start"):
             kind = "start"
         elif text.startswith("/cancel"):
             kind = "cancel"
 
-        return {
-            "id": str(msg.message_id) if msg else "",
+        out = {
+            "id": str(msg.message_id),
             "peer": f"tg:{user.id}",
             "text": text,
             "name": user.first_name or "",
-            "kind": kind
+            "kind": kind,
         }
+        if not text:
+            ref, mime = self._media_of(msg)
+            caption = (msg.caption or "").strip()
+            if ref:
+                out.update(kind="media", text=caption,
+                           media={"ref": ref, "mime": mime, "caption": caption})
+            else:
+                out["kind"] = "unsupported"    # موقع/جهة اتصال — لا ملف نحفظه
+        return out

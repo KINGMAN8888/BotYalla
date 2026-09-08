@@ -1,4 +1,4 @@
-import os, json, time, shutil, unittest
+import os, json, tempfile, time, shutil, unittest
 import database as db
 import app as A
 import bot_manager
@@ -22,6 +22,11 @@ class BotYallaE2ETest(unittest.TestCase):
         # حفظ مسار القاعدة الأصلي واستبداله
         cls.orig_db = db.DB_PATH
         db.DB_PATH = cls.db_path
+
+        # ومجلد الرفع كذلك — وإلا تراكمت إيصالات وهمية بين الحقيقية في uploads/
+        cls._tmp_uploads = tempfile.mkdtemp(prefix="botyalla-e2e-uploads-")
+        cls.orig_uploads = A.UPLOAD_DIR
+        A.UPLOAD_DIR = cls._tmp_uploads
         
         # إيقاف خيوط مدير البوتات
         bot_manager.manager.start = lambda: None
@@ -57,6 +62,8 @@ class BotYallaE2ETest(unittest.TestCase):
         import payments as pay
         pay.validate_image = cls.orig_validate_image
         db.DB_PATH = cls.orig_db
+        A.UPLOAD_DIR = cls.orig_uploads
+        shutil.rmtree(cls._tmp_uploads, ignore_errors=True)
         tg.urllib.request.urlopen = cls.orig_urlopen
         if os.path.exists(cls.db_path):
             os.remove(cls.db_path)

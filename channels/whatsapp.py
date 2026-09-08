@@ -126,6 +126,34 @@ class WhatsAppChannel(Channel):
             p["template"]["components"] = components
         return await self._post(p)
 
+    async def fetch_media(self, media):
+        """خطوتان تفرضهما Meta: المعرّف يعطي رابطاً صالحاً 5 دقائق فقط،
+        والرابط نفسه لا يُفتح إلا بترويسة Authorization. والوارد يبقى قابلاً
+        للتنزيل 7 أيام — لذلك ننزّل لحظة الوصول لا لاحقاً."""
+        ref = (media or {}).get("ref")
+        if not ref:
+            return None, None
+        auth = {"Authorization": f"Bearer {self.token}"}
+        try:
+            c = await _http()
+            meta = await c.get(f"{META_API}/{ref}",
+                               params={"phone_number_id": self.phone_id}, headers=auth)
+            if meta.status_code >= 400:
+                log.error("media lookup %s: %s", meta.status_code, meta.text[:300])
+                return None, None
+            info = meta.json()
+            url = info.get("url")
+            if not url:
+                return None, None
+            blob = await c.get(url, headers=auth)
+            if blob.status_code >= 400:
+                log.error("media download %s: %s", blob.status_code, blob.text[:300])
+                return None, None
+            return blob.content, info.get("mime_type") or media.get("mime", "")
+        except Exception:
+            log.exception("WhatsApp media fetch failed")
+            return None, None
+
     # ------------------------------------------------------------- الوارد
     START_WORDS = {"/start", "start", "بدء", "ابدأ", "مرحبا", "مرحباً", "السلام عليكم",
                    "hi", "hello", "hey"}
@@ -154,6 +182,8 @@ class WhatsAppChannel(Channel):
             log.exception("could not parse WhatsApp payload")
         return out
 
+    MEDIA_TYPES = ("image", "audio", "voice", "video", "document", "sticker")
+
     def _one(self, m, name):
         mtype = m.get("type")
         text = ""
@@ -165,11 +195,17 @@ class WhatsAppChannel(Channel):
             text = sub.get("title", "") or ""
         elif mtype == "button":       # ردّ زر قالب
             text = (m.get("button") or {}).get("text", "") or ""
-        else:
-            # صورة/صوت/موقع/ملف: لا نص. تمريرها كنص فارغ يحفظ إجابة فارغة
-            # ويقفز خطوة — نعلّمها unsupported ليردّ المحرك ويبقى في مكانه.
+        elif mtype in self.MEDIA_TYPES:
+            part = m.get(mtype) or {}
+            caption = part.get("caption", "") or ""
             return {"id": m.get("id", ""), "peer": f"wa:{m.get('from','')}",
-                    "text": "", "name": name, "kind": "unsupported", "media": mtype}
+                    "text": caption, "name": name, "kind": "media",
+                    "media": {"ref": part.get("id", ""), "mime": part.get("mime_type", ""),
+                              "caption": caption, "type": mtype}}
+        else:
+            # موقع/جهة اتصال/غيرها: لا نص ولا ملف نحفظه.
+            return {"id": m.get("id", ""), "peer": f"wa:{m.get('from','')}",
+                    "text": "", "name": name, "kind": "unsupported", "media_type": mtype}
 
         low = text.strip().lower()
         kind = "text"

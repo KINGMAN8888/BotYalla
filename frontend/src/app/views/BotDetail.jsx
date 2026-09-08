@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   BY, P, t, bi, Icon, Card, Btn, Field, Input, Textarea, Form, Grid, Stat,
-  Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num,
+  Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate,
 } from "../kit.jsx";
 
 /* ------------------------------------------------------ ضبط بالذكاء الاصطناعي */
@@ -167,6 +167,49 @@ function BookingEditor({ cfg }) {
         </div>
       </div>
     </>
+  );
+}
+
+/* -------------------------------------------------- ملف أرسله العميل */
+function MediaChip({ m, botId }) {
+  const url = `/bot/${botId}/media/${m.id}`;
+  const kb = m.size > 1024 * 1024
+    ? `${(m.size / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(m.size / 1024))} KB`;
+
+  if (m.kind === "image") {
+    return (
+      <a href={url} target="_blank" rel="noopener"
+         className="group relative block size-14 overflow-hidden rounded-lg no-underline
+                    shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]"
+         title={m.caption || kb}>
+        <img src={url} alt={m.caption || t("media_kind_image")}
+             className="size-full object-cover transition-transform duration-500
+                        group-hover:scale-110" loading="lazy" />
+      </a>
+    );
+  }
+
+  if (m.kind === "audio") {
+    // الصوت يُسمع في مكانه: تحميله ثم فتحه لسماع رسالة عميل احتكاك بلا داعٍ
+    return (
+      <span className="inline-flex items-center gap-2 rounded-lg bg-white/5 px-2 py-1"
+            title={m.caption || ""}>
+        <audio controls preload="none" src={url} className="h-8 max-w-[190px]" />
+        <span className="text-[11px] text-ink-3">{kb}</span>
+      </span>
+    );
+  }
+
+  const label = t(`media_kind_${m.kind}`) || t("media_kind_document");
+  return (
+    <a href={url} target="_blank" rel="noopener"
+       className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-2.5 py-1
+                  text-[12px] text-ink no-underline hover:bg-white/10"
+       title={m.caption || ""}>
+      <Icon name={m.kind === "video" ? "play" : "download"} size={13} className="text-au-cyan" />
+      {label} · <span className="text-ink-3">{kb}</span>
+    </a>
   );
 }
 
@@ -388,7 +431,7 @@ export default function BotDetail() {
         <DataCard icon="store" title={t("orders_h")} empty={t("no_orders")} rows={orders}
                   exportUrl={`/bot/${bot.id}/export/orders`}
                   head={[t("col_customer"), t("col_phone"), t("col_address"), t("col_total"), t("col_date")]}
-                  render={(o) => [o.customer, o.phone, o.address, `${num(o.total)} ${t("egp")}`, o.created_at]} />
+                  render={(o) => [o.customer, o.phone, o.address, `${num(o.total)} ${t("egp")}`, fmtDate(o.created_at)]} />
       )}
       {bot.template === "booking" && (
         <DataCard icon="calendar" title={t("bookings_h")} empty={t("no_bookings")} rows={bookings}
@@ -401,13 +444,16 @@ export default function BotDetail() {
                   exportUrl={`/bot/${bot.id}/export/leads`}
                   head={[t("field_name"), t("col_date")]}
                   render={(l) => [
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(l.data || {}).map(([k, v]) => (
-                        <span key={k} className="rounded-lg bg-white/5 px-2.5 py-1 text-[12px]">
-                          <b className="text-ink-3">{k}:</b> {String(v)}
-                        </span>
-                      ))}
-                    </div>, l.created_at]} />
+                    <div className="flex flex-wrap items-center gap-2">
+                      {Object.entries(l.data || {})
+                        .filter(([, v]) => !String(v).startsWith("media:"))
+                        .map(([k, v]) => (
+                          <span key={k} className="rounded-lg bg-white/5 px-2.5 py-1 text-[12px]">
+                            <b className="text-ink-3">{k}:</b> {String(v)}
+                          </span>
+                        ))}
+                      {(l.media || []).map((m) => <MediaChip key={m.id} m={m} botId={bot.id} />)}
+                    </div>, fmtDate(l.created_at)]} />
       )}
     </>
   );

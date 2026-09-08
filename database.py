@@ -182,6 +182,23 @@ def init_db():
             msg_id     TEXT PRIMARY KEY,
             created_at INTEGER NOT NULL
         );
+        -- وسائط العملاء (صور/صوت). الملف على القرص والسجل هنا.
+        -- lead_id يُملأ عند انتهاء الفلو؛ ما يبقى NULL هو ملف يتيم يُنظَّف لاحقاً.
+        CREATE TABLE IF NOT EXISTS media(
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id      INTEGER NOT NULL,
+            owner_id    INTEGER NOT NULL,
+            peer        TEXT NOT NULL,
+            lead_id     INTEGER,
+            kind        TEXT NOT NULL,        -- image | audio | video | document
+            mime        TEXT,
+            size        INTEGER NOT NULL DEFAULT 0,
+            fname       TEXT NOT NULL,        -- اسم مولَّد داخلياً، لا اسم العميل
+            caption     TEXT,
+            created_at  INTEGER NOT NULL,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_media_bot ON media(bot_id, created_at);
         CREATE TABLE IF NOT EXISTS events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             bot_id INTEGER NOT NULL,
@@ -367,9 +384,11 @@ def log_event(bot_id, kind, value=0):
 # ---------- leads / orders / bookings ----------
 def add_lead(bot_id, tg_user_id, data: dict):
     with get_conn() as c:
-        c.execute("INSERT INTO leads(bot_id,tg_user_id,data_json,created_at) VALUES(?,?,?,?)",
-                  (bot_id, tg_user_id, json.dumps(data, ensure_ascii=False), int(time.time())))
+        cur = c.execute("INSERT INTO leads(bot_id,tg_user_id,data_json,created_at) VALUES(?,?,?,?)",
+                        (bot_id, tg_user_id, json.dumps(data, ensure_ascii=False), int(time.time())))
+        lead_id = cur.lastrowid
     log_event(bot_id, "lead")
+    return lead_id
 
 def list_leads(bot_id):
     with get_conn() as c:
@@ -381,6 +400,14 @@ def list_leads(bot_id):
             try: d["data"] = json.loads(d["data_json"] or "{}")
             except Exception: d["data"] = {}
             out.append(d)
+        # ملفات كل lead مرة واحدة بدل استعلام لكل صف
+        by_lead = {}
+        for m in c.execute("SELECT id,lead_id,kind,mime,size,caption FROM media"
+                           " WHERE bot_id=? AND lead_id IS NOT NULL ORDER BY id",
+                           (bot_id,)).fetchall():
+            by_lead.setdefault(m["lead_id"], []).append(dict(m))
+        for d in out:
+            d["media"] = by_lead.get(d["id"], [])
         return out
 
 def add_order(bot_id, tg_user_id, customer, phone, address, items, total):
@@ -1133,6 +1160,52 @@ def mark_msg_seen(msg_id):
         cur = c.execute("INSERT OR IGNORE INTO seen_msgs(msg_id,created_at) VALUES(?,?)",
                         (str(msg_id), int(time.time())))
         return cur.rowcount == 1
+
+# ---------- وسائط العملاء ----------
+def add_media(bot_id, owner_id, peer, kind, mime, size, fname, caption=""):
+    with get_conn() as c:
+        cur = c.execute(
+            "INSERT INTO media(bot_id,owner_id,peer,kind,mime,size,fname,caption,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
+            (bot_id, owner_id, peer, kind, mime, size, fname, caption, int(time.time())))
+        return cur.lastrowid
+
+def get_media(media_id, bot_id=None):
+    q = "SELECT * FROM media WHERE id=?"
+    args = [media_id]
+    if bot_id is not None:                 # الملكية تُفرض في الاستعلام لا بعده
+        q += " AND bot_id=?"
+        args.append(bot_id)
+    with get_conn() as c:
+        r = c.execute(q, args).fetchone()
+        return dict(r) if r else None
+
+def attach_media_to_lead(bot_id, peer, lead_id):
+    """يربط ما رفعه العميل في هذه المحادثة بالـ lead الناتج عنها."""
+    with get_conn() as c:
+        c.execute("UPDATE media SET lead_id=? WHERE bot_id=? AND peer=? AND lead_id IS NULL",
+                  (lead_id, bot_id, peer))
+
+def media_count_this_month(owner_id):
+    with get_conn() as c:
+        return c.execute(
+            "SELECT COUNT(*) FROM media WHERE owner_id=? AND created_at >= ?",
+            (owner_id, int(time.mktime(time.strptime(time.strftime("%Y-%m-01"), "%Y-%m-%d"))))
+        ).fetchone()[0]
+
+def orphan_media(max_age_seconds=7 * 24 * 3600):
+    """ملفات وصلت ولم يكتمل الفلو الذي كانت جزءاً منه — لا يشير إليها شيء."""
+    with get_conn() as c:
+        rows = c.execute("SELECT id, fname FROM media WHERE lead_id IS NULL AND created_at < ?",
+                         (int(time.time()) - int(max_age_seconds),)).fetchall()
+        return [dict(r) for r in rows]
+
+def drop_media(ids):
+    if not ids:
+        return 0
+    with get_conn() as c:
+        cur = c.execute(f"DELETE FROM media WHERE id IN ({','.join('?' * len(ids))})", list(ids))
+        return cur.rowcount
 
 def purge_seen_msgs(max_age_seconds=3 * 24 * 3600):
     with get_conn() as c:

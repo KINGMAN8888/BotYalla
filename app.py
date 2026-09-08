@@ -34,6 +34,7 @@ import templates_bot as T
 import tg_helpers as tg
 from channels.whatsapp import verify_credentials as wa_verify
 import channels.wa_templates as WT
+import media_store
 from bot_manager import WA_WINDOW
 import ai_agent as ai
 import i18n
@@ -66,7 +67,11 @@ app.config.update(
     MAX_CONTENT_LENGTH=10 * 1024 * 1024,   # حد أقصى 10MB للطلب (حماية رفع الملفات)
 )
 
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+# BOTYALLA_UPLOADS يسمح للاختبارات بالكتابة في مجلد مؤقت — بدونه تتراكم
+# ملفات وهمية بين إيصالات الدفع الحقيقية، كما حدث فعلاً.
+UPLOAD_DIR = os.environ.get(
+    "BOTYALLA_UPLOADS",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ---------- حماية CSRF (خفيفة، بدون مكتبات) ----------
@@ -452,7 +457,10 @@ def flow_builder(bot_id):
         prompts = request.form.getlist("s_prompt")
         vars_ = request.form.getlist("s_var")
         opts = request.form.getlist("s_options")
+        STEP_TYPES = ("question", "buttons", "message", "media")
         for i, t in enumerate(types):
+            if t not in STEP_TYPES:      # نوع غير معروف يجعل المحرك يعامله كسؤال نصي
+                t = "question"
             prompt = (prompts[i] if i < len(prompts) else "").strip()
             if not prompt: continue
             step = {"id": f"s{i}", "type": t, "prompt": prompt,
@@ -1046,6 +1054,28 @@ def admin_payment_screenshot(pid):
     if not os.path.exists(os.path.join(UPLOAD_DIR, fname)):
         abort(404)
     return send_from_directory(UPLOAD_DIR, fname)
+
+@app.route("/bot/<int:bot_id>/media/<int:media_id>")
+@login_required
+def bot_media(bot_id, media_id):
+    """ملفات العملاء خاصة: خارج static/ وتُقدَّم فقط لمالك البوت.
+    الملكية مفروضة في الاستعلام نفسه (bot_id شرط) لا بفحص لاحق."""
+    _owned(bot_id)
+    m = db.get_media(media_id, bot_id=bot_id)
+    if not m:
+        abort(404)
+    from werkzeug.utils import secure_filename as _sf
+    fname = _sf(m["fname"])
+    if not os.path.exists(media_store.path_of(fname)):
+        abort(404)
+    # النوع من سجلّنا (المستنتج من بايتات الملف) لا من ترويسة أرسلها أحد.
+    # الصور والصوت تُعرض في مكانها؛ ما عداها يُنزَّل ولا يُفتح داخل نطاقنا.
+    inline = m["kind"] in ("image", "audio", "video")
+    resp = send_from_directory(media_store.BASE_DIR, fname, mimetype=m.get("mime"),
+                               as_attachment=not inline)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
 
 @app.route("/bot/<int:bot_id>/sync-telegram", methods=["POST"])
 @login_required

@@ -39,10 +39,11 @@
 | `icons.py` | مجموعة أيقونات SVG (خطية). `icon('name', size)` |
 
 ## 2) قاعدة البيانات (جداول SQLite)
-`users` · `settings` · `bots` · `bot_users` · `leads` · `orders` · `bookings` · `subscriptions` · `payments` · `platform` · `bot_requests` · `events` · `chat_state` · `usage_msgs` · `seen_msgs` · `plan_overrides` · `promos` · `promo_uses` · `affiliates` · `referrals` · `reminder_log`
+`users` · `settings` · `bots` · `bot_users` · `leads` · `orders` · `bookings` · `subscriptions` · `payments` · `platform` · `bot_requests` · `events` · `chat_state` · `usage_msgs` · `seen_msgs` · `media` · `plan_overrides` · `promos` · `promo_uses` · `affiliates` · `referrals` · `reminder_log`
 
 - **`chat_state`**: موضع كل عميل في الفلو. **لا تُعِد حالة المحادثة إلى `ctx.user_data`** — الذاكرة تضيع مع كل إعادة تشغيل، وواتساب بلا حالة أصلاً.
 - **`usage_msgs`**: عدّاد الرسائل الشهري لكل بوت. **`seen_msgs`**: منع تكرار معالجة ويبهوك واتساب.
+- **`media`**: وسائط العملاء. الملف على القرص في `uploads/media/` والسجل هنا؛ `lead_id` يُملأ عند انتهاء الفلو، وما يبقى NULL يُنظَّف بعد 7 أيام.
 
 - **الهجرات (Migrations):** تتم داخل `database._migrate(c)` المستدعى في نهاية `init_db()`. لأي عمود جديد على جدول قائم: أضِفه في تعريف `CREATE TABLE` **و** أضِف `ALTER TABLE ... ADD COLUMN` داخل `_migrate` (احرس بـ `if "col" not in cols`). هكذا لا تنكسر قواعد البيانات القديمة.
 - **المستخدم رقم 1 = admin دائماً** (مقفول، لا يُخفّض).
@@ -107,13 +108,16 @@
   - **stub لاستدعاءات إعداد البوت:** `tg._tg_post = lambda *a, **k: (True, "OK")`.
   - **stub للـ AI:** `ai_agent._call = lambda *a: json.dumps({...})`.
   - **CSRF في الاختبار:** اقرأ التوكن من الجلسة: `with c.session_transaction() as s: token = s.get("_csrf")` وأرسله في الفورم (`csrf_token`) أو الترويسة (`X-CSRF-Token`).
-- **🔴 لا تختبر على `botyalla.db` أبداً.** اضبط `BOTYALLA_DB` **قبل** استيراد `database`
-  أو `app` — الاستيراد يقرأ المتغيّر مرة واحدة. سكربت اختبار سابق لم يفعل ذلك فكتب
-  أسراراً وحسابات وهمية في قاعدة الإنتاج.
+- **🔴 لا تختبر على `botyalla.db` ولا على `uploads/` أبداً.** اضبط `BOTYALLA_DB`
+  و`BOTYALLA_UPLOADS` **قبل** استيراد `database` أو `app` أو `media_store` —
+  الاستيراد يقرأ المتغيّرين مرة واحدة. سكربتات سابقة لم تفعل، فكتبت أسراراً وحساباً
+  وهمياً في قاعدة الإنتاج و12 إيصال دفع وهمياً بين الإيصالات الحقيقية.
 - **قالب اختبار سريع:**
   ```python
   import os, tempfile
-  os.environ["BOTYALLA_DB"] = os.path.join(tempfile.mkdtemp(), "t.db")   # قبل أي استيراد
+  _tmp = tempfile.mkdtemp()                                   # قبل أي استيراد
+  os.environ["BOTYALLA_DB"] = os.path.join(_tmp, "t.db")
+  os.environ["BOTYALLA_UPLOADS"] = _tmp
   import json, database as db, app as A, tg_helpers as tg
   A.bootstrap()
   c = A.app.test_client()
@@ -125,7 +129,7 @@
   ```
 - **مجموعات الاختبار في المستودع** — شغّلها كلها قبل التسليم:
   ```bash
-  python tests/test_flow.py && python tests/test_webhook.py && python tests/test_whatsapp.py && python tests/test_wa_templates.py && python tests/test_wa_integration.py && python test_full.py
+  python tests/test_flow.py && python tests/test_webhook.py && python tests/test_whatsapp.py && python tests/test_wa_templates.py && python tests/test_media.py && python tests/test_wa_media.py && python tests/test_wa_integration.py && python test_full.py
   ```
 - **حد أدنى قبل التسليم:** كل الصفحات ترندر 200 في اللغتين (`/lang/ar` ثم `/lang/en`) + السيناريو الذي عدّلته يعمل.
 - **لا OCR محلياً على ويندوز** — طبيعي؛ الفحص الآلي يظهر «غير متاح، راجع الصورة يدوياً» (يعمل OCR على السيرفر لأن `deploy/hostinger_deploy.sh` يثبّت tesseract).
@@ -144,6 +148,11 @@
   `bot_manager._wa_channel`). كل رسالة مدفوعة، وبلا حدّ قد تتجاوز فاتورة عميل واحد اشتراكه.
 - ❌ **لا تبثّ على واتساب خارج نافذة الـ24 ساعة.** المخالفة تُقيّد الرقم لا الرسالة.
   البثّ يمرّ بـ `db.list_bot_peers(bot_id, within_seconds=WA_WINDOW)`.
+- ❌ **لا تحدّد نوع ملف وارد من ترويسة المُرسِل.** `media_store._sniff` يقرأ البايتات؛
+  الرجوع إلى النوع المُعلَن عند فشل الكشف يُلغي الفحص كله. افشل مغلقاً.
+- ❌ **لا تضع وسائط العملاء في `static/`.** تُقدَّم عبر `/bot/<id>/media/<mid>` وحده،
+  والملكية شرط في استعلام `db.get_media(mid, bot_id=...)` لا فحص بعده.
+- ❌ **لا تحفظ ملفاً بلا حصة.** `media_store.save(..., quota=...)` — القرص مورد محدود.
 - ❌ **لا تخلط WABA ID بـ Phone Number ID.** القوالب على الأول والإرسال على الثاني،
   والرقمان متشابهان. أي WABA يُحفظ يجب أن يمرّ بـ `WT.verify_waba` أولاً.
 - ❌ **لا تجعل `/wh/whatsapp` يفشل مفتوحاً.** المسار مستثنى من CSRF، فالتوقيع حارسه الوحيد:
