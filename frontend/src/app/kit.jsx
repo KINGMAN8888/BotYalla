@@ -197,8 +197,12 @@ export function Counter({ value, decimals = 0 }) {
       const s = setTimeout(() => setN(value), reduce ? 0 : 1600);
       return () => clearTimeout(s);
     }
-    const c = animate(0, value, { duration: 1.2, ease: [0.16, 1, 0.3, 1], onUpdate: setN });
-    return () => c.stop();
+    const c = animate(0, value, { duration: 1.2, ease: [0.16, 1, 0.3, 1],
+                                  onUpdate: setN, onComplete: () => setN(value) });
+    // rAF يتوقف في تبويب مخفي فيتجمّد العدّاد على رقم جزئي — وهو رقم خاطئ
+    // يقرأه المستخدم كإحصائية. setTimeout يُبطّأ في الخلفية لكنه يعمل.
+    const s = setTimeout(() => setN(value), 1600);
+    return () => { c.stop(); clearTimeout(s); };
   }, [inView, value, reduce]);
   return <span ref={ref} className="tnum">{decimals ? n.toFixed(decimals) : num(Math.round(n))}</span>;
 }

@@ -1,4 +1,7 @@
 python-telegram-bot==21.6
+# WhatsApp Cloud API — نستدعيه مباشرة لا كتبعية عابرة من python-telegram-bot.
+# بلا سقف: PTB نفسه يقيّده بـ ~=0.27، وتثبيت رقم مخالف هنا يكسر التثبيت.
+httpx>=0.27
 Flask==3.0.3
 Werkzeug==3.0.3
 gunicorn==22.0.0

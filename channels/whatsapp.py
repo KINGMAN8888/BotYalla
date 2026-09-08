@@ -1,126 +1,185 @@
+"""قناة واتساب — WhatsApp Cloud API من Meta.
+
+فروق جوهرية عن تليجرام تحكم كل ما في هذا الملف:
+· كل رسالة صادرة **مدفوعة** — لذلك كل إرسال يمرّ بعدّاد الاستهلاك.
+· لا مراسلة حرّة بعد 24 ساعة من آخر رسالة للعميل — والمخالفة تُقيّد الرقم.
+· 3 أزرار كحد أقصى، وعنوان الزر 20 حرفاً."""
+import asyncio, json, logging
 import httpx
-import json
-import logging
 from .base import Channel
 
 log = logging.getLogger("whatsapp_channel")
-META_API = "https://graph.facebook.com/v19.0"
+META_API = "https://graph.facebook.com/v20.0"
+TIMEOUT = 15
+
+# عميل واحد مشترك: فتح Pool جديد لكل رسالة يعني اتصال TLS جديد كل مرة.
+_client = None
+_client_lock = asyncio.Lock()
+
+async def _http():
+    global _client
+    if _client is None or _client.is_closed:
+        async with _client_lock:
+            if _client is None or _client.is_closed:
+                _client = httpx.AsyncClient(timeout=TIMEOUT)
+    return _client
+
+
+def verify_credentials(phone_id, token):
+    """يتحقّق أن Phone Number ID والتوكن صالحان معاً — نظير tg.validate_token.
+    يمنع إنشاء بوت ميت بسبب خطأ نسخ أو توكن منتهٍ. متزامنة: تُستدعى من Flask."""
+    phone_id = (phone_id or "").strip()
+    token = (token or "").strip()
+    if not phone_id.isdigit():
+        return {"ok": False, "error": "Phone Number ID أرقام فقط."}
+    if not token:
+        return {"ok": False, "error": "Access Token مفقود."}
+    try:
+        with httpx.Client(timeout=TIMEOUT) as c:
+            r = c.get(f"{META_API}/{phone_id}",
+                      params={"fields": "display_phone_number,verified_name,quality_rating"},
+                      headers={"Authorization": f"Bearer {token}"})
+        data = r.json()
+    except Exception as e:
+        return {"ok": False, "error": f"تعذّر الاتصال بـ Meta: {e}"}
+    if r.status_code != 200:
+        err = (data.get("error") or {}).get("message") or f"HTTP {r.status_code}"
+        return {"ok": False, "error": err}
+    return {"ok": True,
+            "number": data.get("display_phone_number", ""),
+            "name": data.get("verified_name", ""),
+            "quality": data.get("quality_rating", "")}
+
 
 class WhatsAppChannel(Channel):
-    def __init__(self, phone_id: str, token: str):
+    def __init__(self, phone_id, token, on_send=None):
+        """on_send: دالة async تُستدعى قبل كل إرسال — تحجز رسالة من رصيد الباقة
+        وتُرجع False لمنع الإرسال عند تجاوز الحدّ."""
         self.phone_id = phone_id
         self.token = token
+        self.on_send = on_send
 
-    async def _post(self, payload: dict):
-        url = f"{META_API}/{self.phone_id}/messages"
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json"
-        }
-        async with httpx.AsyncClient() as client:
-            try:
-                r = await client.post(url, json=payload, headers=headers, timeout=10)
-                r.raise_for_status()
-                return r.json()
-            except Exception as e:
-                log.error(f"WhatsApp API error: {e}")
+    async def _post(self, payload):
+        if self.on_send is not None and (await self.on_send()) is False:
+            log.warning("send blocked for phone_id %s: monthly limit reached", self.phone_id)
+            return None
+        try:
+            c = await _http()
+            r = await c.post(f"{META_API}/{self.phone_id}/messages", json=payload,
+                             headers={"Authorization": f"Bearer {self.token}",
+                                      "Content-Type": "application/json"})
+            if r.status_code >= 400:
+                # نص خطأ Meta هو الوحيد الذي يفسّر سبب الرفض (نافذة، قالب، توكن)
+                log.error("WhatsApp API %s: %s", r.status_code, r.text[:400])
                 return None
+            return r.json()
+        except Exception:
+            log.exception("WhatsApp API call failed")
+            return None
 
-    def _extract_peer(self, peer: str) -> str:
-        if peer.startswith("wa:"):
-            return peer[3:]
-        return peer
+    def _to(self, peer):
+        return peer[3:] if peer.startswith("wa:") else peer
 
-    async def send_text(self, peer: str, text: str):
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": self._extract_peer(peer),
-            "type": "text",
-            "text": {"preview_url": False, "body": text}
+    def _base(self, peer, kind):
+        return {"messaging_product": "whatsapp", "recipient_type": "individual",
+                "to": self._to(peer), "type": kind}
+
+    async def send_text(self, peer, text):
+        p = self._base(peer, "text")
+        p["text"] = {"preview_url": False, "body": text}
+        return await self._post(p)
+
+    async def send_buttons(self, peer, text, options):
+        # أكثر من 3 خيارات أو عنوان أطول من 20 حرفاً: واتساب يرفض أو يقتطع،
+        # والاقتطاع يكسر مطابقة الإجابة بالخيار. نعرضها قائمة مرقّمة بدل ذلك،
+        # والمحرك يقبل الرقم كإجابة (flow_engine._on_input).
+        options = [str(o) for o in (options or [])]
+        if len(options) > 3 or any(len(o) > 20 for o in options):
+            body = text + "\n\n" + "\n".join(f"{i+1}. {o}" for i, o in enumerate(options))
+            return await self.send_text(peer, body)
+
+        p = self._base(peer, "interactive")
+        p["interactive"] = {
+            "type": "button",
+            "body": {"text": text},
+            "action": {"buttons": [{"type": "reply", "reply": {"id": f"btn_{i}", "title": o}}
+                                   for i, o in enumerate(options)]},
         }
-        return await self._post(payload)
+        return await self._post(p)
 
-    async def send_buttons(self, peer: str, text: str, options: list):
-        # واتساب: 3 أزرار كحد أقصى، وعنوان الزر 20 حرفاً. أي خيار أطول
-        # سيُقتطع ولن يطابق نص الإجابة المتوقّع، فنعرض القائمة كنص بدلاً منه.
-        if len(options) > 3 or any(len(str(o)) > 20 for o in options):
-            txt = text + "\n\n" + "\n".join(f"{i+1}. {o}" for i, o in enumerate(options))
-            return await self.send_text(peer, txt)
-
-        buttons = []
-        for i, opt in enumerate(options):
-            buttons.append({
-                "type": "reply",
-                "reply": {"id": f"btn_{i}", "title": str(opt)}
-            })
-
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": self._extract_peer(peer),
-            "type": "interactive",
-            "interactive": {
-                "type": "button",
-                "body": {"text": text},
-                "action": {"buttons": buttons}
-            }
-        }
-        return await self._post(payload)
-
-    async def send_image(self, peer: str, url: str, caption: str = None):
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": self._extract_peer(peer),
-            "type": "image",
-            "image": {"link": url}
-        }
+    async def send_image(self, peer, url, caption=None):
+        p = self._base(peer, "image")
+        p["image"] = {"link": url}
         if caption:
-            payload["image"]["caption"] = caption
-        return await self._post(payload)
+            p["image"]["caption"] = caption
+        return await self._post(p)
 
-    async def remove_keyboard(self, peer: str, text: str):
-        # WhatsApp doesn't have a persistent keyboard to remove.
+    async def remove_keyboard(self, peer, text):
+        # لا لوحة مفاتيح دائمة في واتساب — مجرد نص.
         return await self.send_text(peer, text)
 
-    def normalize(self, raw) -> dict:
-        """
-        يحوّل رسالة واردة من Webhook الخاصة بـ Meta إلى الهيكل الموحد.
-        """
+    async def send_template(self, peer, name, lang="ar", components=None):
+        """القالب المعتمد هو الطريقة الوحيدة لبدء محادثة خارج نافذة الـ24 ساعة."""
+        p = self._base(peer, "template")
+        p["template"] = {"name": name, "language": {"code": lang}}
+        if components:
+            p["template"]["components"] = components
+        return await self._post(p)
+
+    # ------------------------------------------------------------- الوارد
+    START_WORDS = {"/start", "start", "بدء", "ابدأ", "مرحبا", "مرحباً", "السلام عليكم",
+                   "hi", "hello", "hey"}
+    CANCEL_WORDS = {"/cancel", "cancel", "الغاء", "إلغاء", "توقف", "stop"}
+
+    def normalize_all(self, raw):
+        """يحوّل payload الويبهوك إلى قائمة رسائل موحّدة.
+        Meta قد ترسل أكثر من رسالة في الدفعة الواحدة — تجاهل الباقي يفقد إجابات."""
+        out = []
         try:
-            val = raw["entry"][0]["changes"][0]["value"]
-            if "messages" not in val or not val["messages"]:
-                return None
-            msg = val["messages"][0]
-            peer = f"wa:{msg['from']}"
-            
-            text = ""
-            if msg.get("type") == "text":
-                text = msg["text"]["body"]
-            elif msg.get("type") == "interactive":
-                inter = msg["interactive"]
-                if inter["type"] == "button_reply":
-                    text = inter["button_reply"]["title"]
-                elif inter["type"] == "list_reply":
-                    text = inter["list_reply"]["title"]
+            for entry in raw.get("entry", []):
+                for change in entry.get("changes", []):
+                    val = change.get("value") or {}
+                    msgs = val.get("messages") or []
+                    if not msgs:
+                        continue          # statuses / تحديث تسليم — ليس وارداً
+                    name = ""
+                    contacts = val.get("contacts") or []
+                    if contacts:
+                        name = (contacts[0].get("profile") or {}).get("name", "") or ""
+                    for m in msgs:
+                        n = self._one(m, name)
+                        if n:
+                            out.append(n)
+        except (AttributeError, KeyError, IndexError, TypeError):
+            log.exception("could not parse WhatsApp payload")
+        return out
 
-            name = ""
-            if "contacts" in val and val["contacts"]:
-                name = val["contacts"][0].get("profile", {}).get("name", "")
+    def _one(self, m, name):
+        mtype = m.get("type")
+        text = ""
+        if mtype == "text":
+            text = (m.get("text") or {}).get("body", "") or ""
+        elif mtype == "interactive":
+            inter = m.get("interactive") or {}
+            sub = inter.get(inter.get("type") or "", {})
+            text = sub.get("title", "") or ""
+        elif mtype == "button":       # ردّ زر قالب
+            text = (m.get("button") or {}).get("text", "") or ""
+        else:
+            # صورة/صوت/موقع/ملف: لا نص. تمريرها كنص فارغ يحفظ إجابة فارغة
+            # ويقفز خطوة — نعلّمها unsupported ليردّ المحرك ويبقى في مكانه.
+            return {"id": m.get("id", ""), "peer": f"wa:{m.get('from','')}",
+                    "text": "", "name": name, "kind": "unsupported", "media": mtype}
 
-            kind = "text"
-            text_lower = text.strip().lower()
-            if text_lower in ("/start", "start", "مرحبا", "hi", "hello"):
-                kind = "start"
-            elif text_lower in ("/cancel", "cancel", "الغاء", "إلغاء"):
-                kind = "cancel"
+        low = text.strip().lower()
+        kind = "text"
+        if low in self.START_WORDS:
+            kind = "start"
+        elif low in self.CANCEL_WORDS:
+            kind = "cancel"
+        return {"id": m.get("id", ""), "peer": f"wa:{m.get('from','')}",
+                "text": text.strip(), "name": name, "kind": kind}
 
-            return {
-                "peer": peer,
-                "text": text,
-                "name": name,
-                "kind": kind
-            }
-        except (KeyError, IndexError, TypeError):
-            return None
+    def normalize(self, raw):
+        msgs = self.normalize_all(raw)
+        return msgs[0] if msgs else None

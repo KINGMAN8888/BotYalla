@@ -13,13 +13,54 @@ log = logging.getLogger("bot_manager")
 
 WA_WINDOW = 24 * 3600     # نافذة خدمة العملاء في واتساب
 
+def _split_wa_payload(payload):
+    """يفكّ الـ payload إلى (phone_number_id, [رسائل موحّدة]).
+    الدفعة الواحدة قد تحمل رسائل لأكثر من رقم — معالجة الأولى فقط تفقد الباقي."""
+    from channels.whatsapp import WhatsAppChannel
+    out = []
+    try:
+        for entry in (payload or {}).get("entry", []):
+            for change in entry.get("changes", []):
+                val = change.get("value") or {}
+                if not val.get("messages"):
+                    continue
+                phone_id = (val.get("metadata") or {}).get("phone_number_id")
+                if not phone_id:
+                    continue
+                msgs = WhatsAppChannel(phone_id, "").normalize_all(
+                    {"entry": [{"changes": [{"value": val}]}]})
+                if msgs:
+                    out.append((phone_id, msgs))
+    except (AttributeError, TypeError):
+        log.exception("malformed WhatsApp payload")
+    return out
+
+def wa_limit_for(owner_id):
+    """حدّ الرسائل الصادرة شهرياً لصاحب البوت. None = بلا حدّ (الأدمن والدعم)."""
+    u = db.get_user(owner_id)
+    if u and u.get("role") in ("admin", "support"):
+        return None
+    sub = db.get_subscription(owner_id)
+    pid = sub["plan"] if sub and sub.get("status") == "active" else "free"
+    return plans.wa_limit(pid)
+
 def _wa_channel(row):
-    """يبني قناة واتساب من صف البوت. التوكن مخزّن كـ wa:<phone_number_id>."""
+    """يبني قناة واتساب من صف البوت. التوكن مخزّن كـ wa:<phone_number_id>.
+    كل إرسال يمرّ بعدّاد الاستهلاك أولاً — واتساب مدفوع لكل رسالة."""
     from channels.whatsapp import WhatsAppChannel
     cfg = json.loads(row["config_json"] or "{}")
     token = row["token"] or ""
     phone_id = token[3:] if token.startswith("wa:") else token
-    return WhatsAppChannel(phone_id, cfg.get("wa_token", ""))
+    bot_id, owner_id = row["id"], row["owner_id"]
+    limit = wa_limit_for(owner_id)
+
+    async def guard():
+        if db.try_consume_msg(bot_id, owner_id, limit):
+            return True
+        await manager._warn_wa_limit(row, owner_id, limit)
+        return False
+
+    return WhatsAppChannel(phone_id, cfg.get("wa_token", ""), on_send=guard)
 
 class BotManager:
     def __init__(self):
@@ -212,8 +253,11 @@ class BotManager:
                 n = db.purge_stale_chat_state()
                 if n:
                     log.info("purged %s stale chat states", n)
+                n = db.purge_seen_msgs()
+                if n:
+                    log.info("purged %s seen message ids", n)
             except Exception:
-                log.exception("chat_state purge error")
+                log.exception("housekeeping error")
             _time.sleep(INTERVAL)
 
     def _send_reminder_cycle(self):
@@ -280,6 +324,27 @@ class BotManager:
                 log.info("expired reminder sent for user #%s", sub["user_id"])
 
     # ---- تكامل واتساب ----
+    async def _warn_wa_limit(self, row, owner_id, limit):
+        """ينبّه صاحب البوت والأدمن مرة واحدة في الشهر عند نفاد الرصيد.
+        بدون هذا يصمت البوت فجأة ولا يعرف أحد لماذا."""
+        month = _time.strftime("%Y-%m")
+        cfg = json.loads(row["config_json"] or "{}")
+        if cfg.get("wa_limit_warned") == month:
+            return
+        cfg["wa_limit_warned"] = month
+        db.update_bot_config(row["id"], cfg)
+        msg = (f"⚠️ بوت واتساب «{row['name']}» توقّف عن الإرسال: "
+               f"استهلكت {limit} رسالة هذا الشهر. رقّ باقتك أو انتظر الشهر القادم.")
+        try:
+            await self.notify_text_async(db.user_tg_channel(owner_id), msg)
+        except Exception:
+            log.exception("wa limit warning to owner")
+        for aid in db.admin_chat_ids():
+            try:
+                await self.notify_text_async(aid, f"⚠️ حدّ واتساب: {msg}")
+            except Exception:
+                pass
+
     def process_wa_webhook(self, payload):
         """تُسلّم الـ payload لحلقة المدير بلا انتظار.
         Meta تتوقّع 200 فوراً وتُعيد الإرسال لو تأخّر الرد."""
@@ -295,21 +360,20 @@ class BotManager:
 
     async def _handle_wa_webhook(self, payload):
         try:
-            val = payload["entry"][0]["changes"][0]["value"]
-            if not val.get("messages"):
-                return          # تحديث حالة تسليم أو ما شابه — ليس رسالة واردة
-
-            phone_id = val["metadata"]["phone_number_id"]
-            bot_row = db.get_bot_by_token(f"wa:{phone_id}")
-            if not bot_row or not bot_row.get("is_active"):
-                log.warning("WhatsApp message for unknown or inactive phone_id: %s", phone_id)
-                return
-
-            channel = _wa_channel(bot_row)
-            msg = channel.normalize(payload)
-            if msg:
-                import flow_engine
-                await flow_engine.handle_message(bot_row, channel, msg)
+            import flow_engine
+            for phone_id, msgs in _split_wa_payload(payload):
+                bot_row = db.get_bot_by_token(f"wa:{phone_id}")
+                if not bot_row or not bot_row.get("is_active"):
+                    log.warning("WhatsApp message for unknown or inactive phone_id: %s", phone_id)
+                    continue
+                channel = _wa_channel(bot_row)
+                for msg in msgs:
+                    # Meta تُعيد الإرسال عند أي تأخّر — بلا هذا يتقدّم الفلو مرتين
+                    if not db.mark_msg_seen(msg.get("id")):
+                        log.info("skipping duplicate WhatsApp message %s", msg.get("id"))
+                        continue
+                    db.bump_received(bot_row["id"], bot_row["owner_id"])
+                    await flow_engine.handle_message(bot_row, channel, msg)
         except Exception:
             log.exception("Error handling WhatsApp webhook payload")
 

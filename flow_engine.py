@@ -40,10 +40,15 @@ async def notify_owner(bot_row, channel, text):
     بوت تليجرام: عبر نفس البوت (بلا إنشاء Bot جديد يسرّب اتصالاً كل مرة).
     بوت واتساب: صاحبه مربوط على تليجرام، فالتبليغ يمرّ ببوت المنصة."""
     owner = _cfg_of(bot_row).get("owner_chat_id")
+    is_tg = (bot_row.get("channel") or "telegram") == "telegram"
+    if not owner and not is_tg:
+        # بوت واتساب لا يملك رابط ربط مثل تليجرام — نرجع لحساب المالك المربوط
+        # على تليجرام من صفحة «حسابي»، وإلا فلا وسيلة تبليغ.
+        owner = db.user_tg_channel(bot_row.get("owner_id"))
     if not owner:
         return
     try:
-        if (bot_row.get("channel") or "telegram") == "telegram":
+        if is_tg:
             await channel.send_text(f"tg:{owner}", text)
         else:
             import bot_manager
@@ -64,6 +69,13 @@ async def handle_message(bot_row, channel, msg):
     if msg["kind"] == "cancel":
         db.clear_chat_state(bot_id, peer)
         await channel.remove_keyboard(peer, "تم الإلغاء. للبدء أرسل من جديد.")
+        return
+
+    if msg["kind"] == "unsupported":
+        # صورة أو صوت أو موقع: لا نص فيها. حفظها كإجابة فارغة يقفز خطوة
+        # ويُفسد الـ lead — نطلب نصاً ونبقى في نفس الخطوة.
+        db.touch_bot_user(bot_id, peer)
+        await channel.send_text(peer, "📝 من فضلك أرسل إجابتك كنص.")
         return
 
     if msg["kind"] != "start":

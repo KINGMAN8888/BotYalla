@@ -32,6 +32,7 @@ import auth
 from bot_manager import manager
 import templates_bot as T
 import tg_helpers as tg
+from channels.whatsapp import verify_credentials as wa_verify
 import ai_agent as ai
 import i18n
 import plans
@@ -253,7 +254,11 @@ def dashboard():
         b["stats"] = db.stats_summary(b["id"])
         for k in total: total[k] += b["stats"].get(k, 0)
     total["revenue"] = round(total["revenue"], 2)
-    return react_page("dashboard", "nav_bots", {"bots": bots, "total": total})
+    sub = db.get_subscription(uid())
+    plan_id = sub["plan"] if sub["status"] == "active" else "free"
+    wa_ok = current_role() in ("admin", "support") or bool(plans.plan(plan_id).get("whatsapp"))
+    return react_page("dashboard", "nav_bots",
+                      {"bots": bots, "total": total, "waAllowed": wa_ok})
 
 def _owned(bot_id):
     b = db.get_bot(bot_id, uid())
@@ -281,11 +286,21 @@ def bot_create():
         wa_token = request.form.get("wa_token", "").strip()
         if not (name and phone_id and wa_token and template in T.TEMPLATES):
             flash("أكمل كل الحقول الخاصة بواتساب.", "error"); return redirect(url_for("dashboard"))
-        if not phone_id.isdigit():
-            flash("Phone Number ID أرقام فقط — انسخه من لوحة مطوري Meta.", "error")
+        # واتساب مدفوع لكل رسالة — ممنوع على الباقة المجانية
+        if current_role() not in ("admin", "support"):
+            sub = db.get_subscription(uid())
+            plan_id = sub["plan"] if sub["status"] == "active" else "free"
+            if not plans.plan(plan_id).get("whatsapp"):
+                flash(("بوتات واتساب متاحة من الباقة الاحترافية فأعلى."
+                       if session.get("lang") != "en" else
+                       "WhatsApp bots require the Pro plan or higher."), "error")
+                return redirect(url_for("pricing"))
+        chk = wa_verify(phone_id, wa_token)
+        if not chk["ok"]:
+            flash(f"❌ بيانات واتساب غير صالحة: {chk['error']}", "error")
             return redirect(url_for("dashboard"))
         token = f"wa:{phone_id}"
-        info = {"username": phone_id, "name": name}
+        info = {"username": chk.get("number") or phone_id, "name": chk.get("name") or name}
     else:
         abort(400)
     # الأدمن (مالك المنصة) والدعم: صلاحيات غير محدودة — بلا حدود باقات
@@ -354,9 +369,16 @@ def bot_detail(bot_id):
     p = plans.plan(plan_id)
     if current_role() in ("admin", "support"):
         p = plans.plan("business") # Full access
-        
+
+    usage = None
+    if (b.get("channel") or "telegram") == "whatsapp":
+        limit = None if current_role() in ("admin", "support") else plans.wa_limit(plan_id)
+        usage = dict(db.owner_usage(uid()), limit=limit,
+                     bot=db.bot_usage(bot_id), webhook=url_for("whatsapp_webhook", _external=True))
+
     return react_page("bot_detail", "nav_bots",
-                      {"bot": b, "leads": leads, "orders": orders, "bookings": bookings, "plan": p},
+                      {"bot": b, "leads": leads, "orders": orders, "bookings": bookings,
+                       "plan": p, "usage": usage},
                       title=b["name"])
 
 @app.route("/bot/<int:bot_id>/config", methods=["POST"])
@@ -392,8 +414,22 @@ def bot_config(bot_id):
         cfg["service_name"] = request.form.get("service_name", cfg.get("service_name", "")).strip()
         wd = request.form.getlist("working_days")
         cfg["working_days"] = [int(x) for x in wd] if wd else None
+    is_wa = (b.get("channel") or "telegram") == "whatsapp"
+    if is_wa:
+        # توكنات Meta المؤقتة تنتهي خلال 24 ساعة — بلا تحديثها يموت البوت بصمت
+        new_tok = request.form.get("wa_token", "").strip()
+        if new_tok and new_tok != cfg.get("wa_token"):
+            chk = wa_verify(b["token"][3:], new_tok)
+            if not chk["ok"]:
+                flash(f"❌ التوكن الجديد مرفوض: {chk['error']}", "error")
+                return redirect(url_for("bot_detail", bot_id=bot_id))
+            cfg["wa_token"] = new_tok
+            cfg.pop("wa_limit_warned", None)
     db.update_bot_config(bot_id, cfg)
     if manager.is_running(bot_id): manager.restart_bot(bot_id)
+    if is_wa:
+        flash("تم حفظ الإعدادات ✅" if session.get("lang") != "en" else "Settings saved ✅", "ok")
+        return redirect(url_for("bot_detail", bot_id=bot_id))
     try: sync_bot_telegram(db.get_bot(bot_id, uid()))
     except Exception: pass
     flash("تم حفظ الإعدادات ومزامنتها مع تليجرام ✅", "ok")
@@ -562,6 +598,9 @@ def api_validate_token():
 @login_required
 def gen_owner_link(bot_id):
     b = _owned(bot_id); cfg = json.loads(b["config_json"] or "{}")
+    if (b.get("channel") or "telegram") != "telegram":
+        return jsonify({"ok": False, "error": "رابط الربط لتليجرام فقط. "
+                                              "اربط تليجرام من صفحة «حسابي» لتصلك إشعارات بوت واتساب."})
     username = cfg.get("bot_username")
     if not username:
         info = tg.validate_token(b["token"])
@@ -896,6 +935,10 @@ def admin_payment_screenshot(pid):
 @login_required
 def sync_telegram(bot_id):
     b = _owned(bot_id)
+    if (b.get("channel") or "telegram") != "telegram":
+        flash("هذه المزامنة لبوتات تليجرام فقط." if session.get("lang") != "en"
+              else "This sync is for Telegram bots only.", "error")
+        return redirect(url_for("bot_detail", bot_id=bot_id))
     res = sync_bot_telegram(b)
     if res.get("ok"):
         flash("تم تحديث بروفايل البوت على تليجرام رسمياً ✅" if session.get("lang")!="en"

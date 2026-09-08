@@ -27,7 +27,12 @@ function BotCard({ b, i }) {
               <div className="truncate text-[12px] text-ink-3">{meta.label}</div>
             </div>
           </div>
-          {b.running ? <Pill tone="on" dot>{t("running")}</Pill> : <Pill tone="off">{t("stopped")}</Pill>}
+          <div className="flex shrink-0 items-center gap-1.5">
+            {(b.channel || "telegram") === "whatsapp" && (
+              <Pill tone="mute"><Icon name="phone" size={11} />WA</Pill>
+            )}
+            {b.running ? <Pill tone="on" dot>{t("running")}</Pill> : <Pill tone="off">{t("stopped")}</Pill>}
+          </div>
         </div>
 
         <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-[13px] text-ink-3">
@@ -46,6 +51,7 @@ function BotCard({ b, i }) {
 
 /* معالج إنشاء البوت — التوكن أولاً لأنه أصعب خطوة على غير التقنيين */
 function CreateWizard() {
+  const waAllowed = P.waAllowed !== false;
   const [channel, setChannel] = useState("telegram");
   const [status, setStatus] = useState(null);   // {ok, text}
   const timer = useRef(null);
@@ -73,18 +79,32 @@ function CreateWizard() {
 
   const steps = [
     {
-      n: 1, title: bi("اختر المنصة / Choose Platform", "Platform"),
+      n: 1, title: bi("اختر المنصة", "Platform"),
       body: (
-        <div className="flex gap-4">
-          <label className="flex items-center gap-2 cursor-pointer text-[14px]">
-            <input type="radio" name="channel" value="telegram" checked={channel === "telegram"} onChange={(e) => setChannel(e.target.value)} />
-            <Icon name="bot" size={16} className="text-blue-500" /> Telegram
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer text-[14px]">
-            <input type="radio" name="channel" value="whatsapp" checked={channel === "whatsapp"} onChange={(e) => setChannel(e.target.value)} />
-            <Icon name="phone" size={16} className="text-green-500" /> WhatsApp
-          </label>
-        </div>
+        <>
+          <div className="flex flex-wrap gap-4">
+            <label className="flex cursor-pointer items-center gap-2 text-[14px]">
+              <input type="radio" name="channel" value="telegram" checked={channel === "telegram"}
+                     onChange={(e) => setChannel(e.target.value)} />
+              <Icon name="bot" size={16} className="text-au-cyan" /> Telegram
+            </label>
+            <label className={"flex items-center gap-2 text-[14px] " +
+                              (waAllowed ? "cursor-pointer" : "cursor-not-allowed opacity-50")}>
+              <input type="radio" name="channel" value="whatsapp" disabled={!waAllowed}
+                     checked={channel === "whatsapp"} onChange={(e) => setChannel(e.target.value)} />
+              <Icon name="phone" size={16} className="text-au-teal" /> WhatsApp
+            </label>
+          </div>
+          {!waAllowed && (
+            <p className="mt-3 mb-0 text-[12.5px] text-ink-3">
+              {bi("واتساب مدفوع لكل رسالة من Meta، فهو متاح من الباقة الاحترافية فأعلى.",
+                  "WhatsApp is billed per message by Meta, so it starts at the Pro plan.")}{" "}
+              <a href={BY.urls.pricing} className="text-au-cyan underline-offset-4 hover:underline">
+                {bi("عرض الباقات", "See plans")}
+              </a>
+            </p>
+          )}
+        </>
       )
     },
     {

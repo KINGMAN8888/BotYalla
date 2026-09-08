@@ -165,6 +165,23 @@ def init_db():
             PRIMARY KEY(bot_id, peer),
             FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
         );
+        -- استهلاك الرسائل شهرياً. واتساب مدفوع لكل رسالة، فبلا هذا العدّاد
+        -- قد يكلّف عميل واحد نشط أكثر من قيمة اشتراكه.
+        CREATE TABLE IF NOT EXISTS usage_msgs(
+            bot_id      INTEGER NOT NULL,
+            owner_id    INTEGER NOT NULL,
+            month       TEXT NOT NULL,           -- 'YYYY-MM'
+            sent        INTEGER NOT NULL DEFAULT 0,
+            received    INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(bot_id, month),
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        -- Meta تُعيد إرسال الويبهوك عند أي تأخّر أو فشل. بلا هذا الجدول
+        -- تُعالَج الإجابة مرتين ويتقدّم الفلو خطوة زائدة.
+        CREATE TABLE IF NOT EXISTS seen_msgs(
+            msg_id     TEXT PRIMARY KEY,
+            created_at INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             bot_id INTEGER NOT NULL,
@@ -1066,3 +1083,59 @@ def get_bot_by_token(token):
     with get_conn() as c:
         r = c.execute("SELECT * FROM bots WHERE token=?", (token,)).fetchone()
         return dict(r) if r else None
+
+# ---------- استهلاك الرسائل (واتساب مدفوع لكل رسالة) ----------
+def _month():
+    return time.strftime("%Y-%m")
+
+def try_consume_msg(bot_id, owner_id, limit=None):
+    """يزيد عدّاد الصادر إن كان صاحب البوت تحت حدّ باقته. يرجّع True لو سُمح.
+    الزيادة والفحص في جملة UPDATE واحدة فلا يتسلّل إرسال زائد بين خيطين."""
+    m = _month()
+    with get_conn() as c:
+        c.execute("INSERT OR IGNORE INTO usage_msgs(bot_id,owner_id,month) VALUES(?,?,?)",
+                  (bot_id, owner_id, m))
+        if limit is None:
+            c.execute("UPDATE usage_msgs SET sent=sent+1 WHERE bot_id=? AND month=?", (bot_id, m))
+            return True
+        cur = c.execute(
+            "UPDATE usage_msgs SET sent=sent+1 WHERE bot_id=? AND month=? AND ("
+            " SELECT COALESCE(SUM(sent),0) FROM usage_msgs u WHERE u.owner_id=? AND u.month=?) < ?",
+            (bot_id, m, owner_id, m, limit))
+        return cur.rowcount == 1
+
+def bump_received(bot_id, owner_id):
+    m = _month()
+    with get_conn() as c:
+        c.execute("INSERT OR IGNORE INTO usage_msgs(bot_id,owner_id,month) VALUES(?,?,?)",
+                  (bot_id, owner_id, m))
+        c.execute("UPDATE usage_msgs SET received=received+1 WHERE bot_id=? AND month=?", (bot_id, m))
+
+def bot_usage(bot_id, month=None):
+    with get_conn() as c:
+        r = c.execute("SELECT sent, received FROM usage_msgs WHERE bot_id=? AND month=?",
+                      (bot_id, month or _month())).fetchone()
+        return {"sent": r["sent"], "received": r["received"]} if r else {"sent": 0, "received": 0}
+
+def owner_usage(owner_id, month=None):
+    with get_conn() as c:
+        r = c.execute("SELECT COALESCE(SUM(sent),0) s, COALESCE(SUM(received),0) g"
+                      " FROM usage_msgs WHERE owner_id=? AND month=?",
+                      (owner_id, month or _month())).fetchone()
+        return {"sent": r["s"], "received": r["g"]}
+
+# ---------- منع تكرار معالجة رسائل الويبهوك ----------
+def mark_msg_seen(msg_id):
+    """يرجّع True لو كانت جديدة، False لو سبقت معالجتها (إعادة إرسال من Meta)."""
+    if not msg_id:
+        return True
+    with get_conn() as c:
+        cur = c.execute("INSERT OR IGNORE INTO seen_msgs(msg_id,created_at) VALUES(?,?)",
+                        (str(msg_id), int(time.time())))
+        return cur.rowcount == 1
+
+def purge_seen_msgs(max_age_seconds=3 * 24 * 3600):
+    with get_conn() as c:
+        cur = c.execute("DELETE FROM seen_msgs WHERE created_at < ?",
+                        (int(time.time()) - int(max_age_seconds),))
+        return cur.rowcount

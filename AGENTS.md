@@ -39,7 +39,10 @@
 | `icons.py` | مجموعة أيقونات SVG (خطية). `icon('name', size)` |
 
 ## 2) قاعدة البيانات (جداول SQLite)
-`users` · `settings` · `bots` · `bot_users` · `leads` · `orders` · `bookings` · `subscriptions` · `payments` · `platform` · `bot_requests` · `events`
+`users` · `settings` · `bots` · `bot_users` · `leads` · `orders` · `bookings` · `subscriptions` · `payments` · `platform` · `bot_requests` · `events` · `chat_state` · `usage_msgs` · `seen_msgs` · `plan_overrides` · `promos` · `promo_uses` · `affiliates` · `referrals` · `reminder_log`
+
+- **`chat_state`**: موضع كل عميل في الفلو. **لا تُعِد حالة المحادثة إلى `ctx.user_data`** — الذاكرة تضيع مع كل إعادة تشغيل، وواتساب بلا حالة أصلاً.
+- **`usage_msgs`**: عدّاد الرسائل الشهري لكل بوت. **`seen_msgs`**: منع تكرار معالجة ويبهوك واتساب.
 
 - **الهجرات (Migrations):** تتم داخل `database._migrate(c)` المستدعى في نهاية `init_db()`. لأي عمود جديد على جدول قائم: أضِفه في تعريف `CREATE TABLE` **و** أضِف `ALTER TABLE ... ADD COLUMN` داخل `_migrate` (احرس بـ `if "col" not in cols`). هكذا لا تنكسر قواعد البيانات القديمة.
 - **المستخدم رقم 1 = admin دائماً** (مقفول، لا يُخفّض).
@@ -104,10 +107,14 @@
   - **stub لاستدعاءات إعداد البوت:** `tg._tg_post = lambda *a, **k: (True, "OK")`.
   - **stub للـ AI:** `ai_agent._call = lambda *a: json.dumps({...})`.
   - **CSRF في الاختبار:** اقرأ التوكن من الجلسة: `with c.session_transaction() as s: token = s.get("_csrf")` وأرسله في الفورم (`csrf_token`) أو الترويسة (`X-CSRF-Token`).
+- **🔴 لا تختبر على `botyalla.db` أبداً.** اضبط `BOTYALLA_DB` **قبل** استيراد `database`
+  أو `app` — الاستيراد يقرأ المتغيّر مرة واحدة. سكربت اختبار سابق لم يفعل ذلك فكتب
+  أسراراً وحسابات وهمية في قاعدة الإنتاج.
 - **قالب اختبار سريع:**
   ```python
-  import os, json, database as db, app as A, tg_helpers as tg
-  if os.path.exists("botyalla.db"): os.remove("botyalla.db")
+  import os, tempfile
+  os.environ["BOTYALLA_DB"] = os.path.join(tempfile.mkdtemp(), "t.db")   # قبل أي استيراد
+  import json, database as db, app as A, tg_helpers as tg
   A.bootstrap()
   c = A.app.test_client()
   def tk(cl):
@@ -115,6 +122,10 @@
       with cl.session_transaction() as s: return s.get("_csrf")
   c.post("/login", data={"username":"admin","password":"admin1234","csrf_token":tk(c)}, follow_redirects=True)
   # ... جرّب المسار الذي عدّلته، ثم أكّد النتيجة في قاعدة البيانات ...
+  ```
+- **مجموعات الاختبار في المستودع** — شغّلها كلها قبل التسليم:
+  ```bash
+  python tests/test_flow.py && python tests/test_webhook.py && python tests/test_whatsapp.py && python tests/test_wa_integration.py && python test_full.py
   ```
 - **حد أدنى قبل التسليم:** كل الصفحات ترندر 200 في اللغتين (`/lang/ar` ثم `/lang/en`) + السيناريو الذي عدّلته يعمل.
 - **لا OCR محلياً على ويندوز** — طبيعي؛ الفحص الآلي يظهر «غير متاح، راجع الصورة يدوياً» (يعمل OCR على السيرفر لأن `deploy/hostinger_deploy.sh` يثبّت tesseract).
@@ -129,6 +140,12 @@
 - ❌ لا ترفع `.env` ولا `botyalla.db` ولا `uploads/pay_*` إلى Git (محميّة بـ `.gitignore`).
 - ❌ لا تُشغّل `workers` أكثر من 1 في gunicorn — البوتات تعمل داخل العملية (حالة في الذاكرة). موضّح في `gunicorn_conf.py`.
 - ❌ لا تحذف أعمدة/جداول، ولا تعيد تسمية دوال `database.py` المستخدمة في أماكن كثيرة.
+- ❌ **لا تُرسل على واتساب بلا مرور بعدّاد الاستهلاك** (`db.try_consume_msg` عبر
+  `bot_manager._wa_channel`). كل رسالة مدفوعة، وبلا حدّ قد تتجاوز فاتورة عميل واحد اشتراكه.
+- ❌ **لا تبثّ على واتساب خارج نافذة الـ24 ساعة.** المخالفة تُقيّد الرقم لا الرسالة.
+  البثّ يمرّ بـ `db.list_bot_peers(bot_id, within_seconds=WA_WINDOW)`.
+- ❌ **لا تجعل `/wh/whatsapp` يفشل مفتوحاً.** المسار مستثنى من CSRF، فالتوقيع حارسه الوحيد:
+  بلا `wa_app_secret` مضبوط يجب أن يرفض كل شيء بـ 403.
 
 ---
 

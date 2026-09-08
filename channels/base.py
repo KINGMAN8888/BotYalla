@@ -20,5 +20,10 @@ class Channel:
 
     def normalize(self, raw) -> dict:
         """يحوّل رسالة واردة إلى شكل موحّد:
-        {peer, text, name, kind: 'text'|'button'|'start'|'cancel'}"""
+        {id, peer, text, name, kind: 'text'|'start'|'cancel'|'unsupported'}"""
         raise NotImplementedError
+
+    def normalize_all(self, raw) -> list:
+        """بعض القنوات تسلّم أكثر من رسالة في الدفعة الواحدة (واتساب)."""
+        one = self.normalize(raw)
+        return [one] if one else []

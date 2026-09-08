@@ -170,12 +170,87 @@ function BookingEditor({ cfg }) {
   );
 }
 
+/* ------------------------------------------------------------ واتساب */
+function WhatsAppPanel({ bot, usage }) {
+  const cfg = bot.config || {};
+  const phone = (bot.token || "").replace(/^wa:/, "");
+  const limit = usage ? usage.limit : 0;
+  // null = بلا حد (الأدمن) · 0 = الباقة لا تتيح واتساب. الفرق بينهما ليس تجميلياً.
+  const unlimited = limit === null || limit === undefined;
+  const blocked = !unlimited && limit <= 0;
+  const used = (usage && usage.sent) || 0;
+  const pct = unlimited || blocked ? 0 : Math.min(100, Math.round((used / limit) * 100));
+  const near = !unlimited && !blocked && used >= limit * 0.8;
+
+  return (
+    <Card className="mb-6">
+      <SectionTitle icon="phone"
+        extra={<Pill tone="mute">Phone ID {phone}</Pill>}>
+        WhatsApp Cloud API
+      </SectionTitle>
+
+      <div className="mb-4">
+        <div className="flex items-baseline justify-between gap-3 text-[13px]">
+          <span className="font-bold">{bi("الرسائل الصادرة هذا الشهر", "Outbound messages this month")}</span>
+          <span className={near || blocked ? "font-bold text-red-300" : "font-bold text-ink-3"}>
+            {num(used)}
+            {unlimited ? ` — ${bi("بلا حد", "unlimited")}`
+                       : blocked ? ` — ${bi("الإرسال متوقف", "sending stopped")}`
+                                 : ` / ${num(limit)}`}
+          </span>
+        </div>
+        {!unlimited && !blocked && (
+          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
+            <div className={"h-full rounded-full " + (near ? "bg-red-400" : "bg-au-teal")}
+                 style={{ width: pct + "%" }} />
+          </div>
+        )}
+        {blocked ? (
+          <p className="mt-2 mb-0 text-[12.5px] font-bold text-red-300">
+            {bi("باقتك الحالية لا تتيح رسائل واتساب — هذا البوت لن يردّ على أحد. ",
+                "Your current plan has no WhatsApp allowance — this bot will not reply to anyone. ")}
+            <a href={BY.urls.pricing} className="underline underline-offset-4">
+              {bi("ترقية الباقة", "Upgrade")}
+            </a>
+          </p>
+        ) : (
+          <p className="mt-2 mb-0 text-[12.5px] text-ink-3">
+            {bi("كل رسالة صادرة على واتساب مدفوعة من Meta. عند بلوغ الحدّ يتوقف الإرسال حتى الشهر التالي أو ترقية الباقة.",
+                "Every outbound WhatsApp message is billed by Meta. At the limit sending stops until next month or an upgrade.")}
+          </p>
+        )}
+      </div>
+
+      <div className="rounded-xl bg-white/[0.04] p-4 text-[12.5px] leading-relaxed text-ink-3">
+        <div className="mb-2 font-bold text-white">{bi("عنوان الويبهوك في Meta", "Webhook URL in Meta")}</div>
+        <code className="block overflow-x-auto rounded bg-white/10 px-2 py-1.5">
+          {(usage && usage.webhook) || "/wh/whatsapp"}
+        </code>
+        <p className="mt-3 mb-0">
+          {bi("اشترك في حقل messages، واستخدم نفس Verify Token المضبوط في إعدادات المنصة.",
+              "Subscribe to the messages field, using the same Verify Token set in platform settings.")}
+        </p>
+      </div>
+
+      <p className="mt-4 mb-0 text-[12.5px] leading-relaxed text-ink-3">
+        {bi("إشعارات العملاء الجدد تصلك على تليجرام — اربط حسابك من ",
+            "New-lead notifications arrive on Telegram — link your account from ")}
+        <a href="/account" className="text-au-cyan underline-offset-4 hover:underline">
+          {bi("«حسابي»", "Account")}
+        </a>
+        {cfg.owner_chat_id ? ` (${bi("مربوط", "linked")}: ${cfg.owner_chat_id})` : "."}
+      </p>
+    </Card>
+  );
+}
+
 /* --------------------------------------------------------------- الصفحة */
 export default function BotDetail() {
-  const { bot, plan = {}, leads = [], orders = [], bookings = [] } = P;
+  const { bot, plan = {}, leads = [], orders = [], bookings = [], usage = null } = P;
   const cfg = bot.config || {};
   const meta = BY.templates.find((x) => x.k === bot.template) || { icon: "bot", label: bot.template };
   const isFlow = ["flow", "customer_service", "feedback", "support"].includes(bot.template);
+  const isWa = (bot.channel || "telegram") === "whatsapp";
 
   return (
     <>
@@ -210,7 +285,13 @@ export default function BotDetail() {
 
       <div className="mb-6 flex items-center gap-2">
         {bot.running ? <Pill tone="on" dot>{t("running")}</Pill> : <Pill tone="off">{t("stopped")}</Pill>}
-        {cfg.bot_username && <Pill tone="mute"><Icon name="bot" size={12} />@{cfg.bot_username}</Pill>}
+        <Pill tone="mute">
+          <Icon name={isWa ? "phone" : "bot"} size={12} />
+          {isWa ? "WhatsApp" : "Telegram"}
+        </Pill>
+        {cfg.bot_username && (
+          <Pill tone="mute"><Icon name="bot" size={12} />{isWa ? cfg.bot_username : `@${cfg.bot_username}`}</Pill>
+        )}
       </div>
 
       <Grid cols={4} className="mb-7">
@@ -222,23 +303,27 @@ export default function BotDetail() {
 
       <AiPanel bot={bot} plan={plan} />
 
-      <div className="mb-6 grid gap-4 lg:grid-cols-2">
-        <Card>
-          <SectionTitle icon="bolt">{t("quick_setup")}</SectionTitle>
-          <LinkOwner bot={bot} />
-          <p className="mt-4 mb-0 text-[12.5px] leading-relaxed text-ink-3">{t("id_hint")}</p>
-        </Card>
-        <Card>
-          <SectionTitle icon="link"
-            extra={cfg.tg_synced_at ? <Pill tone="on">{t("tg_synced")}</Pill> : <Pill tone="mute">{t("tg_not_synced")}</Pill>}>
-            {t("tg_official")}
-          </SectionTitle>
-          <p className="mt-0 mb-4 text-[12.5px] leading-relaxed text-ink-3">{t("tg_sync_desc")}</p>
-          <Form action={`/bot/${bot.id}/sync-telegram`}>
-            <Btn variant="ghost" sm icon="link" type="submit">{t("tg_sync_btn")}</Btn>
-          </Form>
-        </Card>
-      </div>
+      {isWa ? (
+        <WhatsAppPanel bot={bot} usage={usage} />
+      ) : (
+        <div className="mb-6 grid gap-4 lg:grid-cols-2">
+          <Card>
+            <SectionTitle icon="bolt">{t("quick_setup")}</SectionTitle>
+            <LinkOwner bot={bot} />
+            <p className="mt-4 mb-0 text-[12.5px] leading-relaxed text-ink-3">{t("id_hint")}</p>
+          </Card>
+          <Card>
+            <SectionTitle icon="link"
+              extra={cfg.tg_synced_at ? <Pill tone="on">{t("tg_synced")}</Pill> : <Pill tone="mute">{t("tg_not_synced")}</Pill>}>
+              {t("tg_official")}
+            </SectionTitle>
+            <p className="mt-0 mb-4 text-[12.5px] leading-relaxed text-ink-3">{t("tg_sync_desc")}</p>
+            <Form action={`/bot/${bot.id}/sync-telegram`}>
+              <Btn variant="ghost" sm icon="link" type="submit">{t("tg_sync_btn")}</Btn>
+            </Form>
+          </Card>
+        </div>
+      )}
 
       {/* الإعدادات */}
       <Card className="mb-6">
@@ -250,6 +335,15 @@ export default function BotDetail() {
               <Input name="owner_chat_id" defaultValue={cfg.owner_chat_id || ""} placeholder="123456789" />
             </Field>
           </div>
+          {isWa && (
+            <div className="mt-4">
+              <Field label="WhatsApp Access Token"
+                     hint={bi("توكنات Meta المؤقتة تنتهي خلال 24 ساعة — الصق توكناً جديداً هنا عند توقّف البوت. اتركه فارغاً للإبقاء على الحالي.",
+                              "Meta temporary tokens expire in 24 hours — paste a new one here when the bot stops. Leave empty to keep the current one.")}>
+                <Input name="wa_token" defaultValue="" autoComplete="off" placeholder="EAAG…" />
+              </Field>
+            </div>
+          )}
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Field label={t("welcome_msg")}><Textarea name="welcome" defaultValue={cfg.welcome || ""} /></Field>
             <Field label={t("thanks_msg")}><Textarea name="thanks" defaultValue={cfg.thanks || ""} /></Field>

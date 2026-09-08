@@ -41,6 +41,7 @@ class TelegramChannel(Channel):
             kind = "cancel"
 
         return {
+            "id": str(msg.message_id) if msg else "",
             "peer": f"tg:{user.id}",
             "text": text,
             "name": user.first_name or "",
