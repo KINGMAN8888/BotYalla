@@ -113,25 +113,126 @@ export function FlowBuilder() {
 
 /* ------------------------------------------------------------- البث */
 export function Broadcast() {
-  const { bot, subs } = P;
+  const { bot, subs, isWa = false, reachable = subs, waba = "" } = P;
   const [text, setText] = useState("");
+  const [mode, setMode] = useState("text");
+  const [tpls, setTpls] = useState(null);      // null = لم يُجلب بعد
+  const [pick, setPick] = useState("");
+
+  useEffect(() => {
+    if (!isWa || !waba) return;
+    let alive = true;
+    fetch(`/api/bot/${bot.id}/templates`).then((r) => r.json())
+      .then((d) => alive && setTpls((d.items || []).filter((x) => x.status === "APPROVED")))
+      .catch(() => alive && setTpls([]));
+    return () => { alive = false; };
+  }, [bot.id, isWa, waba]);
+
+  const chosen = (tpls || []).find((x) => x.name === pick);
+
   return (
     <>
       <PageHead icon="megaphone" title={t("campaign_title")} sub={t("campaign_sub")}
-        actions={<Btn variant="ghost" sm icon="back" href={`/bot/${bot.id}`}>{t("back")}</Btn>} />
+        actions={<>
+          {isWa && <Btn variant="ghost" sm icon="grid" href={`/bot/${bot.id}/templates`}>{t("wa_tpl_link")}</Btn>}
+          <Btn variant="ghost" sm icon="back" href={`/bot/${bot.id}`}>{t("back")}</Btn>
+        </>} />
+
       <Card className="max-w-[720px]">
-        <Pill tone="mute"><Icon name="users" size={13} />{num(subs)} {t("subs_will_get")}</Pill>
-        <Form action="" className="mt-5"
-              confirm={bi("إرسال الحملة لكل المشتركين؟", "Send to all subscribers?")}>
-          <Field label={t("msg_text")}>
-            <Textarea name="text" required value={text} onChange={(e) => setText(e.target.value)}
-                      className="min-h-[140px]" />
-          </Field>
-          <div className="mt-3 text-[12.5px] text-ink-3">{text.length} / 4096</div>
-          <div className="mt-5">
-            <Btn icon="rocket" type="submit" disabled={!text.trim()}>{t("send_campaign")}</Btn>
-          </div>
-        </Form>
+        <div className="flex flex-wrap items-center gap-2">
+          <Pill tone="mute"><Icon name="users" size={13} />{num(subs)} {t("subs_will_get")}</Pill>
+          {isWa && (
+            <Pill tone={reachable ? "on" : "off"}>
+              {num(reachable)} {t("bc_reachable")}
+            </Pill>
+          )}
+        </div>
+
+        {isWa && (
+          <>
+            <p className="mt-4 mb-0 text-[12.5px] leading-relaxed text-ink-3">{t("bc_window_note")}</p>
+            <div className="mt-4 flex flex-wrap gap-4">
+              {[["text", t("bc_mode_text")], ["template", t("bc_mode_tpl")]].map(([v, label]) => (
+                <label key={v} className="flex cursor-pointer items-center gap-2 text-[13.5px]">
+                  <input type="radio" name="mode" value={v} checked={mode === v}
+                         onChange={(e) => setMode(e.target.value)} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </>
+        )}
+
+        {isWa && mode === "template" ? (
+          <Form action="" className="mt-5"
+                confirm={bi("إرسال القالب لكل المشتركين؟", "Send this template to all subscribers?")}>
+            <input type="hidden" name="mode" value="template" />
+            {!waba ? (
+              <p className="m-0 text-[13px] text-ink-3">
+                {bi("اربط حساب واتساب للأعمال أولاً من ", "Link your WhatsApp Business Account first from ")}
+                <a href={`/bot/${bot.id}/templates`} className="text-au-cyan underline-offset-4 hover:underline">
+                  {t("wa_tpl_link")}
+                </a>
+              </p>
+            ) : tpls === null ? (
+              <span className="text-[13px] text-ink-3">{bi("جاري الجلب من Meta…", "Fetching from Meta…")}</span>
+            ) : tpls.length === 0 ? (
+              <p className="m-0 text-[13px] text-ink-3">
+                {bi("لا قوالب معتمدة بعد. ", "No approved templates yet. ")}
+                <a href={`/bot/${bot.id}/templates`} className="text-au-cyan underline-offset-4 hover:underline">
+                  {bi("أنشئ قالباً", "Create one")}
+                </a>
+              </p>
+            ) : (
+              <>
+                <Field label={t("bc_mode_tpl")}>
+                  <Select name="template" required value={pick} onChange={(e) => setPick(e.target.value)}>
+                    <option value="">— {bi("اختر", "Choose")} —</option>
+                    {tpls.map((x) => (
+                      <option key={x.id || x.name} value={x.name}>{x.name} · {x.language}</option>
+                    ))}
+                  </Select>
+                </Field>
+                {chosen && (
+                  <>
+                    <input type="hidden" name="template_lang" value={chosen.language} />
+                    <div className="mt-4 rounded-xl bg-white/[0.04] p-4 text-[13.5px] leading-relaxed text-ink-2">
+                      {chosen.header && <div className="mb-2 font-extrabold text-ink">{chosen.header}</div>}
+                      <div className="whitespace-pre-wrap">{chosen.body}</div>
+                      {chosen.footer && <div className="mt-2 text-[12px] text-ink-3">{chosen.footer}</div>}
+                    </div>
+                    {chosen.vars.length > 0 && (
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        {chosen.vars.map((n) => (
+                          <Field key={n} label={`{{${n}}}`}>
+                            <Input name="var" required autoComplete="off"
+                                   placeholder={bi("نفس القيمة لكل المستلمين", "same value for every recipient")} />
+                          </Field>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+                <div className="mt-5">
+                  <Btn icon="rocket" type="submit" disabled={!pick}>{t("send_campaign")}</Btn>
+                </div>
+              </>
+            )}
+          </Form>
+        ) : (
+          <Form action="" className="mt-5"
+                confirm={bi("إرسال الحملة لكل المشتركين؟", "Send to all subscribers?")}>
+            <input type="hidden" name="mode" value="text" />
+            <Field label={t("msg_text")}>
+              <Textarea name="text" required value={text} onChange={(e) => setText(e.target.value)}
+                        className="min-h-[140px]" />
+            </Field>
+            <div className="mt-3 text-[12.5px] text-ink-3">{text.length} / 4096</div>
+            <div className="mt-5">
+              <Btn icon="rocket" type="submit" disabled={!text.trim()}>{t("send_campaign")}</Btn>
+            </div>
+          </Form>
+        )}
       </Card>
     </>
   );

@@ -11,6 +11,7 @@ import { AdminOverview, AdminUsers, AdminPayments, AdminRequests, AdminPlatform 
 import { FlowBuilder, Broadcast, Analytics, Auth } from "./app/views/Tools.jsx";
 import { AdminPricing, AdminPromos, AdminAffiliates, Affiliate } from "./app/views/Revenue.jsx";
 import { Terms, Privacy } from "./app/views/Legal.jsx";
+import WaTemplates from "./app/views/WaTemplates.jsx";
 
 /* خريطة العرض ← المكوّن. Flask يحدّد العرض عبر data-view. */
 const VIEWS = {
@@ -36,6 +37,7 @@ const VIEWS = {
   affiliate:        Affiliate,
   terms:            Terms,
   privacy:          Privacy,
+  wa_templates:     WaTemplates,
 };
 
 /* صفحات المصادقة بلا قشرة لوحة */

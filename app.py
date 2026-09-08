@@ -33,6 +33,8 @@ from bot_manager import manager
 import templates_bot as T
 import tg_helpers as tg
 from channels.whatsapp import verify_credentials as wa_verify
+import channels.wa_templates as WT
+from bot_manager import WA_WINDOW
 import ai_agent as ai
 import i18n
 import plans
@@ -510,17 +512,131 @@ def broadcast(bot_id):
         flash("هذه الميزة غير متاحة في باقتك الحالية. يرجى الترقية." if session.get("lang")!="en" else "This feature is not available in your current plan. Please upgrade.", "error")
         return redirect(url_for("pricing"))
 
+    is_wa = (b.get("channel") or "telegram") == "whatsapp"
     subs = len(db.list_bot_user_ids(bot_id))
+    # على واتساب النص الحر لا يصل إلا لمن راسل البوت خلال 24 ساعة
+    reachable = len(db.list_bot_peers(bot_id, within_seconds=WA_WINDOW)) if is_wa else subs
+
     if request.method == "POST":
-        text = request.form.get("text", "").strip()
-        if not text:
-            flash("اكتب نص الرسالة.", "error")
+        ar = session.get("lang") != "en"
+        if is_wa and request.form.get("mode") == "template":
+            name = request.form.get("template", "").strip()
+            lang_code = request.form.get("template_lang", "").strip() or "ar"
+            values = [v.strip() for v in request.form.getlist("var") if v.strip()]
+            if not name:
+                flash("اختر قالباً معتمداً." if ar else "Pick an approved template.", "error")
+            else:
+                sent, failed = manager.broadcast_template(bot_id, name, lang_code, values)
+                flash((f"📢 أُرسل القالب «{name}» إلى {sent} مشترك (فشل {failed})." if ar else
+                       f"📢 Template «{name}» sent to {sent} subscribers ({failed} failed)."), "ok")
         else:
-            sent, failed = manager.broadcast(bot_id, text)
-            flash(f"📢 تم الإرسال إلى {sent} مشترك (فشل {failed}).", "ok")
+            text = request.form.get("text", "").strip()
+            if not text:
+                flash("اكتب نص الرسالة." if ar else "Write the message.", "error")
+            else:
+                sent, failed = manager.broadcast(bot_id, text)
+                flash((f"📢 تم الإرسال إلى {sent} مشترك (فشل {failed})." if ar else
+                       f"📢 Sent to {sent} subscribers ({failed} failed)."), "ok")
         return redirect(url_for("broadcast", bot_id=bot_id))
-    return react_page("broadcast", "campaign_title", {"bot": b, "subs": subs},
+
+    return react_page("broadcast", "campaign_title",
+                      {"bot": b, "subs": subs, "isWa": is_wa, "reachable": reachable,
+                       "waba": _waba_of(b)[0] if is_wa else ""},
                       title=i18n.t("campaign_title", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
+
+# ---------- قوالب واتساب المعتمدة ----------
+def _waba_of(bot_row):
+    """يرجّع (waba_id, hint). الأول مؤكَّد، والثاني مرشّح من الويبهوك لم يُتحقق منه."""
+    cfg = json.loads(bot_row["config_json"] or "{}")
+    return cfg.get("wa_waba_id", ""), cfg.get("wa_waba_hint", "")
+
+def _wa_bot(bot_id):
+    """بوت واتساب يملكه المستخدم، وباقته تسمح — وإلا 404/403."""
+    b = _owned(bot_id)
+    if (b.get("channel") or "telegram") != "whatsapp":
+        abort(404)
+    if current_role() not in ("admin", "support"):
+        sub = db.get_subscription(uid())
+        plan_id = sub["plan"] if sub["status"] == "active" else "free"
+        if not plans.plan(plan_id).get("whatsapp"):
+            abort(403)
+    return b
+
+@app.route("/bot/<int:bot_id>/templates")
+@login_required
+def wa_templates_page(bot_id):
+    b = _wa_bot(bot_id)
+    waba, hint = _waba_of(b)
+    return react_page("wa_templates", "wa_tpl_title",
+                      {"bot": b, "waba": waba, "wabaHint": hint,
+                       "cats": list(WT.CATEGORIES), "limits": WT.LIMITS},
+                      title=i18n.t("wa_tpl_title", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
+
+@app.route("/api/bot/<int:bot_id>/templates")
+@login_required
+def api_wa_templates(bot_id):
+    b = _wa_bot(bot_id)
+    cfg = json.loads(b["config_json"] or "{}")
+    waba, _ = _waba_of(b)
+    if not waba:
+        return jsonify({"ok": False, "error": "لم يُضبط WABA ID بعد.", "needs_waba": True})
+    return jsonify(WT.list_templates(waba, cfg.get("wa_token", "")))
+
+@app.route("/bot/<int:bot_id>/templates/waba", methods=["POST"])
+@login_required
+def wa_set_waba(bot_id):
+    b = _wa_bot(bot_id)
+    cfg = json.loads(b["config_json"] or "{}")
+    waba = request.form.get("waba_id", "").strip()
+    # نتحقّق باستدعاء حقيقي: WABA ID و Phone Number ID يتشابهان ويُخلط بينهما دوماً
+    res = WT.verify_waba(waba, cfg.get("wa_token", ""))
+    if not res["ok"]:
+        flash(f"❌ {res['error']}", "error")
+    else:
+        cfg["wa_waba_id"] = waba
+        cfg.pop("wa_waba_hint", None)
+        db.update_bot_config(bot_id, cfg)
+        flash("تم ربط حساب واتساب للأعمال ✅" if session.get("lang") != "en"
+              else "WhatsApp Business Account linked ✅", "ok")
+    return redirect(url_for("wa_templates_page", bot_id=bot_id))
+
+@app.route("/bot/<int:bot_id>/templates/create", methods=["POST"])
+@login_required
+def wa_create_template(bot_id):
+    b = _wa_bot(bot_id)
+    cfg = json.loads(b["config_json"] or "{}")
+    waba, _ = _waba_of(b)
+    if not waba:
+        flash("اضبط WABA ID أولاً.", "error")
+        return redirect(url_for("wa_templates_page", bot_id=bot_id))
+    res = WT.create_template(
+        waba, cfg.get("wa_token", ""),
+        name=request.form.get("name", "").strip().lower(),
+        language=request.form.get("language", "ar").strip(),
+        category=request.form.get("category", "UTILITY").strip().upper(),
+        body=request.form.get("body", "").strip(),
+        header=request.form.get("header", "").strip(),
+        footer=request.form.get("footer", "").strip(),
+        buttons=[x.strip() for x in request.form.getlist("button") if x.strip()])
+    if res["ok"]:
+        flash(("أُرسل القالب لمراجعة Meta ⏳ — الاعتماد يستغرق من دقائق إلى 24 ساعة."
+               if session.get("lang") != "en" else
+               "Submitted to Meta for review ⏳ — approval takes minutes to 24 hours."), "ok")
+    else:
+        flash(f"❌ {res['error']}", "error")
+    return redirect(url_for("wa_templates_page", bot_id=bot_id))
+
+@app.route("/bot/<int:bot_id>/templates/delete", methods=["POST"])
+@login_required
+def wa_delete_template(bot_id):
+    b = _wa_bot(bot_id)
+    cfg = json.loads(b["config_json"] or "{}")
+    waba, _ = _waba_of(b)
+    name = request.form.get("name", "").strip()
+    res = WT.delete_template(waba, cfg.get("wa_token", ""), name) if (waba and name) else {"ok": False, "error": "بيانات ناقصة."}
+    flash((f"تم حذف القالب «{name}»." if res.get("ok") else f"❌ {res.get('error')}"),
+          "ok" if res.get("ok") else "error")
+    return redirect(url_for("wa_templates_page", bot_id=bot_id))
 
 # ---------- تصدير CSV ----------
 @app.route("/bot/<int:bot_id>/export/<kind>")

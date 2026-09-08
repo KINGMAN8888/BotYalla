@@ -232,6 +232,14 @@ function WhatsAppPanel({ bot, usage }) {
         </p>
       </div>
 
+      <p className="mt-4 mb-2 text-[12.5px] leading-relaxed text-ink-3">
+        {bi("بعد 24 ساعة من آخر رسالة للعميل لا يصله نص حر — القالب المعتمد وحده يصل. ",
+            "After 24 hours from a customer's last message only an approved template reaches them. ")}
+        <a href={`/bot/${bot.id}/templates`} className="text-au-cyan underline-offset-4 hover:underline">
+          {t("wa_tpl_link")}
+        </a>
+      </p>
+
       <p className="mt-4 mb-0 text-[12.5px] leading-relaxed text-ink-3">
         {bi("إشعارات العملاء الجدد تصلك على تليجرام — اربط حسابك من ",
             "New-lead notifications arrive on Telegram — link your account from ")}
@@ -274,6 +282,7 @@ export default function BotDetail() {
               ? <Btn variant="ghost" sm icon="megaphone" href={`/bot/${bot.id}/broadcast`}>{t("campaign")}</Btn>
               : <Btn variant="ghost" sm icon="lock" href={BY.urls.pricing} title={t("upgrade_req")}>{t("campaign")}</Btn>}
             {isFlow && <Btn variant="ghost" sm icon="flow" href={`/bot/${bot.id}/flow`}>{t("flow_builder")}</Btn>}
+            {isWa && <Btn variant="ghost" sm icon="grid" href={`/bot/${bot.id}/templates`}>{t("wa_tpl_link")}</Btn>}
             <Form action={`/bot/${bot.id}/delete`} className="inline"
                   confirm={bi("حذف البوت نهائياً؟", "Delete this bot permanently?")}>
               <Btn variant="red" sm icon="trash" type="submit"

@@ -125,7 +125,7 @@
   ```
 - **مجموعات الاختبار في المستودع** — شغّلها كلها قبل التسليم:
   ```bash
-  python tests/test_flow.py && python tests/test_webhook.py && python tests/test_whatsapp.py && python tests/test_wa_integration.py && python test_full.py
+  python tests/test_flow.py && python tests/test_webhook.py && python tests/test_whatsapp.py && python tests/test_wa_templates.py && python tests/test_wa_integration.py && python test_full.py
   ```
 - **حد أدنى قبل التسليم:** كل الصفحات ترندر 200 في اللغتين (`/lang/ar` ثم `/lang/en`) + السيناريو الذي عدّلته يعمل.
 - **لا OCR محلياً على ويندوز** — طبيعي؛ الفحص الآلي يظهر «غير متاح، راجع الصورة يدوياً» (يعمل OCR على السيرفر لأن `deploy/hostinger_deploy.sh` يثبّت tesseract).
@@ -144,6 +144,8 @@
   `bot_manager._wa_channel`). كل رسالة مدفوعة، وبلا حدّ قد تتجاوز فاتورة عميل واحد اشتراكه.
 - ❌ **لا تبثّ على واتساب خارج نافذة الـ24 ساعة.** المخالفة تُقيّد الرقم لا الرسالة.
   البثّ يمرّ بـ `db.list_bot_peers(bot_id, within_seconds=WA_WINDOW)`.
+- ❌ **لا تخلط WABA ID بـ Phone Number ID.** القوالب على الأول والإرسال على الثاني،
+  والرقمان متشابهان. أي WABA يُحفظ يجب أن يمرّ بـ `WT.verify_waba` أولاً.
 - ❌ **لا تجعل `/wh/whatsapp` يفشل مفتوحاً.** المسار مستثنى من CSRF، فالتوقيع حارسه الوحيد:
   بلا `wa_app_secret` مضبوط يجب أن يرفض كل شيء بـ 403.
 

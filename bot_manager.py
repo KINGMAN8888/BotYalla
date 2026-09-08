@@ -14,12 +14,14 @@ log = logging.getLogger("bot_manager")
 WA_WINDOW = 24 * 3600     # نافذة خدمة العملاء في واتساب
 
 def _split_wa_payload(payload):
-    """يفكّ الـ payload إلى (phone_number_id, [رسائل موحّدة]).
-    الدفعة الواحدة قد تحمل رسائل لأكثر من رقم — معالجة الأولى فقط تفقد الباقي."""
+    """يفكّ الـ payload إلى (phone_number_id, entry_id, [رسائل موحّدة]).
+    الدفعة الواحدة قد تحمل رسائل لأكثر من رقم — معالجة الأولى فقط تفقد الباقي.
+    entry_id مرشّح لـ WABA ID (لا يُوثق صراحةً، فلا نستعمله قبل التحقق منه)."""
     from channels.whatsapp import WhatsAppChannel
     out = []
     try:
         for entry in (payload or {}).get("entry", []):
+            entry_id = str(entry.get("id") or "")
             for change in entry.get("changes", []):
                 val = change.get("value") or {}
                 if not val.get("messages"):
@@ -30,10 +32,22 @@ def _split_wa_payload(payload):
                 msgs = WhatsAppChannel(phone_id, "").normalize_all(
                     {"entry": [{"changes": [{"value": val}]}]})
                 if msgs:
-                    out.append((phone_id, msgs))
+                    out.append((phone_id, entry_id, msgs))
     except (AttributeError, TypeError):
         log.exception("malformed WhatsApp payload")
     return out
+
+def _remember_waba_hint(bot_row, entry_id):
+    """يخزّن entry.id كـ«مرشّح» لـ WABA ID ليقترحه على صاحب البوت.
+    Meta لا توثّق أن entry.id هو WABA ID، فلا نستعمله إلا بعد تحقق فعلي
+    في صفحة القوالب. مجرد اقتراح يوفّر على العميل البحث عنه."""
+    if not entry_id or not entry_id.isdigit():
+        return
+    cfg = json.loads(bot_row["config_json"] or "{}")
+    if cfg.get("wa_waba_id") or cfg.get("wa_waba_hint") == entry_id:
+        return
+    cfg["wa_waba_hint"] = entry_id
+    db.update_bot_config(bot_row["id"], cfg)
 
 def wa_limit_for(owner_id):
     """حدّ الرسائل الصادرة شهرياً لصاحب البوت. None = بلا حدّ (الأدمن والدعم)."""
@@ -174,6 +188,37 @@ class BotManager:
         for peer in peers:
             try:
                 ok = await channel.send_text(peer, text)
+                sent += 1 if ok else 0
+                failed += 0 if ok else 1
+                await asyncio.sleep(0.1)
+            except Exception:
+                failed += 1
+        return sent, failed
+
+    def broadcast_template(self, bot_id, name, language, values=None):
+        """بثّ بقالب معتمد. هذا هو ما يصل لمن خرج من نافذة الـ24 ساعة —
+        النص الحر لا يصله، ومحاولة إرساله له تُقيّد الرقم."""
+        row = db.get_bot(bot_id)
+        if not row or (row.get("channel") or "telegram") != "whatsapp":
+            return 0, 0
+        peers = db.list_bot_peers(bot_id)
+        if not peers:
+            return 0, 0
+        try:
+            return self._submit(self._broadcast_template(row, peers, name, language, values),
+                                timeout=max(30, len(peers) * 0.6))
+        except Exception:
+            log.exception("broadcast_template")
+            return 0, len(peers)
+
+    async def _broadcast_template(self, row, peers, name, language, values):
+        from channels.wa_templates import body_components
+        channel = _wa_channel(row)
+        comps = body_components(values)
+        sent = failed = 0
+        for peer in peers:
+            try:
+                ok = await channel.send_template(peer, name, language, comps)
                 sent += 1 if ok else 0
                 failed += 0 if ok else 1
                 await asyncio.sleep(0.1)
@@ -361,11 +406,12 @@ class BotManager:
     async def _handle_wa_webhook(self, payload):
         try:
             import flow_engine
-            for phone_id, msgs in _split_wa_payload(payload):
+            for phone_id, entry_id, msgs in _split_wa_payload(payload):
                 bot_row = db.get_bot_by_token(f"wa:{phone_id}")
                 if not bot_row or not bot_row.get("is_active"):
                     log.warning("WhatsApp message for unknown or inactive phone_id: %s", phone_id)
                     continue
+                _remember_waba_hint(bot_row, entry_id)
                 channel = _wa_channel(bot_row)
                 for msg in msgs:
                     # Meta تُعيد الإرسال عند أي تأخّر — بلا هذا يتقدّم الفلو مرتين
