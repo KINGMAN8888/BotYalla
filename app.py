@@ -40,6 +40,7 @@ import platform_bot as PB
 import time as _time
 import datetime as _dt
 import hashlib
+import hmac
 import secrets as _secrets
 from markupsafe import Markup
 from werkzeug.utils import secure_filename
@@ -71,6 +72,8 @@ _login_attempts = {}   # ip -> (count, first_ts)
 @app.before_request
 def _csrf_protect():
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        if request.path == "/wh/whatsapp":
+            return
         token = session.get("_csrf")
         sent = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
         if not token or not sent or not _secrets.compare_digest(str(token), str(sent)):
@@ -261,14 +264,30 @@ def _owned(bot_id):
 @login_required
 def bot_create():
     name = request.form.get("name", "").strip()
-    token = request.form.get("token", "").strip()
     template = request.form.get("template", "")
-    if not (name and token and template in T.TEMPLATES):
-        flash("أكمل كل الحقول.", "error"); return redirect(url_for("dashboard"))
-    info = tg.validate_token(token)
-    if not info["ok"]:
-        flash(f"❌ التوكن غير صالح: {info['error']}", "error")
-        return redirect(url_for("dashboard"))
+    channel = request.form.get("channel", "telegram")
+    
+    info = {}
+    if channel == "telegram":
+        token = request.form.get("token", "").strip()
+        if not (name and token and template in T.TEMPLATES):
+            flash("أكمل كل الحقول.", "error"); return redirect(url_for("dashboard"))
+        info = tg.validate_token(token)
+        if not info["ok"]:
+            flash(f"❌ التوكن غير صالح: {info['error']}", "error")
+            return redirect(url_for("dashboard"))
+    elif channel == "whatsapp":
+        phone_id = request.form.get("wa_phone_id", "").strip()
+        wa_token = request.form.get("wa_token", "").strip()
+        if not (name and phone_id and wa_token and template in T.TEMPLATES):
+            flash("أكمل كل الحقول الخاصة بواتساب.", "error"); return redirect(url_for("dashboard"))
+        if not phone_id.isdigit():
+            flash("Phone Number ID أرقام فقط — انسخه من لوحة مطوري Meta.", "error")
+            return redirect(url_for("dashboard"))
+        token = f"wa:{phone_id}"
+        info = {"username": phone_id, "name": name}
+    else:
+        abort(400)
     # الأدمن (مالك المنصة) والدعم: صلاحيات غير محدودة — بلا حدود باقات
     if current_role() not in ("admin", "support"):
         sub = db.get_subscription(uid())
@@ -290,19 +309,29 @@ def bot_create():
         cfg["flow"] = json.loads(json.dumps(T.PRESET_FLOWS[template]))  # نسخة قابلة للتعديل
     if template == "faq":
         cfg["menu_items"] = json.loads(json.dumps(T.DEFAULT_MENU_ITEMS))
+        
+    if channel == "whatsapp":
+        cfg["wa_token"] = request.form.get("wa_token", "").strip()
+        
     try:
-        db.create_bot(uid(), name, token, template, cfg)
+        db.create_bot(uid(), name, token, template, cfg, channel)
         notify_admins(f"🤖 بوت جديد / New bot: «{name}» (@{info.get('username')}) — {session.get('uname')}")
-        # تهيئة رسمية للبوت على تليجرام
-        try:
-            _row = [b for b in db.list_bots(uid()) if b["token"] == token]
-            if _row: sync_bot_telegram(_row[0])
-        except Exception:
-            pass
+        # تهيئة رسمية للبوت على تليجرام (إذا كان تليجرام)
+        if channel == "telegram":
+            try:
+                _row = [b for b in db.list_bots(uid()) if b["token"] == token]
+                if _row: sync_bot_telegram(_row[0])
+            except Exception:
+                pass
         _uname = info.get('username')
-        flash((f"تم إنشاء البوت @{_uname} 🎉 وتهيئته رسمياً على تليجرام. اضبط إعداداته ثم شغّله."
-               if session.get("lang") != "en" else
-               f"Bot @{_uname} created 🎉 and officially configured on Telegram. Adjust its settings then start it."), "ok")
+        if channel == "telegram":
+            flash((f"تم إنشاء البوت @{_uname} 🎉 وتهيئته رسمياً على تليجرام. اضبط إعداداته ثم شغّله."
+                   if session.get("lang") != "en" else
+                   f"Bot @{_uname} created 🎉 and officially configured on Telegram. Adjust its settings then start it."), "ok")
+        else:
+            flash((f"تم إنشاء بوت واتساب «{name}» 🎉 — تأكد أن Webhook في Meta يشير إلى /wh/whatsapp ثم شغّله."
+                   if session.get("lang") != "en" else
+                   f"WhatsApp bot «{name}» created 🎉 — point the Meta webhook to /wh/whatsapp, then start it."), "ok")
     except Exception as e:
         flash((f"خطأ: {e} (قد يكون التوكن مستخدماً بالفعل)."
                if session.get("lang") != "en" else
@@ -656,7 +685,8 @@ def admin_platform():
         for k in ("vodafone_number","instapay_handle","instapay_link",
                   "bank_holder","bank_name","bank_account","bank_iban",
                   "platform_bot_token","admin_chat_id",
-                  "support_email","support_whatsapp","support_telegram"):
+                  "support_email","support_whatsapp","support_telegram",
+                  "wa_verify_token","wa_app_secret"):
             db.set_platform(k, request.form.get(k, "").strip())
         tok = db.get_platform("platform_bot_token",""); adm = db.get_platform("admin_chat_id","")
         if tok and adm:
@@ -1259,6 +1289,35 @@ def seed_platform_defaults():
     db.set_platform("support_whatsapp", "201097585951")
     db.set_platform("support_telegram", "")
     db.set_platform("seeded", "1")
+
+# ---------- Webhooks ----------
+@app.route("/wh/whatsapp", methods=["GET", "POST"])
+def whatsapp_webhook():
+    # المسار مُستثنى من CSRF، فالتوقيع هو الحارس الوحيد:
+    # بلا سرّ مضبوط لا نقبل شيئاً (fail closed) بدل أن نفتح الباب للجميع.
+    if request.method == "GET":
+        verify = db.get_platform("wa_verify_token", "") or ""
+        if not verify:
+            abort(403)
+        if (request.args.get("hub.mode") == "subscribe"
+                and _secrets.compare_digest(request.args.get("hub.verify_token", ""), verify)):
+            return request.args.get("hub.challenge", ""), 200
+        abort(403)
+
+    secret = db.get_platform("wa_app_secret", "") or ""
+    if not secret:
+        app.logger.warning("WhatsApp webhook POST rejected: wa_app_secret is not configured")
+        abort(403)
+
+    expected = "sha256=" + hmac.new(
+        secret.encode("utf-8"), request.get_data(), hashlib.sha256).hexdigest()
+    if not _secrets.compare_digest(request.headers.get("X-Hub-Signature-256", ""), expected):
+        abort(403)
+
+    payload = request.get_json(silent=True)
+    if payload:
+        manager.process_wa_webhook(payload)
+    return "OK", 200
 
 def contact_defaults():
     """يضمن وجود بيانات التواصل حتى لو كانت القاعدة قديمة قبل هذه الإضافة."""

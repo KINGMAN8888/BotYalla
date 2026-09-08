@@ -339,6 +339,24 @@ export function AdminPlatform() {
           </p>
         </Card>
 
+        <Card className="mb-5">
+          <SectionTitle icon="phone">WhatsApp Cloud API</SectionTitle>
+          <p className="mt-0 mb-4 text-[13px] text-ink-3">
+            {bi("بدون هذين الحقلين يرفض الويبهوك كل الطلبات — بوتات واتساب لن تستقبل شيئاً.",
+                "Without these two the webhook refuses everything — WhatsApp bots receive nothing.")}
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <F name="wa_verify_token" label="Verify Token" ph={bi("نص من اختيارك تكرره في Meta", "any string, repeated in Meta")} />
+            <F name="wa_app_secret" label="App Secret" ph="Meta → App settings → Basic" />
+          </div>
+          <p className="mt-3 mb-0 text-[12.5px] text-ink-3">
+            {bi("عنوان الويبهوك في Meta:", "Webhook URL in Meta:")}{" "}
+            <code className="rounded bg-white/10 px-1.5 py-0.5">
+              {typeof window !== "undefined" ? window.location.origin : ""}/wh/whatsapp
+            </code>
+          </p>
+        </Card>
+
         <Card>
           <SectionTitle icon="phone">{t("plat_contact")}</SectionTitle>
           <div className="grid gap-4 sm:grid-cols-3">

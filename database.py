@@ -1,10 +1,11 @@
 """BotYalla — قاعدة البيانات (SQLite).
 جداول: users (لوحة التحكم)، bots، bot_users (مشتركو كل بوت للبث)،
 leads، orders، bookings، events (للتحليلات)."""
-import sqlite3, json, time
+import sqlite3, json, os, time
 from contextlib import contextmanager
 
-DB_PATH = "botyalla.db"
+# BOTYALLA_DB يسمح للاختبارات بالعمل على قاعدة مؤقتة بدل قاعدة الإنتاج.
+DB_PATH = os.environ.get("BOTYALLA_DB", "botyalla.db")
 
 @contextmanager
 def get_conn():
@@ -38,6 +39,20 @@ def _migrate(c):
         c.execute("ALTER TABLE payments ADD COLUMN discount REAL NOT NULL DEFAULT 0")
     if "base_amount" not in pcols:                # السعر قبل أي خصم (للتدقيق)
         c.execute("ALTER TABLE payments ADD COLUMN base_amount REAL")
+
+    # Whatsapp integration (Phase 1/2)
+    bcols = {r[1] for r in c.execute("PRAGMA table_info(bots)").fetchall()}
+    if "channel" not in bcols:
+        c.execute("ALTER TABLE bots ADD COLUMN channel TEXT NOT NULL DEFAULT 'telegram'")
+
+    ucols = {r[1] for r in c.execute("PRAGMA table_info(bot_users)").fetchall()}
+    if "peer" not in ucols:
+        c.execute("ALTER TABLE bot_users ADD COLUMN peer TEXT")
+        c.execute("UPDATE bot_users SET peer='tg:'||tg_user_id WHERE peer IS NULL")
+    if "last_in_at" not in ucols:
+        # آخر رسالة واردة من العميل — واتساب يمنع المراسلة الحرة بعد 24 ساعة منها.
+        c.execute("ALTER TABLE bot_users ADD COLUMN last_in_at INTEGER")
+        c.execute("UPDATE bot_users SET last_in_at=created_at WHERE last_in_at IS NULL")
 
 def init_db():
     with get_conn() as c:
@@ -141,6 +156,15 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'new',   -- new | in_progress | done | rejected
             created_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS chat_state(
+            bot_id      INTEGER NOT NULL,
+            peer        TEXT NOT NULL,        -- tg:12345  |  wa:201001234567
+            step        INTEGER NOT NULL DEFAULT 0,
+            data_json   TEXT NOT NULL DEFAULT '{}',
+            updated_at  INTEGER NOT NULL,
+            PRIMARY KEY(bot_id, peer),
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
         CREATE TABLE IF NOT EXISTS events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             bot_id INTEGER NOT NULL,
@@ -240,12 +264,12 @@ def count_users():
         return c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
 
 # ---------- bots ----------
-def create_bot(owner_id, name, token, template, config):
+def create_bot(owner_id, name, token, template, config, channel="telegram"):
     with get_conn() as c:
-        cur = c.execute("INSERT INTO bots(owner_id,name,token,template,config_json,is_active,created_at)"
-                        " VALUES(?,?,?,?,?,0,?)",
+        cur = c.execute("INSERT INTO bots(owner_id,name,token,template,config_json,is_active,created_at,channel)"
+                        " VALUES(?,?,?,?,?,0,?,?)",
                         (owner_id, name, token.strip(), template,
-                         json.dumps(config, ensure_ascii=False), int(time.time())))
+                         json.dumps(config, ensure_ascii=False), int(time.time()), channel))
         return cur.lastrowid
 
 def list_bots(owner_id):
@@ -280,14 +304,40 @@ def delete_bot(bot_id):
         c.execute("DELETE FROM bots WHERE id=?", (bot_id,))
 
 # ---------- subscribers / events ----------
-def add_bot_user(bot_id, tg_user_id, first_name):
+def add_bot_user(bot_id, tg_user_id, first_name, peer=None):
+    now = int(time.time())
+    peer = peer or f"tg:{tg_user_id}"
     with get_conn() as c:
-        c.execute("INSERT OR IGNORE INTO bot_users(bot_id,tg_user_id,first_name,created_at)"
-                  " VALUES(?,?,?,?)", (bot_id, tg_user_id, first_name, int(time.time())))
+        c.execute("INSERT INTO bot_users(bot_id,tg_user_id,first_name,created_at,peer,last_in_at)"
+                  " VALUES(?,?,?,?,?,?)"
+                  " ON CONFLICT(bot_id,tg_user_id) DO UPDATE SET"
+                  " peer=excluded.peer, last_in_at=excluded.last_in_at",
+                  (bot_id, tg_user_id, first_name, now, peer, now))
+
+def bot_user_exists(bot_id, peer):
+    with get_conn() as c:
+        return c.execute("SELECT 1 FROM bot_users WHERE bot_id=? AND peer=? LIMIT 1",
+                         (bot_id, peer)).fetchone() is not None
+
+def touch_bot_user(bot_id, peer):
+    """يسجّل وقت آخر رسالة واردة — أساس نافذة الـ24 ساعة في واتساب."""
+    with get_conn() as c:
+        c.execute("UPDATE bot_users SET last_in_at=? WHERE bot_id=? AND peer=?",
+                  (int(time.time()), bot_id, peer))
 
 def list_bot_user_ids(bot_id):
     with get_conn() as c:
         return [r[0] for r in c.execute("SELECT tg_user_id FROM bot_users WHERE bot_id=?", (bot_id,)).fetchall()]
+
+def list_bot_peers(bot_id, within_seconds=None):
+    """يرجّع peers المشتركين. within_seconds يقصرها على من راسل البوت مؤخراً."""
+    q = "SELECT peer FROM bot_users WHERE bot_id=? AND peer IS NOT NULL"
+    args = [bot_id]
+    if within_seconds:
+        q += " AND last_in_at IS NOT NULL AND last_in_at >= ?"
+        args.append(int(time.time()) - int(within_seconds))
+    with get_conn() as c:
+        return [r[0] for r in c.execute(q, args).fetchall()]
 
 def _day():
     return time.strftime("%Y-%m-%d")
@@ -984,3 +1034,35 @@ def claim_tg_link(code, chat_id):
                   (uid_, str(chat_id)))
         c.execute("DELETE FROM settings WHERE user_id=? AND key='tg_link_code'", (uid_,))
         return uid_
+
+# ---------- حالة المحادثات (Chat State) ----------
+def get_chat_state(bot_id, peer):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM chat_state WHERE bot_id=? AND peer=?", (bot_id, peer)).fetchone()
+        if not r:
+            return None
+        return {"step": r["step"], "data": json.loads(r["data_json"]), "updated_at": r["updated_at"]}
+
+def set_chat_state(bot_id, peer, step, data):
+    with get_conn() as c:
+        c.execute("INSERT INTO chat_state(bot_id, peer, step, data_json, updated_at) "
+                  "VALUES(?, ?, ?, ?, ?) "
+                  "ON CONFLICT(bot_id, peer) DO UPDATE SET "
+                  "step=excluded.step, data_json=excluded.data_json, updated_at=excluded.updated_at",
+                  (bot_id, peer, step, json.dumps(data), int(time.time())))
+
+def clear_chat_state(bot_id, peer):
+    with get_conn() as c:
+        c.execute("DELETE FROM chat_state WHERE bot_id=? AND peer=?", (bot_id, peer))
+
+def purge_stale_chat_state(max_age_seconds=7 * 24 * 3600):
+    """محادثات مهجورة في منتصف الفلو تبقى للأبد بدون هذا — تُنظَّف دورياً."""
+    with get_conn() as c:
+        cur = c.execute("DELETE FROM chat_state WHERE updated_at < ?",
+                        (int(time.time()) - int(max_age_seconds),))
+        return cur.rowcount
+
+def get_bot_by_token(token):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM bots WHERE token=?", (token,)).fetchone()
+        return dict(r) if r else None

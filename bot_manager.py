@@ -11,6 +11,16 @@ import i18n
 
 log = logging.getLogger("bot_manager")
 
+WA_WINDOW = 24 * 3600     # نافذة خدمة العملاء في واتساب
+
+def _wa_channel(row):
+    """يبني قناة واتساب من صف البوت. التوكن مخزّن كـ wa:<phone_number_id>."""
+    from channels.whatsapp import WhatsAppChannel
+    cfg = json.loads(row["config_json"] or "{}")
+    token = row["token"] or ""
+    phone_id = token[3:] if token.startswith("wa:") else token
+    return WhatsAppChannel(phone_id, cfg.get("wa_token", ""))
+
 class BotManager:
     def __init__(self):
         self._loop = None; self._thread = None
@@ -45,6 +55,10 @@ class BotManager:
             log.exception("start"); return False, f"فشل التشغيل: {e}"
 
     async def _start(self, row):
+        if row.get("channel") == "whatsapp":
+            self._apps[row["id"]] = {"type": "whatsapp"}
+            return
+            
         cfg = json.loads(row["config_json"] or "{}")
         app = Application.builder().token(row["token"]).build()
         app.bot_data["config"] = cfg; app.bot_data["bot_id"] = row["id"]
@@ -68,6 +82,8 @@ class BotManager:
     async def _stop(self, bot_id):
         app = self._apps.pop(bot_id, None)
         if app:
+            if isinstance(app, dict) and app.get("type") == "whatsapp":
+                return
             if app.updater and app.updater.running: await app.updater.stop()
             await app.stop(); await app.shutdown()
 
@@ -76,15 +92,27 @@ class BotManager:
 
     def broadcast(self, bot_id, text):
         """إرسال رسالة لكل مشتركي البوت. يرجّع (تم, فشل)."""
-        ids = db.list_bot_user_ids(bot_id)
-        if not ids: return 0, 0
         row = db.get_bot(bot_id)
+        if not row: return 0, 0
+        if (row.get("channel") or "telegram") == "whatsapp":
+            # واتساب يمنع المراسلة الحرة بعد 24 ساعة من آخر رسالة للعميل،
+            # والمخالفة تُقيّد الرقم. نبثّ داخل النافذة فقط.
+            ids = db.list_bot_peers(bot_id, within_seconds=WA_WINDOW)
+            skipped = len(db.list_bot_peers(bot_id)) - len(ids)
+            if skipped:
+                log.info("broadcast: skipped %s WhatsApp peers outside the 24h window", skipped)
+        else:
+            ids = db.list_bot_user_ids(bot_id)
+        if not ids: return 0, 0
         try:
             return self._submit(self._broadcast(row, ids, text), timeout=max(30, len(ids)*0.5))
         except Exception as e:
             log.exception("broadcast"); return 0, len(ids)
 
     async def _broadcast(self, row, ids, text):
+        if (row.get("channel") or "telegram") == "whatsapp":
+            return await self._broadcast_wa(row, ids, text)
+
         app = self._apps.get(row["id"])
         bot = app.bot if app else Bot(row["token"])
         own = app is None
@@ -97,6 +125,19 @@ class BotManager:
             except Exception:
                 failed += 1
         if own: await bot.shutdown()
+        return sent, failed
+
+    async def _broadcast_wa(self, row, peers, text):
+        channel = _wa_channel(row)
+        sent = failed = 0
+        for peer in peers:
+            try:
+                ok = await channel.send_text(peer, text)
+                sent += 1 if ok else 0
+                failed += 0 if ok else 1
+                await asyncio.sleep(0.1)
+            except Exception:
+                failed += 1
         return sent, failed
 
     # ---- بوت المنصة (تنبيهات الدفع) ----
@@ -127,13 +168,23 @@ class BotManager:
         return self._platform is not None
 
     def notify_text(self, chat_id, text):
-        """إرسال رسالة نصية للأدمن عبر بوت المنصة (best-effort)."""
+        """إرسال رسالة نصية للأدمن عبر بوت المنصة (best-effort).
+        لا تُستدعى من داخل حلقة المدير نفسها — استخدم notify_text_async هناك."""
         if self._platform is None or not chat_id:
             return False
         try:
             self._submit(self._platform.bot.send_message(int(chat_id), text)); return True
         except Exception:
             log.exception("notify_text"); return False
+
+    async def notify_text_async(self, chat_id, text):
+        """نفس الغرض لكن من داخل حلقة asyncio (يتجنّب انتظار النتيجة على نفس الحلقة)."""
+        if self._platform is None or not chat_id:
+            return False
+        try:
+            await self._platform.bot.send_message(int(chat_id), text); return True
+        except Exception:
+            log.exception("notify_text_async"); return False
 
     def send_payment_alert(self, admin_id, payment, username, caption, screenshot_path):
         if self._platform is None:
@@ -157,6 +208,12 @@ class BotManager:
                 self._send_reminder_cycle()
             except Exception:
                 log.exception("reminder cycle error")
+            try:
+                n = db.purge_stale_chat_state()
+                if n:
+                    log.info("purged %s stale chat states", n)
+            except Exception:
+                log.exception("chat_state purge error")
             _time.sleep(INTERVAL)
 
     def _send_reminder_cycle(self):
@@ -221,6 +278,40 @@ class BotManager:
             if deliver(sub, "expired", "sub_expired", "sub_admin_expired"):
                 db.log_reminder(sub["user_id"], "expired")
                 log.info("expired reminder sent for user #%s", sub["user_id"])
+
+    # ---- تكامل واتساب ----
+    def process_wa_webhook(self, payload):
+        """تُسلّم الـ payload لحلقة المدير بلا انتظار.
+        Meta تتوقّع 200 فوراً وتُعيد الإرسال لو تأخّر الرد."""
+        if self._loop is None:
+            log.warning("WhatsApp webhook arrived before the manager loop started")
+            return False
+        try:
+            asyncio.run_coroutine_threadsafe(self._handle_wa_webhook(payload), self._loop)
+            return True
+        except Exception:
+            log.exception("Failed to dispatch WhatsApp webhook")
+            return False
+
+    async def _handle_wa_webhook(self, payload):
+        try:
+            val = payload["entry"][0]["changes"][0]["value"]
+            if not val.get("messages"):
+                return          # تحديث حالة تسليم أو ما شابه — ليس رسالة واردة
+
+            phone_id = val["metadata"]["phone_number_id"]
+            bot_row = db.get_bot_by_token(f"wa:{phone_id}")
+            if not bot_row or not bot_row.get("is_active"):
+                log.warning("WhatsApp message for unknown or inactive phone_id: %s", phone_id)
+                return
+
+            channel = _wa_channel(bot_row)
+            msg = channel.normalize(payload)
+            if msg:
+                import flow_engine
+                await flow_engine.handle_message(bot_row, channel, msg)
+        except Exception:
+            log.exception("Error handling WhatsApp webhook payload")
 
 manager = BotManager()
 

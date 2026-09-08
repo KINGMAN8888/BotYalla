@@ -46,6 +46,7 @@ function BotCard({ b, i }) {
 
 /* معالج إنشاء البوت — التوكن أولاً لأنه أصعب خطوة على غير التقنيين */
 function CreateWizard() {
+  const [channel, setChannel] = useState("telegram");
   const [status, setStatus] = useState(null);   // {ok, text}
   const timer = useRef(null);
 
@@ -72,8 +73,24 @@ function CreateWizard() {
 
   const steps = [
     {
-      n: 1, title: t("lp_step1"), desc: t("lp_step1_d"),
+      n: 1, title: bi("اختر المنصة / Choose Platform", "Platform"),
       body: (
+        <div className="flex gap-4">
+          <label className="flex items-center gap-2 cursor-pointer text-[14px]">
+            <input type="radio" name="channel" value="telegram" checked={channel === "telegram"} onChange={(e) => setChannel(e.target.value)} />
+            <Icon name="bot" size={16} className="text-blue-500" /> Telegram
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer text-[14px]">
+            <input type="radio" name="channel" value="whatsapp" checked={channel === "whatsapp"} onChange={(e) => setChannel(e.target.value)} />
+            <Icon name="phone" size={16} className="text-green-500" /> WhatsApp
+          </label>
+        </div>
+      )
+    },
+    {
+      n: 2, title: channel === "telegram" ? t("lp_step1") : bi("بيانات واتساب", "WhatsApp Credentials"),
+      desc: channel === "telegram" ? t("lp_step1_d") : bi("أدخل Phone Number ID و Access Token المؤقت من لوحة مطوري Meta", "Enter Phone Number ID and temporary Access Token from Meta Developer Console"),
+      body: channel === "telegram" ? (
         <>
           <Btn variant="ghost" sm icon="link" href="https://t.me/BotFather" target="_blank" rel="noopener">
             {t("open_botfather")}
@@ -92,10 +109,35 @@ function CreateWizard() {
             )}
           </div>
         </>
+      ) : (
+        <>
+          <Btn variant="ghost" sm icon="link" href="https://developers.facebook.com/apps"
+               target="_blank" rel="noopener">
+            {bi("افتح لوحة مطوري Meta", "Open Meta developers")}
+          </Btn>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <Field label="Phone Number ID">
+              <Input name="wa_phone_id" required autoComplete="off" spellCheck="false"
+                     inputMode="numeric" placeholder="123456789012345" />
+            </Field>
+            <Field label="Access Token">
+              <Input name="wa_token" required autoComplete="off" spellCheck="false"
+                     placeholder="EAAG…" />
+            </Field>
+          </div>
+          <p className="mt-3 text-[12.5px] text-ink-3">
+            {bi("بعد الإنشاء اضبط Webhook في Meta على العنوان أسفل، ثم شغّل البوت.",
+                "After creating it, point the Meta webhook to the URL below, then start the bot.")}
+            {" "}
+            <code className="rounded bg-white/10 px-1.5 py-0.5">
+              {typeof window !== "undefined" ? window.location.origin : ""}/wh/whatsapp
+            </code>
+          </p>
+        </>
       ),
     },
     {
-      n: 2, title: t("lp_step2"),
+      n: 3, title: t("lp_step2"),
       body: (
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label={t("biz_name")}>
@@ -110,7 +152,7 @@ function CreateWizard() {
       ),
     },
     {
-      n: 3, title: t("owner_id_lbl"), desc: t("owner_id_tip"), optional: true,
+      n: 4, title: t("owner_id_lbl"), desc: t("owner_id_tip"), optional: true,
       body: (
         <div className="flex flex-wrap items-center gap-2.5">
           <Input name="owner_chat_id" placeholder="123456789" inputMode="numeric"
