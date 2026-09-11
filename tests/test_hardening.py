@@ -6,14 +6,16 @@
 
     python tests/test_hardening.py
 """
-import os, sys, tempfile, unittest
+import os, secrets, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMPDIR = tempfile.mkdtemp(prefix="botyalla-hard-")
 os.environ["BOTYALLA_DB"] = os.path.join(_TMPDIR, "test.db")   # قبل استيراد database/app
 os.environ["BOTYALLA_UPLOADS"] = os.path.join(_TMPDIR, "uploads")
+ADMIN_PW = os.environ.setdefault("ADMIN_PASS", f"tst_adm_{secrets.token_hex(8)}")
+TEST_PW = f"tst_pw_{secrets.token_hex(8)}"
 os.environ["ADMIN_USER"] = "admin"
-os.environ["ADMIN_PASS"] = "hardening-test-pass-123"
+os.environ["ADMIN_PASS"] = ADMIN_PW
 
 import auth                                # noqa: E402
 import database as db                      # noqa: E402
@@ -43,7 +45,7 @@ class SettlementAtomicityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         _boot()
-        cls.uid = db.create_user("settler", auth.hash_password("password123"))
+        cls.uid = db.create_user("settler", auth.hash_password(TEST_PW))
 
     def test_a_crash_mid_settlement_rolls_the_decision_back(self):
         """لا تبقى دفعة «معتمدة» بلا اشتراك مفعَّل."""
@@ -86,16 +88,16 @@ class RateLimitTests(unittest.TestCase):
         c = _client()
         blocked = 0
         for i in range(8):
-            r = c.post("/register", data={"username": f"zz{i}", "password": "password123",
+            r = c.post("/register", data={"username": f"zz{i}", "password": TEST_PW,
                                           "csrf_token": "tk"}, follow_redirects=True)
             if "انتظر قليلاً" in r.get_data(as_text=True):
                 blocked += 1
         self.assertGreater(blocked, 0, "التسجيل بلا حدّ يسمح بإغراق المنصة بحسابات")
 
     def test_the_promo_endpoint_is_throttled(self):
-        db.create_user("promoprobe", auth.hash_password("password123"))
+        db.create_user("promoprobe", auth.hash_password(TEST_PW))
         c = _client()
-        c.post("/login", data={"username": "promoprobe", "password": "password123",
+        c.post("/login", data={"username": "promoprobe", "password": TEST_PW,
                                "csrf_token": "tk"})
         codes = [c.post("/api/promo/check", json={"plan": "merchant", "code": f"GUESS{i}"},
                         headers={"X-CSRF-Token": "tk"}).status_code for i in range(25)]
@@ -139,7 +141,7 @@ class UsernameRuleTests(unittest.TestCase):
 
     def test_markup_in_a_username_is_refused(self):
         c = _client()
-        c.post("/register", data={"username": "<script>bad</script>", "password": "password123",
+        c.post("/register", data={"username": "<script>bad</script>", "password": TEST_PW,
                                   "csrf_token": "tk"}, follow_redirects=True)
         self.assertIsNone(db.get_user_by_name("<script>bad</script>"))
 
@@ -165,12 +167,12 @@ class UsernameRuleTests(unittest.TestCase):
     def test_a_legacy_username_can_still_change_its_password(self):
         """حساب سُجّل قبل USERNAME_RE: النموذج يعيد إرسال اسمه كما هو، وهذا
         يجب ألا يمنعه من تغيير كلمة المرور."""
-        db.create_user("old name@x.com", auth.hash_password("password123"))
+        db.create_user("old name@x.com", auth.hash_password(TEST_PW))
         c = _client()
-        c.post("/login", data={"username": "old name@x.com", "password": "password123",
+        c.post("/login", data={"username": "old name@x.com", "password": TEST_PW,
                                "csrf_token": "tk"})
         c.post("/account", data={"username": "old name@x.com", "new_password": "newpass456",
-                                 "current_password": "password123", "csrf_token": "tk"})
+                                 "current_password": TEST_PW, "csrf_token": "tk"})
         row = db.get_user_by_name("old name@x.com")
         self.assertTrue(auth.verify_password("newpass456", row["pw_hash"]))
 
@@ -182,7 +184,7 @@ class FirstVisitCsrfTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         _boot()
-        db.create_user("visitor", auth.hash_password("password123"))
+        db.create_user("visitor", auth.hash_password(TEST_PW))
 
     def setUp(self):
         web._login_attempts.clear()
@@ -197,22 +199,22 @@ class FirstVisitCsrfTests(unittest.TestCase):
         c = web.app.test_client()                     # بلا أي جلسة
         tok = self._page_token(c, "/login")
         self.assertTrue(tok, "BY.csrf فارغ في أول زيارة")
-        r = c.post("/login", data={"username": "visitor", "password": "password123", "csrf_token": tok})
+        r = c.post("/login", data={"username": "visitor", "password": TEST_PW, "csrf_token": tok})
         self.assertEqual(r.status_code, 302)
 
     def test_a_fresh_visitor_can_register_on_the_first_try(self):
         c = web.app.test_client()
         tok = self._page_token(c, "/register")
-        r = c.post("/register", data={"username": "firsttry", "password": "password123", "csrf_token": tok})
+        r = c.post("/register", data={"username": "firsttry", "password": TEST_PW, "csrf_token": tok})
         self.assertNotEqual(r.status_code, 400)
         self.assertIsNotNone(db.get_user_by_name("firsttry"))
 
     def test_signing_back_in_after_logout_works_on_the_first_try(self):
         c = web.app.test_client()
-        c.post("/login", data={"username": "visitor", "password": "password123",
+        c.post("/login", data={"username": "visitor", "password": TEST_PW,
                                "csrf_token": self._page_token(c, "/login")})
         c.get("/logout")                              # يمسح الجلسة كلها
-        r = c.post("/login", data={"username": "visitor", "password": "password123",
+        r = c.post("/login", data={"username": "visitor", "password": TEST_PW,
                                    "csrf_token": self._page_token(c, "/login")})
         self.assertEqual(r.status_code, 302)
 
@@ -223,7 +225,7 @@ class ReceiptWriteOrderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         _boot()
-        cls.uid = db.create_user("uploader", auth.hash_password("password123"))
+        cls.uid = db.create_user("uploader", auth.hash_password(TEST_PW))
         os.makedirs(web.UPLOAD_DIR, exist_ok=True)
 
     def setUp(self):
@@ -233,7 +235,7 @@ class ReceiptWriteOrderTests(unittest.TestCase):
         import io
         before = set(os.listdir(web.UPLOAD_DIR))
         c = _client()
-        c.post("/login", data={"username": "uploader", "password": "password123",
+        c.post("/login", data={"username": "uploader", "password": TEST_PW,
                                "csrf_token": "tk"})
         c.post("/subscribe/pro", data={
             "method": "instapay", "ref": "R",

@@ -2,7 +2,7 @@
 Meta تُحاكى على مستوى httpx فقط — كل ما فوقه حقيقي.
     python tests/test_wa_templates.py
 """
-import json, os, sys, tempfile, unittest
+import json, os, secrets, sys, tempfile, unittest
 from unittest import mock
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -177,7 +177,8 @@ class RouteTests(unittest.TestCase):
         cls.c.get("/register")                       # يولّد توكن CSRF في الجلسة
         with cls.c.session_transaction() as s:
             tok = s.get("_csrf")
-        cls.c.post("/register", data={"username": "tpl", "password": "Passw0rd!123",
+        pw = f"tpl_{secrets.token_hex(8)}"
+        cls.c.post("/register", data={"username": "tpl", "password": pw,
                                       "csrf_token": tok}, follow_redirects=True)
         with cls.c.session_transaction() as s:
             cls.tok, cls.uid = s.get("_csrf"), s.get("uid")

@@ -2,14 +2,16 @@
 
     python tests/test_password_reset.py
 """
-import hashlib, os, re, sqlite3, sys, tempfile, time, unittest
+import hashlib, os, re, secrets, sqlite3, sys, tempfile, time, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMPDIR = tempfile.mkdtemp(prefix="botyalla-reset-")
 os.environ["BOTYALLA_DB"] = os.path.join(_TMPDIR, "test.db")   # قبل استيراد database/app
 os.environ["BOTYALLA_UPLOADS"] = os.path.join(_TMPDIR, "uploads")
+ADMIN_PW = os.environ.setdefault("ADMIN_PASS", f"tst_adm_{secrets.token_hex(8)}")
+TEST_PW = f"tst_pw_{secrets.token_hex(8)}"
 os.environ["ADMIN_USER"] = "admin"
-os.environ["ADMIN_PASS"] = "reset-test-pass-123"
+os.environ["ADMIN_PASS"] = ADMIN_PW
 os.environ["PUBLIC_URL"] = "https://botyalla.test"
 
 import auth                                # noqa: E402
@@ -83,35 +85,35 @@ class EmailFieldTests(Base):
             db.DB_PATH = orig
 
     def test_registration_accepts_an_optional_email_normalised(self):
-        _client().post("/register", data={"username": "withmail", "password": "password123",
+        _client().post("/register", data={"username": "withmail", "password": TEST_PW,
                                           "email": "  Owner@Shop.COM ", "csrf_token": "tk"})
         self.assertEqual(db.get_user_by_name("withmail")["email"], "owner@shop.com")
-        _client().post("/register", data={"username": "nomail", "password": "password123",
+        _client().post("/register", data={"username": "nomail", "password": TEST_PW,
                                           "csrf_token": "tk"})
         self.assertIsNone(db.get_user_by_name("nomail")["email"])
 
     def test_the_same_email_cannot_belong_to_two_accounts(self):
-        _client().post("/register", data={"username": "first1", "password": "password123",
+        _client().post("/register", data={"username": "first1", "password": TEST_PW,
                                           "email": "dup@x.co", "csrf_token": "tk"})
-        _client().post("/register", data={"username": "second1", "password": "password123",
+        _client().post("/register", data={"username": "second1", "password": TEST_PW,
                                           "email": "DUP@x.co", "csrf_token": "tk"})
         self.assertIsNone(db.get_user_by_name("second1"))
         other = db.create_user("third1", "h")
         self.assertEqual(db.set_user_email(other, "dup@x.co"), (False, "email_taken"))
 
     def test_a_malformed_email_is_refused(self):
-        _client().post("/register", data={"username": "badmail", "password": "password123",
+        _client().post("/register", data={"username": "badmail", "password": TEST_PW,
                                           "email": "not an email", "csrf_token": "tk"})
         self.assertIsNone(db.get_user_by_name("badmail"))
 
     def test_the_account_page_sets_the_email_and_an_old_form_does_not_erase_it(self):
-        db.create_user("acct", auth.hash_password("password123"))
-        c = _client(); _login(c, "acct", "password123")
+        db.create_user("acct", auth.hash_password(TEST_PW))
+        c = _client(); _login(c, "acct", TEST_PW)
         c.post("/account", data={"username": "acct", "email": "acct@x.co",
-                                 "current_password": "password123", "csrf_token": "tk"})
+                                 "current_password": TEST_PW, "csrf_token": "tk"})
         self.assertEqual(db.get_user_by_name("acct")["email"], "acct@x.co")
         # بناء واجهة أقدم بلا حقل email
-        c.post("/account", data={"username": "acct", "current_password": "password123",
+        c.post("/account", data={"username": "acct", "current_password": TEST_PW,
                                  "csrf_token": "tk"})
         self.assertEqual(db.get_user_by_name("acct")["email"], "acct@x.co")
 
@@ -234,10 +236,10 @@ class ReceiptTests(Base):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.uid = db.create_user("buyer", auth.hash_password("password123"), email="buyer@shop.co")
+        cls.uid = db.create_user("buyer", auth.hash_password(TEST_PW), email="buyer@shop.co")
 
     def _admin(self):
-        c = _client(); _login(c, "admin", "reset-test-pass-123")
+        c = _client(); _login(c, "admin", ADMIN_PW)
         return c
 
     def test_an_approval_emails_a_receipt_with_the_expiry(self):

@@ -7,14 +7,16 @@
 
     python tests/test_plans_migration.py
 """
-import os, sys, tempfile, time, unittest
+import os, secrets, sys, tempfile, time, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMPDIR = tempfile.mkdtemp(prefix="botyalla-plans-")
 os.environ["BOTYALLA_DB"] = os.path.join(_TMPDIR, "test.db")   # قبل استيراد database
 os.environ["BOTYALLA_UPLOADS"] = _TMPDIR
+ADMIN_PW = os.environ.setdefault("ADMIN_PASS", f"tst_adm_{secrets.token_hex(8)}")
+TEST_PW = f"tst_pw_{secrets.token_hex(8)}"
 os.environ["ADMIN_USER"] = "admin"
-os.environ["ADMIN_PASS"] = "plans-test-pass-123"
+os.environ["ADMIN_PASS"] = ADMIN_PW
 
 import auth                                # noqa: E402
 import plans                               # noqa: E402
@@ -134,7 +136,7 @@ class ExistingSubscriberTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         _boot()
-        cls.u = db.create_user("legacy_pro", auth.hash_password("password123"))
+        cls.u = db.create_user("legacy_pro", auth.hash_password(TEST_PW))
         with db.get_conn() as c:
             c.execute("INSERT INTO subscriptions(user_id,plan,status,started_at,expires_at) "
                       "VALUES(?, 'pro', 'active',?,?)", (cls.u, NOW - 10 * 86400, FUTURE))
@@ -179,7 +181,7 @@ class GateTests(unittest.TestCase):
         _boot()
         cls.users = {}
         for pid in plans.ORDER:
-            uid_ = db.create_user(f"gate_{pid}", auth.hash_password("password123"))
+            uid_ = db.create_user(f"gate_{pid}", auth.hash_password(TEST_PW))
             db.activate_subscription(uid_, pid, days=30)
             cls.users[pid] = uid_
 
@@ -188,7 +190,7 @@ class GateTests(unittest.TestCase):
 
     def _login(self, pid):
         c = _client()
-        c.post("/login", data={"username": f"gate_{pid}", "password": "password123",
+        c.post("/login", data={"username": f"gate_{pid}", "password": TEST_PW,
                                "csrf_token": "tk"})
         return c
 

@@ -6,14 +6,16 @@
 
     python tests/test_xss.py
 """
-import json, os, sys, tempfile, unittest
+import json, os, secrets, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMPDIR = tempfile.mkdtemp(prefix="botyalla-xss-")
 os.environ["BOTYALLA_DB"] = os.path.join(_TMPDIR, "test.db")   # قبل استيراد database/app
 os.environ["BOTYALLA_UPLOADS"] = _TMPDIR
+ADMIN_PW = os.environ.setdefault("ADMIN_PASS", f"tst_adm_{secrets.token_hex(8)}")
+TEST_PW = f"tst_pw_{secrets.token_hex(8)}"
 os.environ["ADMIN_USER"] = "admin"
-os.environ["ADMIN_PASS"] = "test-admin-pass-123"
+os.environ["ADMIN_PASS"] = ADMIN_PW
 
 import auth                                # noqa: E402
 import database as db                      # noqa: E402
@@ -49,10 +51,10 @@ class ScriptInjectionTests(unittest.TestCase):
         _boot()
         # مهاجم يسجّل باسم يحمل الحمولة — لا قيد على أحرف الاسم، الطول فقط
         c = _client()
-        c.post("/register", data={"username": PAYLOAD, "password": "password123",
+        c.post("/register", data={"username": PAYLOAD, "password": TEST_PW,
                                   "csrf_token": "tk"}, follow_redirects=True)
         # صاحب بوت، وعميل من تليجرام/واتساب يحقن عبر lead
-        cls.owner = db.create_user("shopowner", auth.hash_password("password123"))
+        cls.owner = db.create_user("shopowner", auth.hash_password(TEST_PW))
         cls.bot = db.create_bot(cls.owner, "MyBot", "TOK:xss", "flow",
                                 {"business_name": "MyBot", "flow": None, "menu_items": []})
         db.add_lead(cls.bot, 555, {"name": PAYLOAD, "note": "order"})
@@ -67,7 +69,7 @@ class ScriptInjectionTests(unittest.TestCase):
     def test_a_malicious_username_cannot_close_the_script_tag_for_the_admin(self):
         """أخطر مسار: الأدمن يفتح «المستخدمون» فينفَّذ الكود في جلسته."""
         c = _client()
-        _login(c, "admin", "test-admin-pass-123")
+        _login(c, "admin", ADMIN_PW)
         html = c.get("/admin/users").get_data(as_text=True)
         self.assertNotIn(PAYLOAD, html)
         self.assertNotIn("</script><img", html)
@@ -76,7 +78,7 @@ class ScriptInjectionTests(unittest.TestCase):
     def test_customer_text_cannot_close_the_script_tag_for_the_bot_owner(self):
         """أي زبون على تليجرام/واتساب يكتب النص، وصاحب البوت يفتح صفحته."""
         c = _client()
-        _login(c, "shopowner", "password123")
+        _login(c, "shopowner", TEST_PW)
         html = c.get(f"/bot/{self.bot}").get_data(as_text=True)
         self.assertNotIn(PAYLOAD, html)
         self.assertNotIn("</script><img", html)
@@ -91,7 +93,7 @@ class ScriptInjectionTests(unittest.TestCase):
     def test_the_escaping_keeps_the_payload_usable(self):
         """الهروب داخل السلاسل فقط: JSON يفكّ لنفس القيم، والأيقونات تبقى SVG."""
         c = _client()
-        _login(c, "shopowner", "password123")
+        _login(c, "shopowner", TEST_PW)
         obj = json.loads(self._by_payload(c.get("/").get_data(as_text=True)))
         self.assertTrue(obj["icons"]["grid"].startswith("<svg"))
         self.assertEqual(obj["user"]["name"], "shopowner")

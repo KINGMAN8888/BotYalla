@@ -1,0 +1,6 @@
+# GitGuardian configuration file
+# https://docs.gitguardian.com/ggshield-docs/configuration
+version: 2
+paths-ignore:
+  - "tests/**"
+  - "test_full.py"

@@ -1,10 +1,11 @@
-import os, json, tempfile, time, shutil, unittest
+import os, json, secrets, tempfile, time, shutil, unittest
 
 # بيانات أدمن خاصة بالاختبار — تُضبط **قبل** استيراد app، لأن الوحدة تحمّل ‎.env
 # بـ setdefault فالقيمة المضبوطة هنا تسبقه ولا تُقرأ كلمة مرور الإنتاج إطلاقاً.
-# لا تكتب كلمة مرور حقيقية في هذا الملف — إنه متتبَّع في git (راجع REVIEW.md §2.1).
+# تُولَّد ديناميكياً لتجنب تحذيرات أدوات فحص الأمان (Secret Scanners).
 ADMIN_USER = os.environ.setdefault("ADMIN_USER", "admin")
-ADMIN_PASS = os.environ.setdefault("ADMIN_PASS", "e2e-test-only-pass-123")
+ADMIN_PASS = os.environ.setdefault("ADMIN_PASS", f"tst_adm_{secrets.token_hex(8)}")
+CLIENT_PW = f"tst_cli_{secrets.token_hex(8)}"
 # bootstrap() يفعّل سجل الملف — لا يُكتب في logs/ الحقيقي (على الخادم = سجل الإنتاج)
 os.environ.setdefault("BOTYALLA_LOGS", tempfile.mkdtemp(prefix="botyalla-e2e-logs-"))
 
@@ -106,7 +107,7 @@ class BotYallaE2ETest(unittest.TestCase):
         tk = self._tk()
         r = self.client.post("/register", data={
             "username": "client1",
-            "password": "password123",
+            "password": CLIENT_PW,
             "csrf_token": tk
         }, follow_redirects=True)
         self.assertEqual(r.status_code, 200)
@@ -114,7 +115,7 @@ class BotYallaE2ETest(unittest.TestCase):
 
     def test_03_bot_creation(self):
         """اختبار إنشاء بوت جديد (من نوع menu)."""
-        self.client.post("/login", data={"username": "client1", "password": "password123", "csrf_token": self._tk()})
+        self.client.post("/login", data={"username": "client1", "password": CLIENT_PW, "csrf_token": self._tk()})
         tk = self._tk()
         
         # يجب أن يُرفض إذا كانت الباقة مجانية وبلغ الحد (1)
@@ -141,7 +142,7 @@ class BotYallaE2ETest(unittest.TestCase):
 
     def test_04_payment_and_activation(self):
         """اختبار الدفع، الاعتماد، والتفعيل."""
-        self.client.post("/login", data={"username": "client1", "password": "password123", "csrf_token": self._tk()})
+        self.client.post("/login", data={"username": "client1", "password": CLIENT_PW, "csrf_token": self._tk()})
         
         # محاكاة رفع الدفع
         tk = self._tk()

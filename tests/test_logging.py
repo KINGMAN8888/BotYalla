@@ -5,15 +5,17 @@
 
     python tests/test_logging.py
 """
-import logging, os, sys, tempfile, unittest
+import logging, os, secrets, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMPDIR = tempfile.mkdtemp(prefix="botyalla-log-")
 os.environ["BOTYALLA_DB"] = os.path.join(_TMPDIR, "test.db")   # قبل استيراد database/app
 os.environ["BOTYALLA_UPLOADS"] = os.path.join(_TMPDIR, "uploads")
 os.environ["BOTYALLA_LOGS"] = os.path.join(_TMPDIR, "logs")    # لا يُكتب في logs/ الحقيقي
+ADMIN_PW = os.environ.setdefault("ADMIN_PASS", f"tst_adm_{secrets.token_hex(8)}")
+TEST_PW = f"tst_pw_{secrets.token_hex(8)}"
 os.environ["ADMIN_USER"] = "admin"
-os.environ["ADMIN_PASS"] = "logging-test-pass-123"
+os.environ["ADMIN_PASS"] = ADMIN_PW
 
 import auth                                # noqa: E402
 import database as db                      # noqa: E402
@@ -73,7 +75,7 @@ class LoggingTests(unittest.TestCase):
         self.assertEqual(NOTES, [])
 
     def test_settlements_are_logged_only_after_commit(self):
-        uid = db.create_user("payer", auth.hash_password("password123"))
+        uid = db.create_user("payer", auth.hash_password(TEST_PW))
         pid = db.create_payment(uid, "pro", "instapay", 199, "R", "s.png", "H1", "{}")
         db.finalize_payment(pid, "approved")
         self.assertIn(f"payment #{pid} approved user={uid} plan=pro", _log_text())
