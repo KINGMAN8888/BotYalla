@@ -11,10 +11,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='dist/style.css') }}">
-{% if needs_chart %}<script src="{{ url_for('static', filename='chart.min.js') }}"></script>{% endif %}
-<script>document.documentElement.className += " js";</script>
-<script>window.BY = {{ by_json|safe }};</script>
-<style>
+{% if needs_chart %}<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='chart.min.js') }}"></script>{% endif %}
+<script nonce="{{ csp_nonce }}">document.documentElement.className += " js";</script>
+<script nonce="{{ csp_nonce }}">window.BY = {{ by_json|safe }};</script>
+<style nonce="{{ csp_nonce }}">
   html{background:#05070D;}
   body{font-family:{% if lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}
   /* شاشة تحميل بسيطة تختفي فور تركيب React — لا وميض أبيض ولا قفزة */
@@ -34,6 +34,6 @@
     {{ 'هذه الصفحة تحتاج تفعيل الجافاسكربت.' if lang=='ar' else 'This page requires JavaScript to be enabled.' }}
   </div>
 </noscript>
-<script type="module" src="{{ url_for('static', filename='dist/console.js') }}"></script>
+<script nonce="{{ csp_nonce }}" type="module" src="{{ url_for('static', filename='dist/console.js') }}"></script>
 </body>
 </html>

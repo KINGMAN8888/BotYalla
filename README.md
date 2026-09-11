@@ -4,9 +4,9 @@
 
 # BotYalla
 
-### The No-Code Telegram Bot SaaS Platform for Businesses
+### The No-Code Telegram & WhatsApp Bot SaaS Platform for Businesses
 
-BotYalla is a full-featured, multi-tenant SaaS platform that enables businesses, agencies, and creators to design, launch, and manage intelligent Telegram bots without writing a single line of code. Built with Python, Flask, and the modern `python-telegram-bot` framework, BotYalla combines a visual conversation flow engine, generative AI automation, built-in business templates, subscriber broadcasting, real-time analytics, and a dual-layer local payment verification pipeline.
+BotYalla is a full-featured, multi-tenant SaaS platform that enables businesses, agencies, and creators to design, launch, and manage intelligent chat bots on **Telegram and WhatsApp** without writing a single line of code. Built with Python, Flask, `python-telegram-bot` and the WhatsApp Cloud API — behind a React 19 presentation layer — BotYalla combines a visual conversation flow engine, generative AI automation, built-in business templates, subscriber broadcasting, inbound media handling, real-time analytics, promo codes, an affiliate programme, and a dual-layer local payment verification pipeline.
 
 ---
 
@@ -40,8 +40,9 @@ BotYalla is a full-featured, multi-tenant SaaS platform that enables businesses,
 ```mermaid
 flowchart TD
     subgraph ClientLayer ["Client Access Layer"]
-        WebUser["End User / Admin Browser"]
+        WebUser["End User / Admin Browser (React 19 SPA-less UI)"]
         TgUser["Telegram Subscribers"]
+        WaUser["WhatsApp Customers"]
     end
 
     subgraph InfrastructureLayer ["Infrastructure & Reverse Proxy"]
@@ -55,7 +56,16 @@ flowchart TD
         FlowModule["Conversation Flow Engine (flow_engine.py)"]
         AIModule["AI Configuration Engine (ai_agent.py)"]
         PaymentModule["Payment Verification Engine (payments.py)"]
+        PricingModule["Server-Side Pricing, Promos & Affiliates (app.py)"]
+        MediaModule["Inbound Media Store (media_store.py)"]
         I18nModule["Internationalization (i18n.py)"]
+    end
+
+    subgraph ChannelLayer ["Channel Abstraction (channels/)"]
+        ChanBase["Channel Interface (base.py)"]
+        ChanTg["Telegram Transport (telegram.py)"]
+        ChanWa["WhatsApp Cloud Transport (whatsapp.py)"]
+        WaTmpl["Meta Template Manager (wa_templates.py)"]
     end
 
     subgraph DataLayer ["Data & Storage Layer"]
@@ -71,6 +81,7 @@ flowchart TD
 
     subgraph ExternalServices ["External Services & APIs"]
         TelegramAPI["Telegram Bot API"]
+        WhatsAppAPI["WhatsApp Cloud API (Meta Graph)"]
         GeminiAPI["Google Gemini API (gemini-2.5-flash)"]
         GroqAPI["Groq API (llama-3.3-70b-versatile)"]
     end
@@ -96,9 +107,22 @@ flowchart TD
     BotManager --> PlatformBot
     BotManager --> TenantBots
 
-    TenantBots <-->|Long Polling / Webhook| TelegramAPI
+    FlaskApp --> PricingModule
+    FlaskApp --> MediaModule
+    MediaModule --> UploadsDir
+
+    BotManager --> ChanBase
+    ChanBase --> ChanTg
+    ChanBase --> ChanWa
+    FlaskApp --> WaTmpl
+
+    TenantBots --> ChanBase
+    ChanTg <-->|Long Polling| TelegramAPI
+    ChanWa <-->|Signed Webhook /wh/whatsapp + Graph Send| WhatsAppAPI
+    WaTmpl -->|Template CRUD| WhatsAppAPI
     PlatformBot <-->|Admin Notifications & Callbacks| TelegramAPI
     TgUser <--> TelegramAPI
+    WaUser <--> WhatsAppAPI
 ```
 
 ---
@@ -167,6 +191,12 @@ sequenceDiagram
 | `plans.py` | Subscription tier specifications, pricing constants, and feature boundary enforcement. | `PLANS`, `plan()`, `plan_name()`. |
 | `i18n.py` | Localization repository supporting Arabic (RTL) and English (LTR). | Translation dictionaries, direction helper functions. |
 | `tg_helpers.py` | Telegram token validation, admin linking, and shared message formatting. | `validate_token()`, `get_bot_info()`. |
+| `channels/base.py` | Abstract transport interface every channel implements. | `Channel.send_text()`, `send_buttons()`, `normalize()`, `fetch_media()`. |
+| `channels/telegram.py` | Telegram transport (long polling). | Message normalisation, keyboard handling. |
+| `channels/whatsapp.py` | WhatsApp Cloud API transport (webhook), 24-hour window and monthly send quota. | Inbound normalisation, deduplication, two-step media download. |
+| `channels/wa_templates.py` | Meta message-template validation and lifecycle. | Name/category/length/variable rule checks, create, list, delete. |
+| `media_store.py` | Private storage for inbound customer media; type inferred from magic bytes, never the declared header. | `save()`, `kind_of()`, `quota_left()`, `path_of()`. |
+| `frontend/` | React 19 + Vite 8 + Tailwind 4 presentation layer, compiled into `static/dist/`. | `AppShell.jsx`, `kit.jsx`, `views/*.jsx`. |
 
 ---
 
@@ -181,6 +211,16 @@ sequenceDiagram
 | `platform` | Global platform settings and payment destination details | `key`, `value` (Vodafone Cash, InstaPay, Admin Bot Token, Admin Chat ID) |
 | `events` | Real-time analytics event stream | `id`, `bot_id`, `event_type` (start, lead, order, booking), `metadata_json`, `created_at` |
 | `bot_users` | Subscribers and lead directory for each managed bot | `id`, `bot_id`, `telegram_id`, `username`, `first_name`, `created_at` |
+| `chat_state` | Live conversation state, persisted so in-flight chats survive a restart | `bot_id`, `peer`, `step`, `data_json`, `updated_at` |
+| `media` | Inbound customer files (kind inferred from magic bytes, served owner-only) | `id`, `bot_id`, `peer`, `fname`, `kind`, `mime`, `bytes`, `created_at` |
+| `promos` / `promo_uses` | Discount codes and their redemption ledger; `UNIQUE(promo_id,payment_id)` blocks double counting | `code`, `kind`, `value`, `plan`, `max_uses`, `used`, `per_user_once`, `expires_at` |
+| `affiliates` / `referrals` | Affiliate accounts and referral conversions; commission credited on first approved payment | `user_id`, `code`, `rate_pct`, `total_earned`, `paid_out` · `referred_user_id`, `payment_id`, `commission`, `converted_at` |
+| `plan_overrides` | Owner-set price or discount per plan, applied by the server-side pricing engine | `plan`, `price`, `discount_pct` |
+| `usage_msgs` | Monthly outbound WhatsApp counters enforcing the plan quota | `bot_id`, `owner_id`, `month`, `sent` |
+| `seen_msgs` | Inbound message IDs already processed — WhatsApp retries must not act twice | `channel`, `msg_id`, `created_at` |
+| `reminder_log` | Which expiry reminders were delivered; cleared on renewal | `user_id`, `kind`, `sent_at` |
+| `bot_requests` | Custom-bot enquiries submitted from the dashboard | `id`, `user_id`, `business`, `description`, `budget`, `contact`, `status` |
+| `leads` / `orders` / `bookings` | Captured leads, store orders, and appointment bookings per bot | `bot_id`, `data_json` / `items`, `total` / `service`, `slot`, `status` |
 
 ---
 
@@ -192,7 +232,13 @@ sequenceDiagram
 - **Real-Time Analytics Dashboard**: Monitor conversation metrics, active user engagement, lead generation rates, store orders, and appointment bookings, with full CSV export capabilities.
 - **Full Internationalization (i18n)**: Seamless bidirectional support for Arabic (RTL) and English (LTR) across all dashboard screens and bot responses.
 - **Multi-Role Administration**: Dedicated web administrative suite with access controls (`admin`, `support`, `user`), subscriber tracking, and manual tier overrides.
-- **Robust Security Posture**: Session encryption via configurable secrets, secure HTTPS cookie enforcement, PBKDF2 password hashing, CSRF protection, and brute-force login throttling.
+- **Dual-Channel Delivery**: The same no-code flow runs on **Telegram** (long polling) and **WhatsApp Cloud API** (signed webhook) through one abstract `Channel` interface — with 24-hour window compliance, inbound deduplication, and per-plan monthly send quotas.
+- **WhatsApp Message Templates**: Create, list, and delete Meta message templates from the dashboard, with full client-side validation of Meta's naming, category, length, and variable-numbering rules before submission.
+- **Inbound Media Handling**: Customer photos, voice notes, documents, and video are stored outside `static/`, typed from **magic bytes rather than the declared header**, quota-limited per plan, and served only to the bot owner with `nosniff` and forced download for non-media types.
+- **Server-Side Pricing Engine**: A single source of truth computes every amount — plan price, owner overrides, and promo discounts. No amount is ever read from a form.
+- **Promo Codes & Affiliate Programme**: Percentage or fixed-value codes with expiry, usage caps, plan scoping, and one-per-user limits; plus referral tracking with commission credited atomically on the first approved payment.
+- **Subscription Lifecycle**: 30-day terms, early renewal stacking onto remaining time, and automated pre-expiry reminders delivered through the platform bot without duplicates.
+- **Robust Security Posture**: Session encryption via configurable secrets, secure HTTPS cookie enforcement, Werkzeug password hashing, CSRF protection, brute-force login throttling, HMAC-SHA256 webhook signature verification (fail-closed), and per-request re-validation of role and block status from the database.
 
 ---
 
@@ -211,11 +257,15 @@ sequenceDiagram
 
 Plan configuration and tier definitions can be modified in `plans.py`:
 
-| Plan Tier | Price | Bot Limit | AI Generation | Broadcast Engine | Analytics & Media | Export Access |
-|---|---|---|---|---|---|---|
-| **Free** | 0 EGP / mo | 1 Bot | Smart Offline Generator | Disabled | Basic Metrics | Disabled |
-| **Pro** | 199 EGP / mo | 5 Bots | Gemini / Groq + Fallback | Enabled | Full Metrics + Media | Basic Export |
-| **Business** | 499 EGP / mo | Unlimited | Gemini / Groq + Fallback | Enabled | Full Metrics + Media | Full CSV Export |
+| Plan Tier | Price | Bot Limit | Channels | WhatsApp Msgs / mo | Media Files / mo | AI Generation | Broadcast |
+|---|---|---|---|---|---|---|---|
+| **Free** | 0 EGP / mo | 1 Bot | Telegram only | — | 100 | Offline generator | Disabled |
+| **Pro** | 199 EGP / mo | 5 Bots | Telegram + WhatsApp | 1,000 | 2,000 | Gemini / Groq + fallback | Enabled |
+| **Business** | 499 EGP / mo | Unlimited | Telegram + WhatsApp | 5,000 | 10,000 | Gemini / Groq + fallback | Enabled |
+
+> WhatsApp is closed on the Free tier and metered above it because Meta bills **per message** — an unlimited allowance on an active tenant can cost more than the subscription itself. Telegram is free to operate, so it carries no message cap.
+
+Admin and support accounts bypass every plan limit. Owners can additionally override any plan's price or apply a percentage discount from `/admin/pricing` without touching `plans.py`.
 
 ---
 
@@ -233,6 +283,13 @@ The platform loads configuration values from `.env`. An annotated template is av
 | `PORT` | Integer | `5000` | Local network port for development. |
 | `GEMINI_API_KEY` | String | None | Google Gemini API key for AI generation features. |
 | `GROQ_API_KEY` | String | None | Groq API key for alternative Llama 3.3 AI generation. |
+| `META_APP_ID` | String | None | Meta app ID used by the WhatsApp Cloud API integration. |
+| `BOTYALLA_DB` | Path | `botyalla.db` | Database file. Test suites set this to a temporary path — **read once at import time**. |
+| `BOTYALLA_UPLOADS` | Path | `./uploads` | Payment-receipt directory. Overridden by tests so fixtures never mix with real receipts. |
+
+> **Never commit real credentials.** `.env` is git-ignored — keep it that way, and never hard-code an admin password inside a tracked file such as a test.
+
+**WhatsApp secrets live in platform settings, not `.env`.** Set `wa_verify_token` and `wa_app_secret` from `/admin/platform`. Until both are set, the `/wh/whatsapp` webhook **rejects every request by design** (fail-closed) rather than accepting unsigned traffic.
 
 ---
 
@@ -302,7 +359,18 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 Paste the generated string into `FLASK_SECRET` inside `.env`.
 
-### 5. Start the Server
+### 5. Build the Frontend
+
+The dashboard and landing page are React, compiled into `static/dist/`. The repository ships a built bundle, so this step is only needed after changing anything under `frontend/src/`:
+
+```bash
+cd frontend
+npm install
+npm run build        # or: npm run watch — rebuilds on save during development
+cd ..
+```
+
+### 6. Start the Server
 
 ```bash
 python app.py
@@ -310,7 +378,16 @@ python app.py
 
 Navigate to `http://127.0.0.1:5000` in your browser.
 
-> **Security Advisory**: Change the default admin password (`Username: admin`, `Password: admin1234` or values specified in `ADMIN_USER` / `ADMIN_PASS`) immediately upon first login via the Account Settings page.
+> **Security Advisory**: Change the default admin password (`Username: admin`, `Password: admin1234` or the values specified in `ADMIN_USER` / `ADMIN_PASS`) immediately upon first login via the Account Settings page.
+
+### 7. Run the Tests
+
+```bash
+./run_tests.sh              # every suite, one process per file
+python tests/test_flow.py   # a single suite
+```
+
+> Do **not** run `pytest tests/` across the whole directory. `database.DB_PATH` is resolved once at import time and each suite sets `BOTYALLA_DB` before importing it — under a single pytest process the first suite wins and the rest collide on its database. `run_tests.sh` gives each file its own process, which is the isolation the suites were written for.
 
 ---
 
@@ -351,6 +428,10 @@ docker run -d -p 8000:8000 --env-file .env --name botyalla_app botyalla
 | **Deployment Guide** | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production server setup, Nginx reverse proxy, and SSL configuration. |
 | **Architecture Guide** | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Component architecture, event loops, and database design. |
 | **Hostinger VPS Guide** | [docs/HOSTINGER.md](docs/HOSTINGER.md) | Specific setup instructions for Hostinger infrastructure. |
+| **Production Runbook** | [docs/PRODUCTION.md](docs/PRODUCTION.md) | Full deployment runbook, systemd, backups, and operational checks. |
+| **WhatsApp Integration** | [docs/WHATSAPP.md](docs/WHATSAPP.md) | Cloud API setup, Meta requirements, the 24-hour window, templates, and cost model. |
+| **Code Review** | [REVIEW.md](REVIEW.md) | Full security and correctness review, open findings, and their priorities. |
+| **Agent Rules** | [AGENTS.md](AGENTS.md) / [PROJECT_MEMORY.md](PROJECT_MEMORY.md) | Mandatory conventions, invariants, and project context for any contributor or AI agent. |
 
 ---
 

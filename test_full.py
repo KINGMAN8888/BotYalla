@@ -1,4 +1,11 @@
 import os, json, tempfile, time, shutil, unittest
+
+# بيانات أدمن خاصة بالاختبار — تُضبط **قبل** استيراد app، لأن الوحدة تحمّل ‎.env
+# بـ setdefault فالقيمة المضبوطة هنا تسبقه ولا تُقرأ كلمة مرور الإنتاج إطلاقاً.
+# لا تكتب كلمة مرور حقيقية في هذا الملف — إنه متتبَّع في git (راجع REVIEW.md §2.1).
+ADMIN_USER = os.environ.setdefault("ADMIN_USER", "admin")
+ADMIN_PASS = os.environ.setdefault("ADMIN_PASS", "e2e-test-only-pass-123")
+
 import database as db
 import app as A
 import bot_manager
@@ -49,11 +56,16 @@ class BotYallaE2ETest(unittest.TestCase):
         # Stubs لـ AI
         ai_agent._call = lambda *a, **k: json.dumps({"status": "success", "response": "test AI response"})
         
-        # Stub لـ التحقق من الصور (تفادي الفشل بسبب dummy file)
+        # Stub لـ التحقق من الصور (تفادي الفشل بسبب dummy file).
+        # يجب تغطية المسارين: `validate_bytes` يفحص قبل الكتابة على القرص،
+        # و`validate_image` يبقى مستخدماً داخل `auto_check`.
         import payments as pay
+        _ok = {"ok": True, "kind": "png", "bytes": 4096}
         cls.orig_validate_image = pay.validate_image
-        pay.validate_image = lambda f: {"ok": True, "mime": "image/png", "hash": "dummyhash123"}
-        
+        cls.orig_validate_bytes = pay.validate_bytes
+        pay.validate_image = lambda f: dict(_ok)
+        pay.validate_bytes = lambda data: dict(_ok)
+
         cls.client = A.app.test_client()
         cls.app = A.app
 
@@ -61,6 +73,7 @@ class BotYallaE2ETest(unittest.TestCase):
     def tearDownClass(cls):
         import payments as pay
         pay.validate_image = cls.orig_validate_image
+        pay.validate_bytes = cls.orig_validate_bytes
         db.DB_PATH = cls.orig_db
         A.UPLOAD_DIR = cls.orig_uploads
         shutil.rmtree(cls._tmp_uploads, ignore_errors=True)
@@ -151,8 +164,12 @@ class BotYallaE2ETest(unittest.TestCase):
         
         # الآن دخول كـ Admin للاعتماد
         self.client.get("/logout")
-        self.client.post("/login", data={"username": "admin", "password": "BotYalla@2026!SecurePass", "csrf_token": self._tk()})
-        
+        self.client.post("/login", data={"username": ADMIN_USER, "password": ADMIN_PASS, "csrf_token": self._tk()})
+        # تأكيد نجاح الدخول صراحةً: بدونه يفشل الاختبار لاحقاً عند فحص الباقة
+        # برسالة مضلِّلة ('free' != 'pro') بدل السبب الحقيقي — كلمة مرور خاطئة.
+        with self.client.session_transaction() as s:
+            self.assertEqual(s.get("role"), "admin", "فشل دخول الأدمن — راجع ADMIN_USER/ADMIN_PASS")
+
         # البتّ
         r = self.client.post(f"/admin/payments/{pay_id}/approve", data={"csrf_token": self._tk()}, follow_redirects=True)
         self.assertEqual(r.status_code, 200) # يرجّع صفحة admin_payments

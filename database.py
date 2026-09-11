@@ -21,6 +21,20 @@ def get_conn():
     finally:
         conn.close()
 
+@contextmanager
+def _conn_or(c):
+    """يعمل على اتصال قائم إن مُرّر، وإلا يفتح اتصاله الخاص.
+
+    يسمح بتركيب عدة دوال داخل **معاملة واحدة** (مثل تسوية الدفعة) دون أن تفقد
+    أيٌّ منها قدرتها على العمل وحدها. عند تمرير `c` لا تُنفَّذ commit هنا —
+    صاحب الاتصال هو من يبتّ الأمر، فإما تنجح الخطوات كلها أو لا شيء منها."""
+    if c is not None:
+        yield c
+    else:
+        with get_conn() as own:
+            yield own
+
+
 def _migrate(c):
     cols = {r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()}
     if "role" not in cols:
@@ -529,27 +543,26 @@ def get_subscription(user_id):
             d["status"] = "expired"
         return d
 
-def activate_subscription(user_id, plan, days=30):
+def activate_subscription(user_id, plan, days=30, conn=None):
     """يفعّل الاشتراك ويرجّع تاريخ الانتهاء.
     التجديد المبكر على **نفس** الباقة يُضاف إلى المتبقّي بدل أن يلغيه (العميل
     دفع عن 30 يوماً فيأخذها كاملة). تغيير الباقة أو اشتراك منتهٍ يبدأ من الآن."""
     now = int(time.time())
     base, started = now, now
-    if plan != "free":
-        with get_conn() as c:
+    with _conn_or(conn) as c:
+        if plan != "free":
             r = c.execute("SELECT plan, started_at, expires_at FROM subscriptions WHERE user_id=?",
                           (user_id,)).fetchone()
-        if r and r["plan"] == plan and r["expires_at"] and r["expires_at"] > now:
-            base = r["expires_at"]                      # مدّد من نهاية الفترة الحالية
-            started = r["started_at"] or now            # واحتفظ ببداية الاشتراك الأصلية
-    exp = base + days * 86400
-    with get_conn() as c:
+            if r and r["plan"] == plan and r["expires_at"] and r["expires_at"] > now:
+                base = r["expires_at"]                  # مدّد من نهاية الفترة الحالية
+                started = r["started_at"] or now        # واحتفظ ببداية الاشتراك الأصلية
+        exp = base + days * 86400
         c.execute("INSERT INTO subscriptions(user_id,plan,status,started_at,expires_at) VALUES(?,?, 'active',?,?) "
                   "ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan, status='active', "
                   "started_at=excluded.started_at, expires_at=excluded.expires_at",
                   (user_id, plan, started, exp))
-    # تجديد الاشتراك يمسح سجل التذكيرات ليسمح بتذكيرات الدورة التالية
-    clear_reminder_log(user_id)
+        # تجديد الاشتراك يمسح سجل التذكيرات ليسمح بتذكيرات الدورة التالية
+        clear_reminder_log(user_id, conn=c)
     return exp
 
 # ---------- payments ----------
@@ -573,12 +586,12 @@ def set_payment_msg(pid, msg_id):
     with get_conn() as c:
         c.execute("UPDATE payments SET admin_msg_id=? WHERE id=?", (msg_id, pid))
 
-def decide_payment(pid, status):
+def decide_payment(pid, status, conn=None):
     """يحدّث حالة الدفعة إن كانت لسه pending. يرجّع dict الدفعة أو None لو سبق البتّ فيها.
     **ذرّي:** التحديث المشروط (`AND status='pending'`) هو القفل نفسه — SQLite يسلسل
     الكتابة، فطلبان متزامنان (gunicorn threads=4 / زر تليجرام + الويب معاً) لا يمكن
     أن ينجحا معاً؛ الثاني يجد rowcount=0 فيرجّع None ولا يُفعَّل الاشتراك مرتين."""
-    with get_conn() as c:
+    with _conn_or(conn) as c:
         cur = c.execute("UPDATE payments SET status=?, decided_at=? WHERE id=? AND status='pending'",
                         (status, int(time.time()), pid))
         if cur.rowcount != 1:
@@ -587,19 +600,26 @@ def decide_payment(pid, status):
         return dict(r) if r else None
 
 def finalize_payment(pid, status):
-    """قرار نهائي مشترك (ويب/بوت): يبتّ الدفعة ويفعّل الاشتراك عند الموافقة. ذرّي."""
-    row = decide_payment(pid, status)
-    if not row:
-        return None
-    if status == "approved":
-        activate_subscription(row["user_id"], row["plan"], days=30)
-        # التسوية هنا لا في المسار الويبي وحده: الموافقة تأتي أيضاً من زرّ
-        # تليجرام، ولو تُركت بالخارج لفات الكود والعمولة على ذلك المسار.
-        # كلا النداءين ذرّي فلا يُحتسب شيء مرتين.
-        if row.get("promo_id"):
-            consume_promo(row["promo_id"], row["user_id"], row["id"])
-        credit_referral(row["user_id"], row["id"], row["amount"])
-    return row
+    """قرار نهائي مشترك (ويب/بوت): يبتّ الدفعة ويفعّل الاشتراك عند الموافقة.
+
+    **معاملة واحدة:** البتّ والتفعيل وحرق كود الخصم واحتساب العمولة تجري كلها
+    على اتصال واحد، فإما تُثبَّت جميعاً أو لا شيء منها. لو انهارت العملية في
+    المنتصف يُغلق الاتصال بلا commit فيتراجع كل شيء — ولا تبقى دفعة «معتمدة»
+    بلا اشتراك مفعَّل. الحراسة ضد الازدواج تبقى كما هي: التحديث المشروط في
+    `decide_payment`، وقيد UNIQUE في `consume_promo`، وشرط `converted_at IS NULL`
+    في `credit_referral`."""
+    with get_conn() as c:
+        row = decide_payment(pid, status, conn=c)
+        if not row:
+            return None
+        if status == "approved":
+            activate_subscription(row["user_id"], row["plan"], days=30, conn=c)
+            # التسوية هنا لا في المسار الويبي وحده: الموافقة تأتي أيضاً من زرّ
+            # تليجرام، ولو تُركت بالخارج لفات الكود والعمولة على ذلك المسار.
+            if row.get("promo_id"):
+                consume_promo(row["promo_id"], row["user_id"], row["id"], conn=c)
+            credit_referral(row["user_id"], row["id"], row["amount"], conn=c)
+        return row
 
 def img_hash_seen(img_hash, exclude_id=None):
     with get_conn() as c:
@@ -833,10 +853,12 @@ def promo_used_by(promo_id, user_id):
         return c.execute("SELECT COUNT(*) FROM promo_uses WHERE promo_id=? AND user_id=?",
                          (promo_id, user_id)).fetchone()[0] > 0
 
-def consume_promo(promo_id, user_id, payment_id):
+def consume_promo(promo_id, user_id, payment_id, conn=None):
     """يُستدعى عند اعتماد الدفعة فقط — لا يُحرق الكود على دفعة مرفوضة.
-    ذرّي: القيد UNIQUE(promo_id,payment_id) يمنع الاحتساب مرتين."""
-    with get_conn() as c:
+    ذرّي: القيد UNIQUE(promo_id,payment_id) يمنع الاحتساب مرتين.
+    التقاط IntegrityError آمن داخل معاملة مشتركة: SQLite يتراجع عن العبارة
+    الفاشلة وحدها لا عن المعاملة كلها."""
+    with _conn_or(conn) as c:
         try:
             c.execute("INSERT INTO promo_uses(promo_id,user_id,payment_id,created_at) VALUES(?,?,?,?)",
                       (promo_id, user_id, payment_id, int(time.time())))
@@ -920,10 +942,10 @@ def attach_referral(referred_user_id, code):
         except sqlite3.IntegrityError:
             return False
 
-def credit_referral(referred_user_id, payment_id, amount):
+def credit_referral(referred_user_id, payment_id, amount, conn=None):
     """يحتسب العمولة عند اعتماد أول دفعة للمُحال. يرجّع (affiliate_user_id, commission)
     أو None. ذرّي: يُحدّث فقط الصف الذي لم يُحوَّل بعد."""
-    with get_conn() as c:
+    with _conn_or(conn) as c:
         r = c.execute("SELECT r.id, r.affiliate_user_id, a.rate_pct, a.is_active "
                       "FROM referrals r JOIN affiliates a ON a.user_id=r.affiliate_user_id "
                       "WHERE r.referred_user_id=? AND r.converted_at IS NULL",
@@ -987,9 +1009,9 @@ def log_reminder(user_id, kind):
         except sqlite3.IntegrityError:
             return False
 
-def clear_reminder_log(user_id):
+def clear_reminder_log(user_id, conn=None):
     """يمسح سجل التذكيرات عند تجديد الاشتراك."""
-    with get_conn() as c:
+    with _conn_or(conn) as c:
         c.execute("DELETE FROM reminder_log WHERE user_id=?", (user_id,))
 
 def expiring_subscriptions(within_days=3):

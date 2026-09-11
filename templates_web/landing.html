@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='dist/style.css') }}">
-<style>
+<style nonce="{{ csp_nonce }}">
   html{background:#05070D;}
   body{font-family:{% if lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}
   /* الاحتياطي: يختفي فور تركيب React */
@@ -34,8 +34,8 @@
   #fallback p{line-height:1.75;margin:0 0 22px;}
 </style>
 {# علامة "الجافاسكربت يعمل": بدونها يبقى كل محتوى React ظاهراً بلا حركة #}
-<script>document.documentElement.className += " js";</script>
-<script>window.BY = {{ by_json|safe }};</script>
+<script nonce="{{ csp_nonce }}">document.documentElement.className += " js";</script>
+<script nonce="{{ csp_nonce }}">window.BY = {{ by_json|safe }};</script>
 </head>
 <body>
 
@@ -76,6 +76,6 @@
   </div>
 </div>
 
-<script type="module" src="{{ url_for('static', filename='dist/landing.js') }}"></script>
+<script nonce="{{ csp_nonce }}" type="module" src="{{ url_for('static', filename='dist/landing.js') }}"></script>
 </body>
 </html>

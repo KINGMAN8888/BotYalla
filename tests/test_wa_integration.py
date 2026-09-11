@@ -104,4 +104,13 @@ post([txt("m8", "مرحبا")])
 check("sending stops at the plan limit", len(SENT) == before, f"{before} -> {len(SENT)}")
 
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
-sys.exit(1 if fails else 0)
+
+
+def test_wa_integration():
+    """يجعل الملف صالحاً لـ pytest أيضاً. `sys.exit` على مستوى الوحدة كان
+    يُسقط pytest بـ INTERNALERROR فلا يعمل أي اختبار في المجلد كله."""
+    assert not fails, fails
+
+
+if __name__ == "__main__":
+    sys.exit(1 if fails else 0)

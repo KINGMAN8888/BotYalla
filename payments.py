@@ -22,21 +22,27 @@ def file_sha256(path):
             h.update(chunk)
     return h.hexdigest()
 
-def validate_image(path):
-    try:
-        size = os.path.getsize(path)
-    except OSError:
-        return {"ok": False, "reason": "file_missing"}
+def validate_bytes(data):
+    """يفحص البايتات مباشرة — يسمح بالتحقق **قبل** أي كتابة على القرص، فلا
+    يلمس ما ليس صورةً نظامَ الملفات أصلاً. الامتداد المُعلَن لا يصنع نوعاً:
+    البايتات الأولى هي الحكم."""
+    size = len(data)
     if size < MIN_BYTES:
         return {"ok": False, "reason": "too_small", "bytes": size}
     if size > MAX_BYTES:
         return {"ok": False, "reason": "too_large", "bytes": size}
-    with open(path, "rb") as f:
-        head = f.read(16)
-    kind = _sniff_image(head)
+    kind = _sniff_image(data[:16])
     if not kind:
         return {"ok": False, "reason": "not_an_image", "bytes": size}
     return {"ok": True, "kind": kind, "bytes": size}
+
+def validate_image(path):
+    try:
+        with open(path, "rb") as f:
+            data = f.read(MAX_BYTES + 1)
+    except OSError:
+        return {"ok": False, "reason": "file_missing"}
+    return validate_bytes(data)
 
 def try_ocr(path, expected_amount=None, expected_refs=None):
     """يرجّع None لو OCR غير متاح، أو dict بنتائج الفحص."""

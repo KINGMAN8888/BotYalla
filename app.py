@@ -43,6 +43,7 @@ import payments as pay
 import platform_bot as PB
 import time as _time
 import datetime as _dt
+import re as _re
 import hashlib
 import hmac
 import secrets as _secrets
@@ -115,21 +116,104 @@ def _revalidate_identity():
     if session.get("role") != row["role"]: session["role"] = row["role"]
     if session.get("uname") != row["username"]: session["uname"] = row["username"]
 
+# ---------- ترويسات الأمان (CSP بـ nonce) ----------
+# CSP هي الطبقة التي تُبطل أثر أي حقن حتى لو نفذ من رقابة الهروب. لا تُضبط في
+# nginx لأن الـ nonce يجب أن يتغيّر مع كل طلب، و Flask هو من يرسم القوالب.
+#
+# `script-src` بلا 'unsafe-inline': كل سكربت داخلي عندنا يحمل nonce، فسكربت
+# يحقنه مهاجم لن يحمله ولن يعمل. أما `style-src` فيبقى 'unsafe-inline' لأن
+# React يكتب أنماطاً في خاصية style ولا سبيل لتمرير nonce إليها.
+# `img-src` يسمح بـ https: لأن صور الترحيب والمنتجات روابط يضعها أصحاب البوتات.
+_CSP = ("default-src 'self'; "
+        "script-src 'self' 'nonce-{n}'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self'; "
+        "form-action 'self'; "
+        "base-uri 'self'; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'")
+
+@app.before_request
+def _csp_nonce():
+    g.nonce = _secrets.token_urlsafe(16)
+
+@app.after_request
+def _security_headers(resp):
+    # لو أوقف before_request سابقٌ الطلبَ (رفض CSRF بـ 400) لا يعمل `_csp_nonce`،
+    # و'nonce-' فارغة مصدرٌ غير صالح يطبع المتصفح عنه تحذيراً — ولّد واحدة.
+    nonce = getattr(g, "nonce", None) or _secrets.token_urlsafe(16)
+    resp.headers.setdefault("Content-Security-Policy", _CSP.format(n=nonce))
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    # HSTS على HTTPS فقط: إرسالها على http يثبّت الترقية قبل أن تكون الشهادة
+    # جاهزة فيحجب الموقع عن زوّاره.
+    if request.is_secure:
+        resp.headers.setdefault("Strict-Transport-Security",
+                                "max-age=31536000; includeSubDomains")
+    return resp
+
 @app.context_processor
-def _csrf_ctx():
+def _nonce_ctx():
+    return {"csp_nonce": getattr(g, "nonce", "")}
+
+def _csrf_token():
+    """توكن CSRF للجلسة، يُنشأ عند أول حاجة. `react_page` تحتاجه **قبل** أن تعمل
+    معالجات السياق (تبني حمولة `BY.csrf` ثم ترسم) — فلو اكتفينا بإنشائه في
+    المعالج لخرجت الصفحة بتوكن فارغ في كل جلسة فارغة: زائر جديد يفتح /login
+    أو /register مباشرة، وبعد الخروج، وبعد الاسترجاع — فيُرفض أول إرسال بـ 400."""
     if "_csrf" not in session:
         session["_csrf"] = _secrets.token_hex(16)
-    tok = session["_csrf"]
+    return session["_csrf"]
+
+@app.context_processor
+def _csrf_ctx():
+    tok = _csrf_token()
     return {"csrf_token": tok,
             "csrf_field": lambda: Markup(f'<input type="hidden" name="csrf_token" value="{tok}">')}
 
-def _rate_limited(ip, limit=8, window=300):
+# اسم المستخدم: حروف لاتينية/عربية وأرقام و `_ . -` فقط، 3–32 حرفاً.
+# ليس تجميلاً: الاسم يُعرض للأدمن في «المستخدمون» ويُحقن في حمولة الصفحة،
+# فحصره في محارف آمنة يغلق باب إساءة الاستخدام من أصله بدل الاعتماد على
+# طبقة الهروب وحدها (راجع REVIEW.md §1 و§4.2).
+# الحرف العربي من الحروف الأساسية (U+0620–U+064A) والأرقام العربية الهندية والحروف
+# الموسّعة (فارسي/أردو) فقط — لا الكتلة كاملة (U+0600–U+06FF)، لأنها تضم محارف
+# تنسيق غير مرئية (U+061C علامة الاتجاه، U+0600–U+0605، U+06DD) والتشكيل؛
+# بها يصنع مهاجم اسماً يطابق «admin» بصرياً في قائمة الأدمن.
+USERNAME_RE = _re.compile(r"^[A-Za-z0-9_.\-ؠ-ي٠-٩ٱ-ۓ]{3,32}\Z")
+
+_last_prune = 0
+_bucket_window = {}    # bucket -> window: كل دلو يُنظَّف بنافذته هو لا بنافذة من استدعى
+
+def _prune_attempts(now):
+    """يحذف المدخلات المنتهية. بدونه ينمو القاموس مع كل IP جديد بلا حدّ —
+    تسريب ذاكرة بطيء في عملية طويلة العمر. التنظيف كل دقيقة على الأكثر.
+    `list(...)` لقطة ذرّية: gunicorn يشغّل 4 خيوط، والمرور على القاموس مباشرة
+    بينما يضيف خيط آخر مدخلاً يرمي RuntimeError فيسقط طلب الدخول بـ 500."""
+    global _last_prune
+    if now - _last_prune < 60:
+        return
+    _last_prune = now
+    for k, (_, first) in list(_login_attempts.items()):
+        if now - first > _bucket_window.get(k[0], 300):
+            _login_attempts.pop(k, None)
+
+def _rate_limited(ip, limit=8, window=300, bucket="login"):
+    """محدِّد بسيط لكل (نافذة، IP، غرض). `bucket` يفصل العدّادات حتى لا تستهلك
+    محاولات التسجيل رصيد الدخول أو العكس.
+
+    ملاحظة: العدّاد في ذاكرة العملية، فمع أكثر من worker يتضاعف الحدّ الفعلي.
+    `limit_req` في nginx هو الحاجز الخارجي المكمّل."""
     now = int(_time.time())
-    cnt, first = _login_attempts.get(ip, (0, now))
+    _bucket_window[bucket] = window
+    _prune_attempts(now)
+    key = (bucket, ip)
+    cnt, first = _login_attempts.get(key, (0, now))
     if now - first > window:
         cnt, first = 0, now
     cnt += 1
-    _login_attempts[ip] = (cnt, first)
+    _login_attempts[key] = (cnt, first)
     return cnt > limit
 
 def login_required(f):
@@ -210,10 +294,17 @@ def set_lang(code):
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
+        # التسجيل مُحدَّد كالدخول: بدونه يمكن إغراق المنصة بحسابات آلياً.
+        if _rate_limited(request.remote_addr or "?", limit=5, window=600, bucket="register"):
+            flash("محاولات كثيرة. انتظر قليلاً." if session.get("lang") != "en"
+                  else "Too many attempts. Please wait.", "error")
+            return react_page("register", "register")
         u = request.form.get("username", "").strip()
         p = request.form.get("password", "")
-        if len(u) < 3 or len(p) < 6:
-            flash("اسم المستخدم 3 أحرف على الأقل وكلمة المرور 6.", "error")
+        if not USERNAME_RE.match(u) or len(p) < 6:
+            flash(("اسم المستخدم 3–32 حرفاً (حروف/أرقام و _ . -) وكلمة المرور 6 على الأقل."
+                   if session.get("lang") != "en" else
+                   "Username must be 3–32 chars (letters/digits and _ . -) and password at least 6."), "error")
         elif db.get_user_by_name(u):
             flash("اسم المستخدم موجود بالفعل.", "error")
         else:
@@ -784,23 +875,25 @@ def subscribe_pay(plan_id):
     if ext not in pay.ALLOWED_EXT:
         flash("صيغة الصورة غير مدعومة (jpg/png/webp)." if session.get("lang")!="en" else "Unsupported image type (jpg/png/webp).", "error")
         return redirect(url_for("subscribe", plan_id=plan_id))
-    fname = f"pay_{uid()}_{int(_time.time())}{ext}"
-    fpath = os.path.join(UPLOAD_DIR, secure_filename(fname))
-    file.save(fpath)
-    # فحص توقيع الملف قبل تسجيل أي شيء: ما ليس صورة ليس إيصالاً،
-    # فلا يُحفظ على القرص ولا يُنشأ له طلب دفع (AGENTS.md §3.7).
-    imgchk = pay.validate_image(fpath)
+    # فحص توقيع الملف **قبل** أي كتابة: ما ليس صورة ليس إيصالاً، فلا يلمس
+    # القرص أصلاً ولا يُنشأ له طلب دفع (AGENTS.md §3.7). الحجم محدود سلفاً
+    # بـ MAX_CONTENT_LENGTH فالقراءة إلى الذاكرة مأمونة.
+    data = file.read()
+    imgchk = pay.validate_bytes(data)
     if not imgchk["ok"]:
-        try: os.remove(fpath)
-        except OSError: pass
         _reason = {"not_an_image": ("الملف ليس صورة صالحة.", "The file is not a valid image."),
                    "too_small":    ("الصورة صغيرة جداً.", "The image is too small."),
                    "too_large":    ("الصورة كبيرة جداً (الحد 8 ميجابايت).", "The image is too large (8MB max)."),
                    }.get(imgchk.get("reason"), ("تعذّر قراءة الصورة.", "Could not read the image."))
         flash(_reason[0] if session.get("lang")!="en" else _reason[1], "error")
         return redirect(url_for("subscribe", plan_id=plan_id))
+    # صورة صالحة — الآن فقط تُكتب على القرص
+    fname = f"pay_{uid()}_{int(_time.time())}{ext}"
+    fpath = os.path.join(UPLOAD_DIR, secure_filename(fname))
+    with open(fpath, "wb") as _f:
+        _f.write(data)
     # الفحص الآلي
-    img_hash = pay.file_sha256(fpath)
+    img_hash = hashlib.sha256(data).hexdigest()
     dup = db.img_hash_seen(img_hash)
     refs = [db.get_platform("vodafone_number",""), db.get_platform("instapay_handle",""),
             db.get_platform("bank_iban",""), db.get_platform("bank_account","")]
@@ -985,8 +1078,12 @@ def account():
             return redirect(url_for("account"))
         new_user = request.form.get("username", "").strip()
         new_pw = request.form.get("new_password", "").strip()
-        if new_user and len(new_user) < 3:
-            flash("اسم المستخدم قصير." if session.get("lang")!="en" else "Username too short.", "error")
+        # يُفحص الاسم عند تغييره فقط: النموذج يرسل الاسم الحالي دائماً
+        # (defaultValue)، وحسابات قديمة سُجّلت قبل USERNAME_RE قد لا تطابقه —
+        # فحصه دائماً كان سيمنع أصحابها من تغيير كلمة المرور نفسها.
+        if new_user and new_user != me["username"] and not USERNAME_RE.match(new_user):
+            flash(("اسم المستخدم 3–32 حرفاً (حروف/أرقام و _ . -)." if session.get("lang")!="en"
+                   else "Username must be 3–32 chars (letters/digits and _ . -)."), "error")
             return redirect(url_for("account"))
         if new_pw and len(new_pw) < 6:
             flash("كلمة المرور قصيرة." if session.get("lang")!="en" else "Password too short.", "error")
@@ -1032,8 +1129,10 @@ def admin_user_add():
     u = request.form.get("username", "").strip()
     pw = request.form.get("password", "")
     role = request.form.get("role", "user")
-    if len(u) < 3 or len(pw) < 6:
-        flash("اسم 3 أحرف وكلمة مرور 6 على الأقل." if session.get("lang")!="en" else "Username 3+ and password 6+ chars.", "error")
+    if not USERNAME_RE.match(u) or len(pw) < 6:
+        flash(("اسم المستخدم 3–32 حرفاً (حروف/أرقام و _ . -) وكلمة المرور 6 على الأقل."
+               if session.get("lang")!="en" else
+               "Username must be 3–32 chars (letters/digits and _ . -) and password 6+."), "error")
         return redirect(url_for("admin_users"))
     user_id, err = db.admin_create_user(u, auth.hash_password(pw), role)
     if err == "username_taken":
@@ -1191,6 +1290,20 @@ _TMPL_KEY  = {"flow":"tmpl_flow","store":"tmpl_store","booking":"tmpl_booking",
               "customer_service":"tmpl_cs","faq":"tmpl_faq","feedback":"tmpl_feedback",
               "support":"tmpl_support"}
 
+def _js_json(payload):
+    """JSON مُهيّأ للحقن داخل وسم <script>.
+
+    `json.dumps` لا يهرّب `</script>` ولا فاصلي السطر U+2028/U+2029، والقالب
+    يحقن الناتج بـ `|safe`. فأي نص يكتبه مستخدم — اسم حساب، أو رسالة عميل
+    وصلت من تليجرام/واتساب داخل lead — يمكنه إغلاق الوسم مبكراً وتشغيل كود
+    في جلسة من يفتح الصفحة (الأدمن في «المستخدمون»، أو صاحب البوت في صفحته)
+    حيث توكن CSRF معروض في نفس الحمولة. الهروب هنا يقع داخل السلاسل فقط،
+    وجافاسكربت تفكّه تلقائياً، فلا يتغيّر أي سلوك في الواجهة."""
+    return (json.dumps(payload, ensure_ascii=False, default=str)
+            .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
+
 def react_page(view, title_key, props=None, needs_chart=False, title=None):
     """يرسم صفحة React مع قشرة اللوحة وبياناتها."""
     lang = session.get("lang", i18n.DEFAULT)
@@ -1222,7 +1335,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
 
     payload = {
         "view": view, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
-        "csrf": session.get("_csrf", ""),
+        "csrf": _csrf_token(),
         "user": {"name": session.get("uname"), "role": role},
         "t": {k: i18n.t(k, lang) for k in i18n.T},
         "icons": {n: _icon_svg(n) for n in icons._P},
@@ -1245,7 +1358,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
     return render_template("react_app.html", view=view,
                            page_title=title or i18n.t(title_key, lang), brand="BotYalla",
                            lang=lang, dir=i18n.dir_for(lang), needs_chart=needs_chart,
-                           by_json=json.dumps(payload, ensure_ascii=False, default=str))
+                           by_json=_js_json(payload))
 
 def _icon_svg(name):
     """SVG خام (يملأ حاويته) لحقنه داخل مكوّنات React."""
@@ -1364,6 +1477,11 @@ def api_promo_check():
     plan_id = d.get("plan")
     if plan_id not in plans.PLANS or plan_id == "free":
         return jsonify({"ok": False})
+    # المسار يجيب بنعم/لا عن صلاحية أي كود، فبدون حدّ يصبح أداة تخمين آلي.
+    # الحدّ على المستخدم لا على الـIP: الحساب هو ما يلزم لبلوغ المسار أصلاً.
+    if _rate_limited(str(uid()), limit=20, window=300, bucket="promo"):
+        return jsonify({"ok": False, "valid": False,
+                        "error": i18n.t("promo_bad", session.get("lang", i18n.DEFAULT))}), 429
     q = quote(plan_id, uid(), d.get("code", ""))
     lang = session.get("lang", i18n.DEFAULT)
     return jsonify({
@@ -1460,7 +1578,7 @@ def landing():
             for k in ("flow","store","booking","customer_service","faq","feedback","support")
         ],
     })
-    return render_template("landing.html", by_json=json.dumps(payload, ensure_ascii=False))
+    return render_template("landing.html", by_json=_js_json(payload))
 
 
 def seed_platform_defaults():
