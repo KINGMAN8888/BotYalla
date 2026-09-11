@@ -1947,8 +1947,8 @@ def privacy():
                        "updated": LEGAL_UPDATED})
 
 
-@app.route("/landing")
-def landing():
+@app.route("/")
+def home():
     lang = session.get("lang", i18n.DEFAULT)
     # كل نصوص الواجهة تُحقن من الخادم — لا نص مكتوب داخل حزمة React
     keys = ("hero_title_a","hero_title_b","hero_sub","lp_badge","lp_cta_demo",
@@ -1965,7 +1965,7 @@ def landing():
         "t": {k: i18n.t(k, lang) for k in keys},
         "icons": {n: _icon_svg(n) for n in _LANDING_ICONS},
         "urls": {"register": url_for("register"), "login": url_for("login"),
-                 "pricing": url_for("pricing"), "home": url_for("landing"),
+                 "pricing": url_for("pricing"), "home": url_for("home"),
                  "logo": url_for("static", filename="logo.svg"),
                  "lang": url_for("set_lang", code="en" if lang == "ar" else "ar"),
                  "terms": url_for("terms"), "privacy": url_for("privacy")},
