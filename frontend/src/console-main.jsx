@@ -12,6 +12,7 @@ import { FlowBuilder, Broadcast, Analytics, Auth, Recover } from "./app/views/To
 import { AdminPricing, AdminPromos, AdminAffiliates, Affiliate } from "./app/views/Revenue.jsx";
 import { Terms, Privacy } from "./app/views/Legal.jsx";
 import WaTemplates from "./app/views/WaTemplates.jsx";
+import Wallet from "./app/views/Wallet.jsx";
 
 /* خريطة العرض ← المكوّن. Flask يحدّد العرض عبر data-view. */
 const VIEWS = {
@@ -38,6 +39,7 @@ const VIEWS = {
   terms:            Terms,
   privacy:          Privacy,
   wa_templates:     WaTemplates,
+  wallet:           Wallet,
 };
 
 /* صفحات المصادقة بلا قشرة لوحة */

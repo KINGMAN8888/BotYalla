@@ -4,3 +4,4 @@ version: 2
 paths-ignore:
   - "tests/**"
   - "test_full.py"
+  - "tools/**"

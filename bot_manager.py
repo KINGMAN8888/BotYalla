@@ -76,6 +76,15 @@ def _wa_channel(row):
 
     return WhatsAppChannel(phone_id, cfg.get("wa_token", ""), on_send=guard)
 
+# سقف عدد البوتات العاملة في هذه العملية (L-11).
+# `workers=1` وكل بوتات تليجرام تعمل داخل عملية الويب نفسها، فالسقف حقيقي لا
+# نظري: تجاوزه لا يعطي خطأً واضحاً بل بطئاً يزحف على **كل** المستخدمين.
+# الرقم يُقاس على الخادم بـ`tools/loadtest_bots.py` ثم يُضبط من لوحة الأدمن
+# (`bot_capacity`) — والاحتياطي أدناه تقدير محافظ لا قياس.
+CAPACITY_FALLBACK = 120
+CAPACITY_WARN_AT = 0.80
+
+
 class BotManager:
     def __init__(self):
         self._loop = None; self._thread = None
@@ -99,10 +108,34 @@ class BotManager:
 
     def is_running(self, bot_id): return bot_id in self._apps
 
+    def capacity(self):
+        """السقف المضبوط. قيمة غير صالحة تسقط إلى الاحتياطي لا إلى بلا حدّ."""
+        try:
+            v = int(str(db.get_platform("bot_capacity", "") or "").strip() or 0)
+        except (TypeError, ValueError):
+            v = 0
+        return v if v > 0 else CAPACITY_FALLBACK
+
+    def capacity_status(self):
+        """الحالة الحالية — يقرأها مسار التشغيل ولوحة الأدمن.
+        `warn` تصير True عند 80% فما فوق، و`full` عند بلوغ السقف."""
+        cap = self.capacity()
+        n = len(self._apps)
+        return {"running": n, "capacity": cap,
+                "pct": int(round(n * 100.0 / cap)) if cap else 0,
+                "warn": n >= cap * CAPACITY_WARN_AT, "full": n >= cap}
+
     def start_bot(self, bot_id):
         if self.is_running(bot_id): return True, "يعمل بالفعل"
         row = db.get_bot(bot_id)
         if not row: return False, "البوت غير موجود"
+        # الرفض عند السقف مقصود: بوت إضافي يعمل ببطء أسوأ من بوت لا يعمل،
+        # لأن بطأه يصيب كل من يشاركه العملية لا صاحبه وحده.
+        st = self.capacity_status()
+        if st["full"]:
+            log.error("bot start refused — at capacity: %s/%s", st["running"], st["capacity"])
+            return False, (f"بلغ الخادم سقف البوتات العاملة ({st['capacity']}). "
+                           f"أوقف بوتاً غير مستخدم أو راسل الدعم.")
         try:
             self._submit(self._start(row)); db.set_bot_active(bot_id, True)
             return True, "تم التشغيل ✅"

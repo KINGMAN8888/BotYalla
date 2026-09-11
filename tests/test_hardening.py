@@ -237,7 +237,7 @@ class ReceiptWriteOrderTests(unittest.TestCase):
         c = _client()
         c.post("/login", data={"username": "uploader", "password": TEST_PW,
                                "csrf_token": "tk"})
-        c.post("/subscribe/pro", data={
+        c.post("/subscribe/merchant", data={
             "method": "instapay", "ref": "R",
             "screenshot": (io.BytesIO(b"MZ\x90\x00 not an image at all"), "evil.png"),
             "csrf_token": "tk"}, content_type="multipart/form-data", follow_redirects=True)

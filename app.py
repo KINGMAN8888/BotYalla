@@ -401,6 +401,11 @@ def register():
                 db.attach_referral(user_id, ref_code)
             notify_admins(f"🆕 تسجيل مستخدم جديد / New user: {u} (#{user_id})"
                           + (f" — عبر إحالة {ref_code}" if ref_code else ""))
+            # ترحيب best-effort: الخطوات الثلاث داخل الرسالة نفسها لا خلف رابط.
+            # الرابط من `PUBLIC_URL` وحدها، وبدونه تُرسل بلا زرّ — الرسالة لا
+            # تحمل توكناً، وحجبها كلها يخسر المستخدم بلا أي مكسب أمني.
+            if email:
+                mailer.send_welcome(user_id, email, u, _public_url("dashboard"), lang)
             return redirect(url_for("dashboard"))
     return react_page("register", "register")
 
@@ -433,15 +438,22 @@ RESET_TTL = 3600          # ساعة واحدة، واستخدام مرة واح
 def _token_hash(tok):
     return hashlib.sha256((tok or "").encode()).hexdigest()
 
+def _public_url(endpoint, **kw):
+    """رابط مطلق لأي مسار، مبنيّاً من `PUBLIC_URL` وحدها (AGENTS.md §3.14).
+    يرجّع None بلا إعداد — والمستدعي يقرّر: رابط الاسترجاع يُحجب تماماً، ورسالة
+    الترحيب تُرسل بلا زرّ لأنها لا تحمل أي سرّ."""
+    base = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    if not base.startswith(("https://", "http://")):
+        return None
+    return base + url_for(endpoint, **kw)
+
+
 def _reset_link(token):
     """الرابط يُبنى من `PUBLIC_URL` لا من ترويسة Host. nginx يمرّر Host كما أرسله
     العميل، فلو بُني الرابط منها لطلب مهاجمٌ استرجاعاً لحساب ضحية بـ Host مزوّر،
     فيصلها رابط يسرّب التوكن إلى نطاقه (password-reset poisoning).
     بلا PUBLIC_URL لا يُرسل أي رابط — افشل مغلقاً."""
-    base = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
-    if not base.startswith(("https://", "http://")):
-        return None
-    return base + url_for("reset_password", token=token)
+    return _public_url("reset_password", token=token)
 
 def _send_reset(email, lang):
     u = db.get_user_by_email(email)
@@ -516,7 +528,35 @@ def dashboard():
     plan_id = sub["plan"] if sub["status"] == "active" else "free"
     wa_ok = current_role() in ("admin", "support") or bool(plans.plan(plan_id).get("whatsapp"))
     return react_page("dashboard", "nav_bots",
-                      {"bots": bots, "total": total, "waAllowed": wa_ok})
+                      {"bots": bots, "total": total, "waAllowed": wa_ok,
+                       "onboarding": _onboarding(bots)})
+
+
+def _onboarding(bots):
+    """حالة البدء لأول بوت — تُحسب في الخادم لأن «هل ضبط الترحيب؟» و«هل جرّبه
+    أحد؟» لا تُعرفان من الواجهة (الأولى داخل `config` والثانية عدّ مشتركين).
+
+    تختفي البطاقة من نفسها حين تكتمل الخطوات الثلاث، فلا حاجة لعمود «أخفِ
+    الإرشاد» في القاعدة ولا لزرّ تجاهل ينساه المستخدم ثم لا يجد الإرشاد.
+    """
+    if not bots:
+        return {"stage": "first_bot"}          # لا بوت بعد: تُعرض خطوات BotFather
+    b = min(bots, key=lambda x: x.get("id") or 0)     # أول بوت أنشأه، لا الأحدث
+    try:
+        cfg = json.loads(b.get("config_json") or "{}")
+    except (ValueError, TypeError):
+        cfg = {}
+    # دالة خالصة عمداً: لا `url_for` ولا أي شيء يحتاج سياق طلب — فتُختبر وحدها
+    # بلا خادم، والواجهة تبني `/bot/{id}` من `botId` كما تفعل في كل مكان آخر.
+    steps = [
+        {"k": "greeting", "done": bool((cfg.get("welcome") or "").strip())},
+        {"k": "run", "done": bool(b.get("running"))},
+        {"k": "try", "done": bool((b.get("stats") or {}).get("subscribers"))},
+    ]
+    if all(x["done"] for x in steps):
+        return {"stage": "done"}
+    return {"stage": "first_run", "botId": b["id"], "botName": b.get("name"),
+            "channel": b.get("channel") or "telegram", "steps": steps}
 
 def _owned(bot_id):
     b = db.get_bot(bot_id, uid())
@@ -732,12 +772,42 @@ def flow_builder(bot_id):
     return react_page("flow", "flow_title", {"bot": b, "flow": flow},
                       title=i18n.t("flow_title", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
 
+# ---------- سعة الخادم (L-11) ----------
+_capacity_warned = {"at": 0}
+
+
+def _warn_capacity_once():
+    """ينبّه الأدمن مرّة واحدة عند تجاوز 80% من سقف البوتات.
+
+    «مرّة واحدة» تعني: عند كل عتبة جديدة تُبلَغ لأول مرة، لا عند كل تشغيل —
+    وإلا صار التنبيه ضجيجاً يُتجاهَل بالضبط حين يصير مهمّاً. والعدّاد يُصفَّر
+    لو نزل العدد، فبلوغ العتبة مرّةً أخرى ينبّه من جديد.
+    """
+    try:
+        st = manager.capacity_status()
+    except Exception:
+        return
+    if not st["warn"]:
+        _capacity_warned["at"] = 0
+        return
+    if st["running"] <= _capacity_warned["at"]:
+        return
+    _capacity_warned["at"] = st["running"]
+    log.warning("bot capacity at %s%% — %s/%s running",
+                st["pct"], st["running"], st["capacity"])
+    notify_admins(f"⚠️ سعة البوتات {st['pct']}% — {st['running']} من {st['capacity']} يعملون. "
+                  f"Bot capacity at {st['pct']}%. راجع الخادم قبل أن يتدهور الأداء للجميع.")
+
+
 # ---------- تشغيل / إيقاف / حذف ----------
 @app.route("/bot/<int:bot_id>/<any(start,stop,delete):action>", methods=["POST"])
 @login_required
 def bot_action(bot_id, action):
     _owned(bot_id)
-    if action == "start": ok, msg = manager.start_bot(bot_id)
+    if action == "start":
+        ok, msg = manager.start_bot(bot_id)
+        if ok:
+            _warn_capacity_once()
     elif action == "stop": ok, msg = manager.stop_bot(bot_id)
     elif action == "delete":
         manager.stop_bot(bot_id); db.delete_bot(bot_id)
@@ -787,9 +857,55 @@ def broadcast(bot_id):
             if not name:
                 flash("اختر قالباً معتمداً." if ar else "Pick an approved template.", "error")
             else:
+                # الفئة من Meta لا من الفورم: هي ما يقرّر الخصم، فقراءتها من
+                # المستخدم تعني حملة تسويقية مؤشَّرة «UTILITY» تمرّ مجاناً.
+                cat = _template_category(b, name, lang_code)
+                if cat is None:
+                    flash(("تعذّر التأكد من فئة القالب لدى Meta الآن. أعد المحاولة بعد قليل — "
+                           "لا نرسل حملة قبل أن نعرف تكلفتها." if ar else
+                           "Could not confirm the template category with Meta right now. Try again "
+                           "shortly — we don't send a campaign before knowing its cost."), "error")
+                    return redirect(url_for("broadcast", bot_id=bot_id))
+                q = _campaign_quote(uid(), reachable, cat)
+                charged = 0
+                if q["billable"]:
+                    if not q["enough"]:
+                        flash(((f"رصيد الرسائل التسويقية لا يكفي: الحملة {_egp(q['cost'])} ج.م "
+                                f"لـ{q['n']} رسالة، ورصيدك {_egp(q['balance'])} ج.م. "
+                                f"اشحن {_egp(q['short'])} ج.م على الأقل.") if ar else
+                               (f"Not enough marketing credit: this campaign costs "
+                                f"{_egp(q['cost'])} EGP for {q['n']} messages and your balance is "
+                                f"{_egp(q['balance'])} EGP. Top up at least {_egp(q['short'])} EGP.")),
+                              "error")
+                        return redirect(url_for("broadcast", bot_id=bot_id))
+                    # يُخصم **قبل** الإرسال: الخصم الذرّي هو ما يمنع حملتين
+                    # متوازيتين من تجاوز الرصيد معاً. ثم يُردّ ما فشل إرساله.
+                    if db.wallet_charge(uid(), q["cost"], ref=f"bot:{bot_id}",
+                                        note=f"campaign {name} ×{q['n']}") is None:
+                        flash("تعذّر حجز الرصيد — أعد المحاولة." if ar else
+                              "Could not reserve credit — please retry.", "error")
+                        return redirect(url_for("broadcast", bot_id=bot_id))
+                    charged = q["cost"]
                 sent, failed = manager.broadcast_template(bot_id, name, lang_code, values)
-                flash((f"📢 أُرسل القالب «{name}» إلى {sent} مشترك (فشل {failed})." if ar else
-                       f"📢 Template «{name}» sent to {sent} subscribers ({failed} failed)."), "ok")
+                if charged:
+                    # لا نحاسب على ما لم يصل. الردّ بالسعر نفسه المخصوم به،
+                    # لا بسعر اليوم — فتغيير الإعداد بين الخصم والردّ لا يسرق.
+                    back = min(charged, failed * q["price"])
+                    if back:
+                        db.wallet_refund(uid(), back, ref=f"bot:{bot_id}",
+                                         note=f"failed {failed} of {q['n']}")
+                    log.info("campaign bot=%s tpl=%s cat=%s n=%s sent=%s failed=%s "
+                             "charged=%s refunded=%s", bot_id, name, cat, q["n"], sent,
+                             failed, charged, back)
+                    flash((f"📢 أُرسل القالب «{name}» إلى {sent} مشترك (فشل {failed}). "
+                           f"خُصم {_egp(charged - back)} ج.م — الرصيد "
+                           f"{_egp(db.wallet_balance(uid()))} ج.م." if ar else
+                           f"📢 Template «{name}» sent to {sent} subscribers ({failed} failed). "
+                           f"Charged {_egp(charged - back)} EGP — balance "
+                           f"{_egp(db.wallet_balance(uid()))} EGP."), "ok")
+                else:
+                    flash((f"📢 أُرسل القالب «{name}» إلى {sent} مشترك (فشل {failed})." if ar else
+                           f"📢 Template «{name}» sent to {sent} subscribers ({failed} failed)."), "ok")
         else:
             text = request.form.get("text", "").strip()
             if not text:
@@ -802,7 +918,11 @@ def broadcast(bot_id):
 
     return react_page("broadcast", "campaign_title",
                       {"bot": b, "subs": subs, "isWa": is_wa, "reachable": reachable,
-                       "waba": _waba_of(b)[0] if is_wa else ""},
+                       "waba": _waba_of(b)[0] if is_wa else "",
+                       # التكلفة تُعرض **قبل** التأكيد — والخادم يعيد حسابها عند الإرسال
+                       "wallet": {"balance": db.wallet_balance(uid()),
+                                  "price": mkt_price(),
+                                  "topupUrl": url_for("wallet_page")}},
                       title=i18n.t("campaign_title", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
 
 # ---------- قوالب واتساب المعتمدة ----------
@@ -1015,9 +1135,16 @@ def subscribe(plan_id):
         return redirect(url_for("pricing"))
     p = plans.plan(plan_id)
     plat = db.all_platform()
-    _pr = _plan_pricing(plan_id)
+    # الدورة تأتي من رابط صفحة الأسعار، وتُطبَّع فوراً: `?cycle=anything` تصير شهرية.
+    cyc = plans.norm_cycle(request.args.get("cycle"))
+    _pr = _plan_pricing(plan_id, cycle=cyc)
+    _mo = _plan_pricing(plan_id, cycle="monthly")
     return react_page("subscribe", "pay_title",
                       {"planId": plan_id, "plan": dict(p, id=plan_id, **_pr), "plat": plat,
+                       "cycle": cyc, "days": plans.cycle_days(cyc),
+                       "monthlyPrice": _mo["price"],
+                       "annualSavingPct": (int(round((1 - _pr["price"] / (_mo["price"] * 12.0)) * 100))
+                                           if cyc == "annual" and _mo["price"] > 0 else 0),
                        "qr": url_for("static", filename="instapay_qr.jpg"),
                        "action": url_for("subscribe_pay", plan_id=plan_id)})
 
@@ -1026,19 +1153,22 @@ def subscribe(plan_id):
 def subscribe_pay(plan_id):
     if not plans.is_sellable(plan_id):
         return redirect(url_for("pricing"))
-    # التسعيرة تُحسب في الخادم: سعر الباقة بعد تجاوز المالك وخصمها، ثم كود
-    # الخصم إن صحّ. لا يُقرأ أي مبلغ من الفورم (AGENTS.md §3.3).
-    q = quote(plan_id, uid(), request.form.get("promo", ""))
+    # التسعيرة تُحسب في الخادم: سعر الباقة على الدورة المختارة بعد تجاوز المالك
+    # وخصمها، ثم كود الخصم إن صحّ. لا يُقرأ أي مبلغ من الفورم (AGENTS.md §3.3).
+    # الفورم يرسل اسم الدورة فقط — لا سعرها — و`norm_cycle` تردّ أي قيمة ملفّقة
+    # إلى الشهرية، فأسوأ ما يفعله العابث أن يدفع سعر شهر ويأخذ شهراً.
+    q = quote(plan_id, uid(), request.form.get("promo", ""),
+              cycle=request.form.get("cycle"))
     method = request.form.get("method", "")
     ref = request.form.get("ref", "").strip()
     file = request.files.get("screenshot")
     if not file or not file.filename:
         flash("يجب رفع صورة إثبات الدفع." if session.get("lang")!="en" else "Please upload the payment screenshot.", "error")
-        return redirect(url_for("subscribe", plan_id=plan_id))
+        return redirect(url_for("subscribe", plan_id=plan_id, cycle=q["cycle"]))
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in pay.ALLOWED_EXT:
         flash("صيغة الصورة غير مدعومة (jpg/png/webp)." if session.get("lang")!="en" else "Unsupported image type (jpg/png/webp).", "error")
-        return redirect(url_for("subscribe", plan_id=plan_id))
+        return redirect(url_for("subscribe", plan_id=plan_id, cycle=q["cycle"]))
     # فحص توقيع الملف **قبل** أي كتابة: ما ليس صورة ليس إيصالاً، فلا يلمس
     # القرص أصلاً ولا يُنشأ له طلب دفع (AGENTS.md §3.7). الحجم محدود سلفاً
     # بـ MAX_CONTENT_LENGTH فالقراءة إلى الذاكرة مأمونة.
@@ -1050,7 +1180,7 @@ def subscribe_pay(plan_id):
                    "too_large":    ("الصورة كبيرة جداً (الحد 8 ميجابايت).", "The image is too large (8MB max)."),
                    }.get(imgchk.get("reason"), ("تعذّر قراءة الصورة.", "Could not read the image."))
         flash(_reason[0] if session.get("lang")!="en" else _reason[1], "error")
-        return redirect(url_for("subscribe", plan_id=plan_id))
+        return redirect(url_for("subscribe", plan_id=plan_id, cycle=q["cycle"]))
     # صورة صالحة — الآن فقط تُكتب على القرص
     fname = f"pay_{uid()}_{int(_time.time())}{ext}"
     fpath = os.path.join(UPLOAD_DIR, secure_filename(fname))
@@ -1066,9 +1196,9 @@ def subscribe_pay(plan_id):
                             json.dumps(ac, ensure_ascii=False),
                             promo_id=(q["promo"]["id"] if q["promo"] else None),
                             discount=round(q["list_price"] - q["total"], 2),
-                            base_amount=q["list_price"])
-    log.info("payment #%s created user=%s plan=%s amount=%s method=%s promo=%s verdict=%s",
-             pid, uid(), plan_id, q["total"], method, q["promo_code"], ac.get("verdict"))
+                            base_amount=q["list_price"], billing_cycle=q["cycle"])
+    log.info("payment #%s created user=%s plan=%s cycle=%s amount=%s method=%s promo=%s verdict=%s",
+             pid, uid(), plan_id, q["cycle"], q["total"], method, q["promo_code"], ac.get("verdict"))
     # تنبيه الأدمن على تليجرام بزرّي موافقة/رفض (طبقة التحقق الثانية)
     admin_id = db.get_platform("admin_chat_id", "")
     payment = db.get_payment(pid)
@@ -1098,7 +1228,7 @@ def billing():
     return react_page("billing", "billing_title",
                       {"sub": sub, "pays": pays,
                        "planName": plans.plan_name(sub["plan"], session.get("lang", i18n.DEFAULT)),
-                       "names": {k: plans.plan_name(k, session.get("lang", i18n.DEFAULT)) for k in plans.PLANS}})
+                       "names": _plan_names()})
 
 @app.route("/admin/platform", methods=["GET", "POST"])
 @require_roles("admin")
@@ -1182,7 +1312,7 @@ def admin_payments():
         x["vstyle"] = st; x["vsym"] = sym
     return react_page("admin_payments", "admin_payments_t",
                       {"pays": pays,
-                       "names": {k: plans.plan_name(k, session.get("lang", i18n.DEFAULT)) for k in plans.PLANS}})
+                       "names": _plan_names()})
 
 @app.route("/admin/payments/<int:pid>/<any(approve,reject):decision>", methods=["POST"])
 @require_roles("admin")
@@ -1403,25 +1533,45 @@ def settle_payment(row):
 #  من الفورم أبداً. كل ما تفعله الواجهة هو إرسال معرّف الباقة وكود الخصم.
 # ============================================================================
 
-def _plan_pricing(plan_id, overrides=None):
-    """يرجّع تسعير الباقة بعد تجاوزات المالك وخصمها المعلن."""
+def _plan_pricing(plan_id, overrides=None, cycle="monthly"):
+    """يرجّع تسعير الباقة بعد تجاوزات المالك وخصمها المعلن، على الدورة المطلوبة.
+
+    **الترتيب مقصود:** سعر الشهر (بعد تجاوز المالك) ← معامل السنة ← خصم الباقة.
+    فلو خفّض المالك سعر باقة، ينزل السعر السنوي معها تلقائياً — لا يبقى مثبّتاً
+    على سعر القائمة الأصلي. و`norm_cycle` تضمن أن أي قيمة قادمة من المستخدم
+    تسقط إلى الشهرية بدل أن تُسعَّر بصفر."""
     base = plans.plan(plan_id)
     ov = (overrides if overrides is not None else db.plan_overrides()).get(plan_id) or {}
     price = ov.get("price")
-    price = float(base["price"]) if price is None else float(price)
+    monthly = float(base["price"]) if price is None else float(price)
+    cyc = plans.norm_cycle(cycle)
+    price = plans.annual_of(monthly) if cyc == "annual" else monthly
     disc = float(ov.get("discount_pct") or 0)
     final = round(price * (1 - disc / 100.0), 2)
-    return {"list_price": round(price, 2), "discount_pct": disc,
+    return {"cycle": cyc, "monthly_price": round(monthly, 2),
+            "list_price": round(price, 2), "discount_pct": disc,
             "price": max(0.0, final), "has_discount": disc > 0 and final < price}
 
 def priced_plans(lang=None):
-    """كل الباقات بأسعارها الفعلية — للعرض في الواجهة."""
+    """كل الباقات بأسعارها الفعلية على الدورتين — للعرض في الواجهة.
+
+    الدورتان تُرسَلان معاً ليعمل زرّ التبديل (شهري/سنوي) بلا طلب شبكة، ومع ذلك
+    يبقى المبلغ المخزَّن محسوباً في الخادم وحده عند الدفع (AGENTS.md §3.3)."""
     lang = lang or session.get("lang", i18n.DEFAULT)
     ov = db.plan_overrides()
     out = []
     for pid in plans.ORDER:
         p = dict(plans.PLANS[pid], id=pid)
-        p.update(_plan_pricing(pid, ov))
+        m = _plan_pricing(pid, ov, "monthly")
+        a = _plan_pricing(pid, ov, "annual")
+        p.update(m)                                    # الشهري هو الافتراضي المعروض
+        p["annual_list_price"] = a["list_price"]
+        p["annual_price"] = a["price"]
+        p["annual_has_discount"] = a["has_discount"]
+        # التوفير يُحسب من السعرين الفعليين لا من ثابت، فيعكس تجاوزات المالك
+        p["annual_saving_pct"] = (int(round((1 - a["price"] / (m["price"] * 12.0)) * 100))
+                                  if m["price"] > 0 else 0)
+        p["annual_monthly_equiv"] = round(a["price"] / 12.0, 2) if a["price"] else 0
         out.append(p)
     return out
 
@@ -1444,10 +1594,11 @@ def validate_promo(code, plan_id, user_id):
         return None, "promo_used"
     return pr, None
 
-def quote(plan_id, user_id, code=None):
-    """التسعيرة النهائية: سعر الباقة بعد خصمها المعلن، ثم كود الخصم إن صحّ.
-    هذه الدالة وحدها تحدّد ما يُخزَّن في payments.amount."""
-    pricing = _plan_pricing(plan_id)
+def quote(plan_id, user_id, code=None, cycle="monthly"):
+    """التسعيرة النهائية: سعر الباقة على الدورة المطلوبة بعد خصمها المعلن، ثم
+    كود الخصم إن صحّ. هذه الدالة وحدها تحدّد ما يُخزَّن في payments.amount،
+    و`cycle` المُطبَّعة التي ترجّعها هي وحدها ما يُخزَّن في payments.billing_cycle."""
+    pricing = _plan_pricing(plan_id, cycle=cycle)
     base = pricing["price"]
     promo, reason = validate_promo(code, plan_id, user_id)
     cut = 0.0
@@ -1457,6 +1608,8 @@ def quote(plan_id, user_id, code=None):
     total = round(max(0.0, base - cut), 2)
     return {
         "plan": plan_id,
+        "cycle": pricing["cycle"],
+        "days": plans.cycle_days(pricing["cycle"]),
         "list_price": pricing["list_price"],
         "plan_discount_pct": pricing["discount_pct"],
         "base": base,                 # بعد خصم الباقة، قبل الكود
@@ -1503,6 +1656,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
         {"k": "dashboard",   "u": url_for("dashboard"),    "i": "grid",     "l": i18n.t("nav_bots", lang)},
         {"k": "pricing",     "u": url_for("pricing"),      "i": "tag",      "l": i18n.t("nav_pricing", lang)},
         {"k": "billing",     "u": url_for("billing"),      "i": "card",     "l": i18n.t("nav_billing", lang)},
+        {"k": "wallet",      "u": url_for("wallet_page"),  "i": "wallet",   "l": i18n.t("wallet_nav", lang)},
         {"k": "request_bot", "u": url_for("request_bot"),  "i": "sparkles", "l": i18n.t("custom_bot", lang)},
         {"k": "affiliate",   "u": url_for("affiliate"),    "i": "crown",    "l": i18n.t("aff_title", lang)},
     ]
@@ -1537,6 +1691,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
         "urls": {
             "dashboard": url_for("dashboard"), "pricing": url_for("pricing"),
             "billing": url_for("billing"), "account": url_for("account"),
+            "wallet": url_for("wallet_page"),
             "logout": url_for("logout"), "login": url_for("login"),
             "register": url_for("register"), "landing": url_for("landing"),
             "forgot": url_for("forgot"),
@@ -1676,10 +1831,11 @@ def api_promo_check():
     if _rate_limited(str(uid()), limit=20, window=300, bucket="promo"):
         return jsonify({"ok": False, "valid": False,
                         "error": i18n.t("promo_bad", session.get("lang", i18n.DEFAULT))}), 429
-    q = quote(plan_id, uid(), d.get("code", ""))
+    q = quote(plan_id, uid(), d.get("code", ""), cycle=d.get("cycle"))
     lang = session.get("lang", i18n.DEFAULT)
     return jsonify({
         "ok": True,
+        "cycle": q["cycle"], "days": q["days"],
         "listPrice": q["list_price"], "base": q["base"], "total": q["total"],
         "planDiscountPct": q["plan_discount_pct"],
         "promoCode": q["promo_code"], "promoCut": q["promo_cut"],
@@ -1789,7 +1945,162 @@ def seed_platform_defaults():
     db.set_platform("support_email", "info@youssefalsherief.tech")
     db.set_platform("support_whatsapp", "201097585951")
     db.set_platform("support_telegram", "")
+    # سعر الرسالة التسويقية **بالقروش**. مصر: $0.0644 للرسالة بعد خفض Meta
+    # 1 يناير 2026 (كان $0.1073)، عند ~50.9ج/دولار ≈ 3.28ج. راجع
+    # `business/WHATSAPP_PRICING_2026.md` — وأعد الحساب كل ربع سنة.
+    # إعداد لا ثابت: السعر والصرف يتغيّران، والتعديل يجب ألا يحتاج نشراً.
+    db.set_platform("mkt_msg_price", "328")
     db.set_platform("seeded", "1")
+
+def _plan_names(lang=None):
+    """أسماء الباقات للعرض في الجداول — ومعها شحن المحفظة.
+    بدون السطر الأخير تظهر دفعة شحن في سجل المدفوعات باسم «مجانية»، لأن
+    `plan_name` تُسقط أي معرّف مجهول إلى الباقة المجانية."""
+    lang = lang or session.get("lang", i18n.DEFAULT)
+    out = {k: plans.plan_name(k, lang) for k in plans.PLANS}
+    out[db.WALLET_PLAN] = i18n.t("wallet_topup_label", lang)
+    return out
+
+
+# ---------- محفظة الرسائل التسويقية (L-16) ----------
+MKT_PRICE_FALLBACK = 328          # قرشاً — يُستعمل فقط لو ضاع الإعداد
+
+
+def mkt_price():
+    """سعر الرسالة التسويقية الواحدة بالقروش، من إعدادات المنصة."""
+    try:
+        v = int(str(db.get_platform("mkt_msg_price", "") or "").strip() or 0)
+    except (TypeError, ValueError):
+        v = 0
+    return v if v > 0 else MKT_PRICE_FALLBACK
+
+
+def _egp(piastres):
+    """قروش → جنيهات للعرض. القسمة هنا فقط — الحساب كله بالقروش."""
+    return round(int(piastres or 0) / 100.0, 2)
+
+
+def _template_category(bot_row, name, language=None):
+    """فئة القالب كما تقولها Meta — لا كما يرسلها الفورم.
+
+    الفئة هي ما يقرّر الخصم من عدمه، فلو قُرئت من الفورم لأرسل أي أحد حملة
+    تسويقية مؤشَّرة «UTILITY» ومرّت مجاناً. تُرجَع None لو تعذّرت القراءة،
+    والمستدعي يرفض الإرسال حينها بدل أن يخمّن.
+    """
+    waba, _ = _waba_of(bot_row)
+    cfg = json.loads(bot_row["config_json"] or "{}")
+    if not waba or not cfg.get("wa_token"):
+        return None
+    res = WT.list_templates(waba, cfg.get("wa_token", ""))
+    if not res.get("ok"):
+        return None
+    for t in res.get("items", []):
+        if t.get("name") == name and (not language or t.get("language") == language):
+            return (t.get("category") or "").upper()
+    return None
+
+
+def _campaign_quote(owner_id, recipients, category):
+    """تكلفة حملة قبل إرسالها. تليجرام وكل ما ليس تسويقياً = صفر.
+
+    تليجرام تكلفته الحدّية صفر فلا يُخصم عليه شيء أبداً؛ وقوالب UTILITY /
+    AUTHENTICATION خارج المحفظة لأنها جزء من الخدمة المدفوعة في الباقة.
+    """
+    n = max(0, int(recipients or 0))
+    if category != "MARKETING":
+        return {"billable": False, "n": n, "price": 0, "cost": 0,
+                "balance": db.wallet_balance(owner_id), "enough": True, "short": 0}
+    price = mkt_price()
+    cost = n * price
+    bal = db.wallet_balance(owner_id)
+    return {"billable": True, "n": n, "price": price, "cost": cost,
+            "balance": bal, "enough": bal >= cost, "short": max(0, cost - bal)}
+
+
+TOPUP_MIN, TOPUP_MAX = 50, 50000        # بالجنيه — حدّان عاقلان لا أكثر
+
+
+@app.route("/wallet")
+@login_required
+def wallet_page():
+    n = 25
+    return react_page("wallet", "wallet_title",
+                      {"balance": db.wallet_balance(uid()), "price": mkt_price(),
+                       "ledger": db.wallet_ledger(uid(), n),
+                       "plat": db.all_platform(),
+                       "qr": url_for("static", filename="instapay_qr.jpg"),
+                       "min": TOPUP_MIN, "max": TOPUP_MAX,
+                       "presets": [100, 250, 500, 1000],
+                       "action": url_for("wallet_topup")})
+
+
+@app.route("/wallet/topup", methods=["POST"])
+@login_required
+def wallet_topup():
+    """طلب شحن رصيد. **لا يشحن شيئاً بنفسه** — ينشئ دفعة معلّقة كغيرها.
+
+    مبلغ الشحن يختاره المستخدم بطبيعته (بعكس سعر الباقة الذي يفرضه الخادم،
+    AGENTS.md §3.3): هو يعلن كم حوّل، والأدمن يطابقه مع الإيصال قبل الاعتماد.
+    والرصيد لا يُضاف إلا داخل `finalize_payment` بعد تلك الموافقة.
+    """
+    ar = session.get("lang") != "en"
+    try:
+        amount = int(float(request.form.get("amount", "0") or 0))
+    except (TypeError, ValueError):
+        amount = 0
+    if not (TOPUP_MIN <= amount <= TOPUP_MAX):
+        flash((f"مبلغ الشحن بين {TOPUP_MIN} و{TOPUP_MAX} ج.م." if ar else
+               f"Top-up amount must be between {TOPUP_MIN} and {TOPUP_MAX} EGP."), "error")
+        return redirect(url_for("wallet_page"))
+
+    file = request.files.get("screenshot")
+    if not file or not file.filename:
+        flash("يجب رفع صورة إثبات الدفع." if ar else "Please upload the payment screenshot.", "error")
+        return redirect(url_for("wallet_page"))
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in pay.ALLOWED_EXT:
+        flash("صيغة الصورة غير مدعومة (jpg/png/webp)." if ar else
+              "Unsupported image type (jpg/png/webp).", "error")
+        return redirect(url_for("wallet_page"))
+    data = file.read()
+    imgchk = pay.validate_bytes(data)                 # الفحص قبل أي كتابة (§3.7)
+    if not imgchk["ok"]:
+        flash("الملف ليس صورة صالحة." if ar else "The file is not a valid image.", "error")
+        return redirect(url_for("wallet_page"))
+    fname = f"topup_{uid()}_{int(_time.time())}{ext}"
+    fpath = os.path.join(UPLOAD_DIR, secure_filename(fname))
+    with open(fpath, "wb") as _f:
+        _f.write(data)
+
+    img_hash = hashlib.sha256(data).hexdigest()
+    dup = db.img_hash_seen(img_hash)
+    refs = [db.get_platform("vodafone_number", ""), db.get_platform("instapay_handle", ""),
+            db.get_platform("bank_iban", ""), db.get_platform("bank_account", "")]
+    ac = pay.auto_check(fpath, float(amount), [r for r in refs if r], duplicate=dup)
+    pid = db.create_payment(uid(), db.WALLET_PLAN, request.form.get("method", ""),
+                            float(amount), request.form.get("ref", "").strip(), fname,
+                            img_hash, json.dumps(ac, ensure_ascii=False))
+    log.info("wallet topup #%s requested user=%s amount=%s verdict=%s",
+             pid, uid(), amount, ac.get("verdict"))
+    admin_id = db.get_platform("admin_chat_id", "")
+    payment = db.get_payment(pid)
+    _detail = pay.verdict_label(ac["verdict"], "ar") + "\n" + "\n".join(
+        ("✅ " if c["ok"] else ("❌ " if c["ok"] is False else "• ")) + c["text"]
+        for c in pay.check_lines(ac, "ar"))
+    caption = PB.build_caption(payment, session.get("uname", ""), _detail)
+    msg_id = manager.send_payment_alert(admin_id, payment, session.get("uname", ""),
+                                        caption, fpath) if admin_id else None
+    if msg_id:
+        db.set_payment_msg(pid, msg_id)
+    else:
+        notify_admins(f"💳 طلب شحن رصيد #{pid} / Wallet top-up — {session.get('uname')} — "
+                      f"{amount} EGP. راجعه من لوحة الأدمن.")
+    flash(("✅ تم استلام إثبات الشحن (#{}). يُضاف الرصيد بعد المراجعة والموافقة."
+           if ar else
+           "✅ Top-up proof received (#{}). Credit is added after review and approval.").format(pid),
+          "ok")
+    return redirect(url_for("wallet_page"))
+
 
 # ---------- Webhooks ----------
 @app.route("/wh/whatsapp", methods=["GET", "POST"])

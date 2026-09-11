@@ -10,6 +10,11 @@ log = logging.getLogger("billing")
 # BOTYALLA_DB يسمح للاختبارات بالعمل على قاعدة مؤقتة بدل قاعدة الإنتاج.
 DB_PATH = os.environ.get("BOTYALLA_DB", "botyalla.db")
 
+# معرّف «الباقة» لدفعات شحن المحفظة. ليس باقة حقيقية: خارج `plans.PLANS`
+# فـ`plans.is_sellable` ترفضه ولا يُباع من صفحة الأسعار، و`finalize_payment`
+# تميّزه فتشحن الرصيد بدل أن تفعّل اشتراكاً.
+WALLET_PLAN = "__wallet__"
+
 @contextmanager
 def get_conn():
     conn = sqlite3.connect(DB_PATH, timeout=15)
@@ -74,6 +79,17 @@ def _migrate(c):
         # آخر رسالة واردة من العميل — واتساب يمنع المراسلة الحرة بعد 24 ساعة منها.
         c.execute("ALTER TABLE bot_users ADD COLUMN last_in_at INTEGER")
         c.execute("UPDATE bot_users SET last_in_at=created_at WHERE last_in_at IS NULL")
+
+    # ---- الدورة الفوترية (شهري/سنوي) ----
+    # الافتراضي 'monthly' فكل صفّ قائم يبقى على ما هو عليه بلا لمس.
+    scols = {r[1] for r in c.execute("PRAGMA table_info(subscriptions)").fetchall()}
+    if "billing_cycle" not in scols:
+        c.execute("ALTER TABLE subscriptions ADD COLUMN "
+                  "billing_cycle TEXT NOT NULL DEFAULT 'monthly'")
+    pcols = {r[1] for r in c.execute("PRAGMA table_info(payments)").fetchall()}
+    if "billing_cycle" not in pcols:
+        c.execute("ALTER TABLE payments ADD COLUMN "
+                  "billing_cycle TEXT NOT NULL DEFAULT 'monthly'")
 
     # ---- الباقات الجديدة: لا ترحيل، وهذا مقصود ----
     # الباقتان القديمتان (`pro` / `business`) تبقيان في `plans.PLANS` بحدودهما
@@ -204,6 +220,29 @@ def init_db():
             PRIMARY KEY(bot_id, month),
             FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
         );
+        -- محفظة رصيد الرسائل التسويقية. الرسالة التسويقية في مصر ≈ 3.12ج،
+        -- فأربعون رسالة تلتهم باقة التاجر كاملة — إدراجها في باقة نزيف مضمون.
+        -- **الوحدة قرش (عدد صحيح)**: لا عشريات عائمة في المال إطلاقاً.
+        CREATE TABLE IF NOT EXISTS wallet(
+            owner_id   INTEGER PRIMARY KEY,
+            balance    INTEGER NOT NULL DEFAULT 0,     -- بالقروش، لا يقلّ عن صفر أبداً
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        -- كل حركة على المحفظة تُقيَّد هنا. الرصيد أعلاه مجرّد مجموع مُخزَّن
+        -- يُحدَّث في نفس المعاملة، فأي شكّ يُحسم بإعادة جمع هذا السجل.
+        CREATE TABLE IF NOT EXISTS wallet_ledger(
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id   INTEGER NOT NULL,
+            delta      INTEGER NOT NULL,               -- موجب شحن · سالب خصم
+            kind       TEXT NOT NULL,                  -- topup | spend | refund | adjust
+            ref        TEXT,                           -- مرجع الحملة أو الدفعة
+            note       TEXT,
+            balance_after INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_ledger_owner ON wallet_ledger(owner_id, id DESC);
         -- Meta تُعيد إرسال الويبهوك عند أي تأخّر أو فشل. بلا هذا الجدول
         -- تُعالَج الإجابة مرتين ويتقدّم الفلو خطوة زائدة.
         CREATE TABLE IF NOT EXISTS seen_msgs(
@@ -560,14 +599,14 @@ def get_subscription(user_id):
         r = c.execute("SELECT * FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
         if not r:
             return {"user_id": user_id, "plan": "free", "status": "active",
-                    "started_at": None, "expires_at": None}
+                    "started_at": None, "expires_at": None, "billing_cycle": "monthly"}
         d = dict(r)
         # انتهاء تلقائي
         if d["plan"] != "free" and d["expires_at"] and d["expires_at"] < int(time.time()):
             d["status"] = "expired"
         return d
 
-def activate_subscription(user_id, plan, days=30, conn=None):
+def activate_subscription(user_id, plan, days=30, conn=None, cycle="monthly"):
     """يفعّل الاشتراك ويرجّع تاريخ الانتهاء.
     التجديد المبكر على **نفس** الباقة يُضاف إلى المتبقّي بدل أن يلغيه (العميل
     دفع عن 30 يوماً فيأخذها كاملة). تغيير الباقة أو اشتراك منتهٍ يبدأ من الآن."""
@@ -581,24 +620,28 @@ def activate_subscription(user_id, plan, days=30, conn=None):
                 base = r["expires_at"]                  # مدّد من نهاية الفترة الحالية
                 started = r["started_at"] or now        # واحتفظ ببداية الاشتراك الأصلية
         exp = base + days * 86400
-        c.execute("INSERT INTO subscriptions(user_id,plan,status,started_at,expires_at) VALUES(?,?, 'active',?,?) "
+        c.execute("INSERT INTO subscriptions(user_id,plan,status,started_at,expires_at,billing_cycle) "
+                  "VALUES(?,?, 'active',?,?,?) "
                   "ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan, status='active', "
-                  "started_at=excluded.started_at, expires_at=excluded.expires_at",
-                  (user_id, plan, started, exp))
+                  "started_at=excluded.started_at, expires_at=excluded.expires_at, "
+                  "billing_cycle=excluded.billing_cycle",
+                  (user_id, plan, started, exp,
+                   cycle if cycle in ("monthly", "annual") else "monthly"))
         # تجديد الاشتراك يمسح سجل التذكيرات ليسمح بتذكيرات الدورة التالية
         clear_reminder_log(user_id, conn=c)
     return exp
 
 # ---------- payments ----------
 def create_payment(user_id, plan, method, amount, ref, screenshot, img_hash, auto_check,
-                   promo_id=None, discount=0, base_amount=None):
+                   promo_id=None, discount=0, base_amount=None, billing_cycle="monthly"):
     with get_conn() as c:
         cur = c.execute("INSERT INTO payments(user_id,plan,method,amount,ref,screenshot,img_hash,"
-                        "auto_check,status,created_at,promo_id,discount,base_amount) "
-                        "VALUES(?,?,?,?,?,?,?,?, 'pending', ?,?,?,?)",
+                        "auto_check,status,created_at,promo_id,discount,base_amount,billing_cycle) "
+                        "VALUES(?,?,?,?,?,?,?,?, 'pending', ?,?,?,?,?)",
                         (user_id, plan, method, amount, ref, screenshot, img_hash, auto_check,
                          int(time.time()), promo_id, discount or 0,
-                         base_amount if base_amount is not None else amount))
+                         base_amount if base_amount is not None else amount,
+                         billing_cycle if billing_cycle in ("monthly", "annual") else "monthly"))
         return cur.lastrowid
 
 def get_payment(pid):
@@ -637,9 +680,21 @@ def finalize_payment(pid, status):
         row = decide_payment(pid, status, conn=c)
         if not row:
             return None
-        if status == "approved":
+        if status == "approved" and row["plan"] == WALLET_PLAN:
+            # شحن محفظة لا اشتراك. يمرّ بنفس مسار الإيصال والموافقة المُجرَّب
+            # (فحص الصورة · زرّ الأدمن · كشف التكرار)، وداخل **نفس المعاملة**
+            # فلا تبقى دفعة معتمدة بلا رصيد.
+            row["wallet_after"] = wallet_topup(
+                row["user_id"], int(round(float(row["amount"] or 0) * 100)),
+                ref=f"payment:{row['id']}", note="topup", conn=c)
+        elif status == "approved":
             # تاريخ الانتهاء يُرجَع مع الصف لإيصال الإيميل (mailer.send_payment_receipt)
-            row["expires_at"] = activate_subscription(row["user_id"], row["plan"], days=30, conn=c)
+            # المدة من **دورة الدفعة نفسها** لا من افتراض ثابت — فدفعة سنوية
+            # تفعّل 365 يوماً حتى لو اعتُمدت من زرّ تليجرام بعد أيام.
+            cyc = row.get("billing_cycle") or "monthly"
+            row["expires_at"] = activate_subscription(
+                row["user_id"], row["plan"],
+                days=365 if cyc == "annual" else 30, conn=c, cycle=cyc)
             # التسوية هنا لا في المسار الويبي وحده: الموافقة تأتي أيضاً من زرّ
             # تليجرام، ولو تُركت بالخارج لفات الكود والعمولة على ذلك المسار.
             if row.get("promo_id"):
@@ -1256,6 +1311,81 @@ def owner_usage(owner_id, month=None):
                       " FROM usage_msgs WHERE owner_id=? AND month=?",
                       (owner_id, month or _month())).fetchone()
         return {"sent": r["s"], "received": r["g"]}
+
+# ---------- محفظة الرسائل التسويقية ----------
+
+def wallet_balance(owner_id, conn=None):
+    """الرصيد بالقروش. حساب بلا محفظة = صفر، لا خطأ."""
+    with _conn_or(conn) as c:
+        r = c.execute("SELECT balance FROM wallet WHERE owner_id=?", (owner_id,)).fetchone()
+        return int(r["balance"]) if r else 0
+
+
+def _wallet_move(owner_id, delta, kind, ref=None, note=None, conn=None, require=True):
+    """حركة واحدة على المحفظة + قيدها في السجل، في معاملة واحدة.
+
+    **الخصم ذرّي بشرطه:** `UPDATE ... WHERE balance >= ?` هو القفل نفسه —
+    طلبان متزامنان (حملتان من تبويبين) لا يمكن أن ينجحا معاً على رصيد يكفي
+    واحدة، فالثاني يجد rowcount=0 ويرجّع None. لا رصيد سالب بأي مسار.
+    """
+    now = int(time.time())
+    with _conn_or(conn) as c:
+        c.execute("INSERT OR IGNORE INTO wallet(owner_id,balance,updated_at) VALUES(?,0,?)",
+                  (owner_id, now))
+        if delta < 0 and require:
+            cur = c.execute("UPDATE wallet SET balance=balance+?, updated_at=? "
+                            "WHERE owner_id=? AND balance >= ?",
+                            (delta, now, owner_id, -delta))
+            if cur.rowcount != 1:
+                return None                      # الرصيد لا يكفي — لم يتغيّر شيء
+        else:
+            c.execute("UPDATE wallet SET balance=balance+?, updated_at=? WHERE owner_id=?",
+                      (delta, now, owner_id))
+        bal = c.execute("SELECT balance FROM wallet WHERE owner_id=?", (owner_id,)).fetchone()["balance"]
+        c.execute("INSERT INTO wallet_ledger(owner_id,delta,kind,ref,note,balance_after,created_at) "
+                  "VALUES(?,?,?,?,?,?,?)", (owner_id, delta, kind, ref, note, bal, now))
+        return int(bal)
+
+
+def wallet_topup(owner_id, amount, ref=None, note=None, conn=None):
+    """شحن بالقروش. يرجّع الرصيد الجديد، أو None لمبلغ غير موجب."""
+    amount = int(amount or 0)
+    if amount <= 0:
+        return None
+    return _wallet_move(owner_id, amount, "topup", ref, note, conn)
+
+
+def wallet_charge(owner_id, amount, ref=None, note=None, conn=None):
+    """خصم بالقروش. يرجّع الرصيد الجديد، أو **None لو لم يكفِ الرصيد** —
+    وحينها لم يُخصم ولا قرش ولم يُكتب أي قيد."""
+    amount = int(amount or 0)
+    if amount <= 0:
+        return None
+    return _wallet_move(owner_id, -amount, "spend", ref, note, conn)
+
+
+def wallet_refund(owner_id, amount, ref=None, note=None, conn=None):
+    """ردّ ما لم يُستهلك (رسائل فشل إرسالها). لا يُشترط رصيد — هو إضافة."""
+    amount = int(amount or 0)
+    if amount <= 0:
+        return None
+    return _wallet_move(owner_id, amount, "refund", ref, note, conn)
+
+
+def wallet_adjust(owner_id, delta, note=None, conn=None):
+    """تعديل يدوي من الأدمن (تصحيح · تعويض). يُقيَّد كغيره ولا يُخفى."""
+    delta = int(delta or 0)
+    if delta == 0:
+        return None
+    return _wallet_move(owner_id, delta, "adjust", None, note, conn, require=True)
+
+
+def wallet_ledger(owner_id, limit=50):
+    with get_conn() as c:
+        rows = c.execute("SELECT * FROM wallet_ledger WHERE owner_id=? ORDER BY id DESC LIMIT ?",
+                         (owner_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
 
 # ---------- منع تكرار معالجة رسائل الويبهوك ----------
 def mark_msg_seen(msg_id):

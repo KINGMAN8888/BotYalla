@@ -152,7 +152,7 @@ export function Billing() {
               {sub.status === "active" && (
                 <span className={dl <= 5 ? "text-red-300" : "text-au-teal"}>({dl} {t("days_left")})</span>
               )}
-              <span>· {t("renews_monthly")}</span>
+              <span>· {t(sub.billing_cycle === "annual" ? "renews_annually" : "renews_monthly")}</span>
             </div>
           )}
         </div>
@@ -182,21 +182,53 @@ export function Billing() {
 /* ----------------------------------------------------------------- الباقات */
 export function Pricing() {
   const { plans = [], sub = {} } = P;
-  const icons = { free: "bot", pro: "bolt", business: "crown" };
+  // المعرّفات هنا لا بد أن تطابق `plans.ORDER` في الخادم — أي معرّف قديم يترك
+  // البطاقة بأيقونة افتراضية والشارة معلّقة بلا أن يكسر شيئاً ظاهراً.
+  const icons = { free: "bot", merchant: "store", whatsapp: "phone", agency: "crown" };
+  const [cycle, setCycle] = useState("monthly");
+  const annual = cycle === "annual";
+  const fill = (k, n) => t(k).replace("{n}", n);
+  const topSave = plans.reduce((m, p) => Math.max(m, p.annual_saving_pct || 0), 0);
+
   return (
     <>
-      <div className="mb-10 text-center">
+      <div className="mb-8 text-center">
         <h1 className="m-0 text-[clamp(26px,4vw,40px)] font-extrabold tracking-tight text-ink">
           {t("pricing_title")}
         </h1>
         <p className="mx-auto mt-3 max-w-[520px] text-[15px] text-ink-3">{t("pricing_sub")}</p>
       </div>
 
-      <div className="grid items-start gap-5 lg:grid-cols-3">
+      {/* مبدّل الدورة — عرضٌ فقط: المبلغ المُحصَّل يُحسب في الخادم عند الدفع */}
+      <div className="mb-10 flex flex-col items-center gap-2">
+        <div role="tablist" aria-label={t("sub_cycle")}
+             className="inline-flex rounded-full bg-black/25 p-1 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]">
+          {["monthly", "annual"].map((c) => (
+            <button key={c} type="button" role="tab" aria-selected={cycle === c}
+                    onClick={() => setCycle(c)}
+                    className={"rounded-full px-5 py-2 text-[13.5px] font-extrabold transition-colors duration-200 " +
+                      (cycle === c
+                        ? "bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] text-[#07090F]"
+                        : "text-ink-3 hover:text-ink-2")}>
+              {t(c === "annual" ? "cycle_annual" : "cycle_monthly")}
+            </button>
+          ))}
+        </div>
+        {topSave > 0 && (
+          <span className="text-[12.5px] font-bold text-au-teal">
+            {annual ? fill("save_pct", topSave) : t("annual_hint")}
+          </span>
+        )}
+      </div>
+
+      <div className="grid items-start gap-5 md:grid-cols-2 xl:grid-cols-4">
         {plans.map((p) => {
           const current = sub.plan === p.id && sub.status === "active";
-          const hot = p.id === "pro";
+          const hot = p.id === "whatsapp";
           const feats = BY.lang === "ar" ? p.features_ar : p.features_en;
+          const price = annual ? p.annual_price : p.price;
+          const listPrice = annual ? p.annual_list_price : p.list_price;
+          const hasDisc = annual ? p.annual_has_discount : p.has_discount;
           return (
             <Card key={p.id} spot
                   className={"!overflow-visible text-center transition-transform duration-500 hover:-translate-y-1 " +
@@ -214,19 +246,27 @@ export function Pricing() {
                 {p.name}
               </h2>
               <div className="mb-6">
-                {p.price === 0 ? (
+                {price === 0 ? (
                   <span className="hue text-[22px] font-extrabold">{t("free_forever")}</span>
                 ) : (
                   <>
-                    {p.has_discount && (
+                    {hasDisc && (
                       <div className="mb-1 flex items-center justify-center gap-2">
-                        <span className="text-[16px] text-ink-3 line-through">{p.list_price}</span>
+                        <span className="text-[16px] text-ink-3 line-through">{listPrice}</span>
                         <Pill tone="on">-{Math.round(p.discount_pct)}%</Pill>
                       </div>
                     )}
-                    <div className="text-[34px] font-extrabold leading-none text-ink">
-                      {p.price}
-                      <span className="text-[15px] font-bold text-ink-3">{t("egp")}{t("per_month")}</span>
+                    <div className="text-[34px] font-extrabold leading-none text-ink tnum">
+                      {num(price)}
+                      <span className="text-[15px] font-bold text-ink-3">
+                        {t("egp")}{annual ? t("per_year") : t("per_month")}
+                      </span>
+                    </div>
+                    {/* السطر السنوي يُظهر المقابل الشهري حتى تبقى المقارنة عادلة */}
+                    <div className="mt-2 min-h-[18px] text-[12.5px] font-bold text-au-teal">
+                      {annual && p.annual_saving_pct > 0
+                        ? `${fill("save_pct", p.annual_saving_pct)} · ${fill("equiv_per_month", num(p.annual_monthly_equiv))}`
+                        : ""}
                     </div>
                   </>
                 )}
@@ -240,7 +280,7 @@ export function Pricing() {
               </ul>
               {current ? <Pill tone="on" dot>{t("current_plan")}</Pill>
                 : p.id === "free" ? <span className="text-[13px] text-ink-3">{t("free_forever")}</span>
-                : <Btn block icon="card" href={`/subscribe/${p.id}`}>{t("subscribe_btn")}</Btn>}
+                : <Btn block icon="card" href={`/subscribe/${p.id}?cycle=${cycle}`}>{t("subscribe_btn")}</Btn>}
             </Card>
           );
         })}
@@ -255,7 +295,9 @@ export function Pricing() {
 
 /* ---------------------------------------------------------------- الاشتراك */
 export function Subscribe() {
-  const { plan = {}, plat = {}, qr, action, planId } = P;
+  const { plan = {}, plat = {}, qr, action, planId,
+          cycle = "monthly", days = 30, annualSavingPct = 0 } = P;
+  const annual = cycle === "annual";
   const [copied, setCopied] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -274,7 +316,8 @@ export function Subscribe() {
       const r = await fetch("/api/promo/check", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf },
-        body: JSON.stringify({ plan: planId, code }),
+        // الدورة تُرسَل مع الكود: خصم نسبي على اشتراك سنوي ليس هو نفسه على شهري
+        body: JSON.stringify({ plan: planId, code, cycle }),
       });
       const d = await r.json();
       if (d.ok) {
@@ -308,7 +351,7 @@ export function Subscribe() {
   return (
     <>
       <PageHead icon="card" title={t("pay_title")}
-        sub={`${BY.lang === "ar" ? plan.name_ar : plan.name_en} — ${plan.price} ${t("egp")}${t("per_month")}`}
+        sub={`${BY.lang === "ar" ? plan.name_ar : plan.name_en} — ${plan.price} ${t("egp")}${annual ? t("per_year") : t("per_month")}`}
         actions={<Btn variant="ghost" sm icon="back" href={BY.urls.pricing}>{t("back")}</Btn>} />
 
       <Card className="mb-6 bg-[linear-gradient(120deg,rgb(124_108_246/0.18),rgb(34_211_238/0.06))]">
@@ -319,9 +362,15 @@ export function Subscribe() {
           )}
           <span className="text-[32px] font-extrabold text-ink tnum">{num(q.total)} {t("egp")}</span>
           {q.planDiscountPct > 0 && <Pill tone="on">-{Math.round(q.planDiscountPct)}%</Pill>}
+          {annual && <Pill tone="on">{t("billed_annually")}</Pill>}
+          {annual && annualSavingPct > 0 && (
+            <Pill tone="on" dot>{t("save_pct").replace("{n}", annualSavingPct)}</Pill>
+          )}
           {q.promoCode && <Pill tone="on" dot>{q.promoCode}</Pill>}
         </div>
-        <div className="mt-2 text-[12.5px] text-ink-3">{t("pay_secure_note")}</div>
+        <div className="mt-2 text-[12.5px] text-ink-3">
+          {t("sub_cycle")}: {t(annual ? "cycle_annual" : "cycle_monthly")} ({days} {BY.lang === "ar" ? "يوم" : "days"}) · {t("pay_secure_note")}
+        </div>
       </Card>
 
       {/* كود الخصم — التسعيرة تُحسب في الخادم، والحقل يُرسَل مع النموذج */}
@@ -389,6 +438,8 @@ export function Subscribe() {
         </ol>
         <Form action={action} encType="multipart/form-data">
           <input type="hidden" name="promo" value={q.promoCode || ""} />
+          {/* اسم الدورة فقط — السعر يُحسب في الخادم، وأي قيمة أخرى تسقط للشهرية */}
+          <input type="hidden" name="cycle" value={cycle} />
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label={t("pay_method")}>
               <Select name="method" defaultValue="vodafone">

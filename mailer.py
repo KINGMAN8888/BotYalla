@@ -157,6 +157,74 @@ def reset_email(link, lang="ar", minutes=60):
     return subject, html, text
 
 
+def welcome_email(username, link=None, lang="ar"):
+    """(subject, html, text) لرسالة الترحيب بعد التسجيل.
+
+    الخطوات الثلاث مكتوبة **داخل** الرسالة لا خلف رابط دليل: أكبر فجوة فهم عند
+    المستخدم الجديد أن التوكن يُجلب من BotFather — وهي خطوة خارج المنصة كلها،
+    فلو انتظرت أن يضغط رابطاً ليقرأها فقد خسرتها. الرابط اختياري: بلا
+    `PUBLIC_URL` تُرسل الرسالة بلا زرّ بدل ألا تُرسل (لا تحمل أي توكن).
+    """
+    en = lang == "en"
+    if en:
+        subject = "Welcome to BotYalla — your bot in 3 steps"
+        intro = (f"Welcome, {username}. Your account is ready. Building your first bot "
+                 f"takes about five minutes, and the only step outside BotYalla is the first one.")
+        steps = [("Get a token from BotFather",
+                  "Open @BotFather on Telegram, send /newbot, pick a name, and copy the long "
+                  "token it sends back. It looks like 123456789:AAE-xxxxxxxx."),
+                 ("Paste the token and choose a type",
+                  "In your dashboard, paste the token, name your business, and pick a bot type "
+                  "(store, bookings, FAQ…). We verify the token as you type."),
+                 ("Start it and try it yourself",
+                  "Press Start, then open your bot on Telegram and send it a message. "
+                  "What you see is exactly what your customer sees.")]
+        outro = "Stuck on any step? Reply to this email — a person reads it."
+        label = "Open my dashboard"
+    else:
+        subject = "أهلاً بك في BotYalla — بوتك في 3 خطوات"
+        intro = (f"أهلاً {username}، حسابك جاهز. بناء أول بوت يستغرق خمس دقائق تقريباً، "
+                 f"والخطوة الوحيدة خارج المنصة هي الأولى.")
+        steps = [("احصل على توكن من BotFather",
+                  "افتح @BotFather على تليجرام، أرسل /newbot، اختر اسماً، وانسخ التوكن الطويل "
+                  "الذي يرسله. شكله هكذا: 123456789:AAE-xxxxxxxx"),
+                 ("الصق التوكن واختر نوع البوت",
+                  "في لوحتك، الصق التوكن واكتب اسم نشاطك واختر النوع (متجر · حجوزات · أسئلة "
+                  "شائعة…). نتحقّق من التوكن وأنت تكتب."),
+                 ("شغّله وجرّبه بنفسك",
+                  "اضغط «تشغيل»، ثم افتح بوتك على تليجرام وأرسل له رسالة. ما تراه هو نفسه "
+                  "ما يراه زبونك.")]
+        outro = "وقفت في أي خطوة؟ ردّ على هذه الرسالة — يقرأها إنسان."
+        label = "افتح لوحتي"
+    items = "".join(
+        f'<tr><td valign="top" style="padding:10px 0 10px 0;">'
+        f'<span style="display:inline-block;width:26px;height:26px;line-height:26px;'
+        f'text-align:center;border-radius:8px;background:#0EA5E9;color:#fff;font-weight:800;">{i}</span>'
+        f'</td><td style="padding:10px 12px;">'
+        f'<b style="color:#05070D;">{escape(t)}</b><br>'
+        f'<span style="color:#374151;">{escape(d)}</span></td></tr>'
+        for i, (t, d) in enumerate(steps, 1))
+    body = (f"<p>{escape(intro)}</p>"
+            f'<table role="presentation" cellspacing="0" cellpadding="0">{items}</table>'
+            + (_button(link, label) if link else "")
+            + f'<p style="color:#6B7280;font-size:13px;">{escape(outro)}</p>')
+    text = (intro + "\n\n"
+            + "\n\n".join(f"{i}. {t}\n   {d}" for i, (t, d) in enumerate(steps, 1))
+            + (f"\n\n{link}" if link else "") + f"\n\n{outro}")
+    return subject, _layout(lang, subject, body), text
+
+
+def send_welcome(user_id, email, username, link=None, lang="ar"):
+    """ترحيب best-effort بعد التسجيل. فشله لا يمنع إنشاء الحساب إطلاقاً."""
+    try:
+        if not email:
+            return False
+        return send_async(email, *welcome_email(username, link, lang))
+    except Exception as e:
+        log.error("welcome email failed for user #%s: %s", user_id, e)
+        return False
+
+
 def _date(ts):
     return _dt.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d") if ts else "—"
 
@@ -164,7 +232,12 @@ def _date(ts):
 def receipt_email(row, status, lang="ar"):
     """(subject, html, text) لإيصال دفعة بعد البتّ فيها."""
     en = lang == "en"
-    pname = plans.plan_name(row.get("plan"), "en" if en else "ar")
+    # شحن المحفظة ليس باقة: بدون هذا السطر يقرأ العميل «باقة مجانية» على
+    # إيصال دفع، لأن `plan_name` تُسقط أي معرّف مجهول إلى المجانية.
+    if row.get("plan") == db.WALLET_PLAN:
+        pname = "Marketing credit" if en else "رصيد الرسائل التسويقية"
+    else:
+        pname = plans.plan_name(row.get("plan"), "en" if en else "ar")
     amount = f"{float(row.get('amount') or 0):g} EGP"
     cycle = row.get("billing_cycle") or "monthly"
     cycle_l = ({"monthly": "Monthly", "annual": "Annual"} if en else
@@ -173,12 +246,22 @@ def receipt_email(row, status, lang="ar"):
         subject = (f"Payment receipt #{row['id']} — {pname}" if en
                    else f"إيصال الدفعة #{row['id']} — باقة {pname}")
         title = "Payment approved ✅" if en else "تم اعتماد دفعتك ✅"
-        rows = ([("Payment", f"#{row['id']}"), ("Plan", pname), ("Amount", amount),
-                 ("Billing", cycle_l), ("Active until", _date(row.get("expires_at")))] if en else
-                [("رقم الدفعة", f"#{row['id']}"), ("الباقة", pname), ("المبلغ", amount),
-                 ("الدورة", cycle_l), ("ساري حتى", _date(row.get("expires_at")))])
-        outro = ("Your subscription is active. Keep this email as your receipt." if en
-                 else "اشتراكك مفعَّل الآن. احتفظ بهذه الرسالة كإيصال.")
+        if row.get("plan") == db.WALLET_PLAN:
+            bal = row.get("wallet_after")
+            bal_s = f"{(int(bal) / 100):g} EGP" if bal is not None else "—"
+            rows = ([("Payment", f"#{row['id']}"), ("For", pname), ("Amount", amount),
+                     ("New balance", bal_s)] if en else
+                    [("رقم الدفعة", f"#{row['id']}"), ("البند", pname), ("المبلغ", amount),
+                     ("الرصيد بعد الشحن", bal_s)])
+            outro = ("Your credit is available now. Keep this email as your receipt." if en
+                     else "رصيدك متاح الآن. احتفظ بهذه الرسالة كإيصال.")
+        else:
+            rows = ([("Payment", f"#{row['id']}"), ("Plan", pname), ("Amount", amount),
+                     ("Billing", cycle_l), ("Active until", _date(row.get("expires_at")))] if en else
+                    [("رقم الدفعة", f"#{row['id']}"), ("الباقة", pname), ("المبلغ", amount),
+                     ("الدورة", cycle_l), ("ساري حتى", _date(row.get("expires_at")))])
+            outro = ("Your subscription is active. Keep this email as your receipt." if en
+                     else "اشتراكك مفعَّل الآن. احتفظ بهذه الرسالة كإيصال.")
     else:
         subject = (f"Payment #{row['id']} could not be verified" if en
                    else f"تعذّر التحقق من الدفعة #{row['id']}")

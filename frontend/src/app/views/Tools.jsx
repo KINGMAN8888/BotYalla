@@ -121,7 +121,8 @@ export function FlowBuilder() {
 
 /* ------------------------------------------------------------- البث */
 export function Broadcast() {
-  const { bot, subs, isWa = false, reachable = subs, waba = "" } = P;
+  const { bot, subs, isWa = false, reachable = subs, waba = "",
+          wallet = { balance: 0, price: 0 } } = P;
   const [text, setText] = useState("");
   const [mode, setMode] = useState("text");
   const [tpls, setTpls] = useState(null);      // null = لم يُجلب بعد
@@ -137,6 +138,13 @@ export function Broadcast() {
   }, [bot.id, isWa, waba]);
 
   const chosen = (tpls || []).find((x) => x.name === pick);
+  /* التكلفة تُعرض هنا للطمأنة فقط — الخادم يعيد حسابها وقت الإرسال ويقرأ فئة
+     القالب من Meta، فتعديل أي شيء في هذه الصفحة لا يغيّر قرشاً. */
+  const egp = (p) => Number(p || 0) / 100;
+  const billable = !!chosen && (chosen.category || "").toUpperCase() === "MARKETING";
+  const cost = billable ? reachable * (wallet.price || 0) : 0;
+  const short = Math.max(0, cost - (wallet.balance || 0));
+  const fill = (k, o) => Object.entries(o).reduce((a, [x, y]) => a.replace(`{${x}}`, y), t(k));
 
   return (
     <>
@@ -204,6 +212,38 @@ export function Broadcast() {
                 {chosen && (
                   <>
                     <input type="hidden" name="template_lang" value={chosen.language} />
+                    <div className={"mt-4 rounded-xl p-4 " + (billable
+                      ? (short ? "bg-red-500/10 shadow-[inset_0_0_0_1px_rgb(248_113_113/0.35)]"
+                               : "bg-[linear-gradient(120deg,rgb(124_108_246/0.18),rgb(34_211_238/0.06))]")
+                      : "bg-white/[0.03] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]")}>
+                      <div className="flex items-center gap-2 text-[13px] font-extrabold text-ink">
+                        <Icon name="wallet" size={15} className="text-au-cyan" />{t("camp_cost_title")}
+                      </div>
+                      {billable ? (
+                        <>
+                          <div className="mt-2 text-[14px] font-extrabold text-ink tnum">
+                            {fill("camp_cost_calc", { n: num(reachable), p: num(egp(wallet.price)),
+                                                      c: num(egp(cost)) })}
+                          </div>
+                          <div className="mt-1 text-[12.5px] text-ink-3 tnum">
+                            {fill("camp_after", { n: num(egp(Math.max(0, wallet.balance - cost))) })}
+                          </div>
+                          {short > 0 && (
+                            <div className="mt-3 flex flex-wrap items-center gap-3">
+                              <span className="text-[13px] font-extrabold text-red-300">
+                                {fill("camp_short", { n: num(egp(short)) })}
+                              </span>
+                              <Btn variant="ghost" sm icon="plus" href={BY.urls.wallet}>
+                                {t("wallet_topup")}
+                              </Btn>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="mt-2 text-[12.5px] text-ink-3">{t("camp_cost_free")}</div>
+                      )}
+                      <div className="mt-3 text-[11.5px] text-ink-3">{t("camp_marketing_d")}</div>
+                    </div>
                     <div className="mt-4 rounded-xl bg-white/[0.04] p-4 text-[13.5px] leading-relaxed text-ink-2">
                       {chosen.header && <div className="mb-2 font-extrabold text-ink">{chosen.header}</div>}
                       <div className="whitespace-pre-wrap">{chosen.body}</div>
@@ -222,7 +262,7 @@ export function Broadcast() {
                   </>
                 )}
                 <div className="mt-5">
-                  <Btn icon="rocket" type="submit" disabled={!pick}>{t("send_campaign")}</Btn>
+                  <Btn icon="rocket" type="submit" disabled={!pick || short > 0}>{t("send_campaign")}</Btn>
                 </div>
               </>
             )}

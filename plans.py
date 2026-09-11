@@ -111,21 +111,43 @@ def plan_name(pid, lang="ar"):
     return plan(pid).get("name_ar" if lang == "ar" else "name_en", pid)
 
 
+CYCLES = ("monthly", "annual")
+
+
+def norm_cycle(cycle):
+    """يطبّع الدورة — أي قيمة غير معروفة تسقط إلى الشهرية.
+    تُستدعى على كل قيمة قادمة من المستخدم قبل أي حساب أو تخزين."""
+    return cycle if cycle in CYCLES else "monthly"
+
+
+def annual_of(monthly):
+    """سعر السنة من أي سعر شهري (يشمل تجاوزات الأدمن)، لأقرب عشرة جنيهات."""
+    monthly = float(monthly or 0)
+    if monthly <= 0:
+        return 0.0
+    return float(int(round(monthly * 12 * ANNUAL_FACTOR / 10.0) * 10))
+
+
 def annual_price(pid):
-    """سعر السنة مقرّباً لأقرب عشرة جنيهات."""
-    monthly = plan(pid)["price"]
-    if not monthly:
-        return 0
-    return int(round(monthly * 12 * ANNUAL_FACTOR / 10.0) * 10)
+    """سعر السنة لباقة من قائمة الأسعار (بلا تجاوزات)."""
+    return int(annual_of(plan(pid)["price"]))
 
 
 def cycle_price(pid, cycle="monthly"):
     """السعر حسب الدورة — المصدر الوحيد الذي يُبنى عليه أي مبلغ."""
-    return annual_price(pid) if cycle == "annual" else plan(pid)["price"]
+    return annual_price(pid) if norm_cycle(cycle) == "annual" else plan(pid)["price"]
 
 
 def cycle_days(cycle="monthly"):
-    return 365 if cycle == "annual" else 30
+    return 365 if norm_cycle(cycle) == "annual" else 30
+
+
+def annual_saving_pct(pid):
+    """كم يوفّر الاشتراك السنوي مقابل 12 دفعة شهرية — للعرض فقط."""
+    monthly = plan(pid)["price"]
+    if not monthly:
+        return 0
+    return int(round((1 - annual_price(pid) / (monthly * 12.0)) * 100))
 
 
 def wa_limit(pid):
