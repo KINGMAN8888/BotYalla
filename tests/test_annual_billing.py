@@ -246,6 +246,89 @@ class AnnualPaymentFlowTests(unittest.TestCase):
         self.assertEqual(db.get_subscription(self.u)["expires_at"], first)
 
 
+class CarryOverTests(unittest.TestCase):
+    """تغيير الباقة لا يُسقط ما دُفع: قيمة الأيام المتبقية تُنقل إلى الجديدة.
+
+    قبلها: «تاجر» سنوي (2510ج) ينتقل إلى «واتساب» فيبدأ من الصفر ويخسر
+    السنة كلها. القيمة = المتبقي × ما دُفع فعلاً عن اليوم، والرصيد = القيمة ÷
+    السعر اليومي للباقة الجديدة (سعر القائمة لا بعد الكود)."""
+
+    @classmethod
+    def setUpClass(cls):
+        _boot()
+
+    def _user(self, name):
+        return db.create_user(name, auth.hash_password(TEST_PW))
+
+    def _paid(self, u, plan, amount, cycle, base=None):
+        pid = db.create_payment(u, plan, "instapay", amount, "R", "s.png",
+                                f"co{u}{plan}{cycle}{amount}", "{}",
+                                base_amount=amount if base is None else base, billing_cycle=cycle)
+        return db.finalize_payment(pid, "approved")
+
+    def _days_left(self, u):
+        return (db.get_subscription(u)["expires_at"] - time.time()) / DAY
+
+    def test_switching_mid_annual_converts_the_remaining_value(self):
+        u = self._user("co_switch")
+        self._paid(u, "merchant", 2510, "annual")
+        row = self._paid(u, "whatsapp", 899, "monthly")
+        credit = 2510 / (899 / 30.0)                 # ~365 يوماً × (2510/365) ÷ (899/30)
+        self.assertAlmostEqual(self._days_left(u), 30 + credit, delta=0.05)
+        self.assertEqual(row["carried_days"], int(credit))
+
+    def test_a_downgrade_gives_more_days_not_fewer(self):
+        u = self._user("co_down")
+        self._paid(u, "agency", 2999, "monthly")
+        self._paid(u, "merchant", 299, "monthly")
+        self.assertAlmostEqual(self._days_left(u), 30 + 2999 / (299 / 30.0), delta=0.05)
+
+    def test_the_same_plan_still_extends_without_conversion(self):
+        u = self._user("co_same")
+        self._paid(u, "merchant", 299, "monthly")
+        row = self._paid(u, "merchant", 2510, "annual")
+        self.assertAlmostEqual(self._days_left(u), 30 + 365, delta=0.05)
+        self.assertEqual(row["carried_days"], 0)
+
+    def test_a_plan_granted_by_the_admin_carries_nothing(self):
+        u = self._user("co_gift")
+        db.activate_subscription(u, "agency", days=30)          # بلا دفعة
+        row = self._paid(u, "merchant", 299, "monthly")
+        self.assertAlmostEqual(self._days_left(u), 30, delta=0.05)
+        self.assertEqual(row["carried_days"], 0)
+
+    def test_an_expired_plan_carries_nothing(self):
+        u = self._user("co_expired")
+        self._paid(u, "agency", 2999, "monthly")
+        with db.get_conn() as c:
+            c.execute("UPDATE subscriptions SET expires_at=? WHERE user_id=?", (NOW - DAY, u))
+        self._paid(u, "merchant", 299, "monthly")
+        self.assertAlmostEqual(self._days_left(u), 30, delta=0.05)
+
+    def test_a_promo_on_the_new_plan_does_not_inflate_the_conversion(self):
+        u = self._user("co_promo")
+        self._paid(u, "merchant", 2510, "annual")
+        self._paid(u, "whatsapp", 0, "monthly", base=899)        # كود 100%
+        self.assertAlmostEqual(self._days_left(u), 30 + 2510 / (899 / 30.0), delta=0.05)
+
+    def test_the_subscribe_page_shows_the_carry_over_before_paying(self):
+        import re
+        u = self._user("co_preview")
+        self._paid(u, "merchant", 2510, "annual")
+        c = _client()
+        c.post("/login", data={"username": "co_preview", "password": TEST_PW, "csrf_token": "tk"})
+        html = c.get("/subscribe/whatsapp?cycle=monthly").get_data(as_text=True)
+        m = re.search(r'"carry": \{[^}]*"credit": (\d+)', html)
+        self.assertIsNotNone(m, "المعاينة يجب أن تصل للصفحة قبل الدفع")
+        self.assertEqual(int(m.group(1)), int(2510 / (899 / 30.0)))
+
+    def test_the_receipt_mentions_the_carried_days(self):
+        import mailer
+        row = {"id": 9, "user_id": 1, "plan": "whatsapp", "amount": 899, "expires_at": NOW,
+               "carried_days": 83}
+        self.assertIn("+83 days", mailer.receipt_email(row, "approved", "en")[2])
+
+
 class MigrationTests(unittest.TestCase):
     """الصفوف القائمة قبل L-08 لا تتغيّر، وتُقرأ كشهرية."""
 

@@ -120,7 +120,9 @@ class BotManager:
         """الحالة الحالية — يقرأها مسار التشغيل ولوحة الأدمن.
         `warn` تصير True عند 80% فما فوق، و`full` عند بلوغ السقف."""
         cap = self.capacity()
-        n = len(self._apps)
+        # تليجرام وحده يستهلك السعة (polling داخل العملية). بوت واتساب مجرد
+        # علامة في `_apps` — ويبهوك بلا أي حلقة — فعدّه كان يحجز مكاناً بلا تكلفة.
+        n = sum(1 for v in self._apps.values() if not isinstance(v, dict))
         return {"running": n, "capacity": cap,
                 "pct": int(round(n * 100.0 / cap)) if cap else 0,
                 "warn": n >= cap * CAPACITY_WARN_AT, "full": n >= cap}
@@ -132,7 +134,7 @@ class BotManager:
         # الرفض عند السقف مقصود: بوت إضافي يعمل ببطء أسوأ من بوت لا يعمل،
         # لأن بطأه يصيب كل من يشاركه العملية لا صاحبه وحده.
         st = self.capacity_status()
-        if st["full"]:
+        if st["full"] and (row.get("channel") or "telegram") != "whatsapp":
             log.error("bot start refused — at capacity: %s/%s", st["running"], st["capacity"])
             return False, (f"بلغ الخادم سقف البوتات العاملة ({st['capacity']}). "
                            f"أوقف بوتاً غير مستخدم أو راسل الدعم.")
@@ -228,13 +230,17 @@ class BotManager:
                 failed += 1
         return sent, failed
 
-    def broadcast_template(self, bot_id, name, language, values=None):
+    def broadcast_template(self, bot_id, name, language, values=None, peers=None):
         """بثّ بقالب معتمد. هذا هو ما يصل لمن خرج من نافذة الـ24 ساعة —
-        النص الحر لا يصله، ومحاولة إرساله له تُقيّد الرقم."""
+        النص الحر لا يصله، ومحاولة إرساله له تُقيّد الرقم.
+
+        `peers`: القائمة التي حُسبت تكلفتها في المسار. تمريرها يضمن أن من
+        حوسب عليه هو بالضبط من يُرسل له — لا مشترك جديد بين الحساب والإرسال."""
         row = db.get_bot(bot_id)
         if not row or (row.get("channel") or "telegram") != "whatsapp":
             return 0, 0
-        peers = db.list_bot_peers(bot_id)
+        if peers is None:
+            peers = db.list_bot_peers(bot_id)
         if not peers:
             return 0, 0
         try:

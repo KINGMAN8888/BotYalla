@@ -157,9 +157,34 @@
 
   /* تتبّع الحروف: الإنجليزية تتحمّل تضييقاً أكبر من العربية */
   .tight { letter-spacing: -0.045em; line-height: 0.99; }
-  html[dir="rtl"] .tight { letter-spacing: -0.02em; line-height: 1.12; }
+  /* العربية خط متصل: أي تباعد (موجب أو سالب) يكسر وصل الحروف أو يُركّبها */
+  html[dir="rtl"] .tight { letter-spacing: 0; line-height: 1.25; }
   .wide-cap { letter-spacing: 0.34em; text-transform: uppercase; }
-  html[dir="rtl"] .wide-cap { letter-spacing: 0.12em; }
+  html[dir="rtl"] .wide-cap { letter-spacing: 0; }
+
+  /* خط العناوين للموقع العام: كوفي هندسي للعربية، وInter مضغوط للإنجليزية
+     مع كلمة مائلة بخط سيريف تحريري — شخصية لا تشبه قوالب SaaS المعتادة */
+  .display { font-family: "Inter", "Cairo", ui-sans-serif, system-ui, sans-serif;
+             letter-spacing: -0.045em; line-height: 1.02; }
+  html[lang="ar"] .display { font-family: "Noto Kufi Arabic", "Cairo", ui-sans-serif, sans-serif;
+                             letter-spacing: 0; line-height: 1.34; }
+  html[lang="en"] .serif-accent { font-family: "Instrument Serif", Georgia, serif; font-style: italic;
+                                  font-weight: 400; letter-spacing: -0.01em; padding-inline-end: 0.06em; }
+}
+
+/* ------------------------------------------------- نصوص قانونية مقروءة */
+.legal-prose section + section { margin-top: 2.6rem; }
+.legal-prose h2 { margin: 0 0 0.9rem; font-size: clamp(18px, 1.6vw, 21px); font-weight: 800; color: var(--color-ink); }
+.legal-prose p { margin: 0 0 1rem; font-size: 15.5px; line-height: 1.95; color: var(--color-ink-2); }
+.legal-prose ul { margin: 0 0 1.1rem; padding-inline-start: 1.25rem; display: flex; flex-direction: column; gap: 0.55rem; }
+.legal-prose li { font-size: 15px; line-height: 1.85; color: var(--color-ink-2); }
+.legal-prose li::marker { color: var(--color-au-cyan); }
+html[lang="en"] .legal-prose p, html[lang="en"] .legal-prose li { line-height: 1.75; }
+@media print {
+  html, body { background: #fff !important; color: #000 !important; }
+  header, footer, canvas, nav, .grain { display: none !important; }
+  .legal-prose { box-shadow: none !important; background: none !important; }
+  .legal-prose h2, .legal-prose p, .legal-prose li { color: #000 !important; }
 }
 
 /* ---------------------------------------------------- حقول الشفق المتحرّكة */

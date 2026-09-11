@@ -253,6 +253,135 @@ class TopupFlowTests(unittest.TestCase):
         self.assertIn("رصيد", html)
 
 
+class CampaignAudienceTests(unittest.TestCase):
+    """الحملة تُحاسَب على من يصلهم القالب فعلاً — كل المشتركين — وعلى ما وصل فقط.
+    قبلها: 11 رسالة تسويقية تُرسل وتُخصم قيمة واحدة (نافذة الـ24 ساعة)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import time
+        _boot()
+        cls.pw = "cmp_" + os.urandom(6).hex()
+        cls.u = db.create_user("cmp_owner", auth.hash_password(cls.pw))
+        db.activate_subscription(cls.u, "whatsapp", days=30)
+        cls.bid = db.create_bot(cls.u, "WA", "wa:cmp", "flow",
+                                {"business_name": "WA", "wa_token": "t"}, channel="whatsapp")
+        for i in range(11):
+            db.add_bot_user(cls.bid, 5000 + i, f"c{i}", peer=f"wa:2011000000{i:02d}")
+        with db.get_conn() as c:                     # واحد فقط داخل نافذة الـ24 ساعة
+            c.execute("UPDATE bot_users SET last_in_at=? WHERE bot_id=?",
+                      (int(time.time()) - 10 * 86400, cls.bid))
+            c.execute("UPDATE bot_users SET last_in_at=? WHERE bot_id=? AND tg_user_id=5000",
+                      (int(time.time()), cls.bid))
+        cls._orig = (web._template_category, web.manager.broadcast_template)
+        web._template_category = lambda *a, **k: "MARKETING"
+        with web.app.test_request_context():
+            cls.path = web.url_for("broadcast", bot_id=cls.bid)
+
+    @classmethod
+    def tearDownClass(cls):
+        web._template_category, web.manager.broadcast_template = cls._orig
+
+    def setUp(self):
+        web._login_attempts.clear()
+        with db.get_conn() as c:
+            c.execute("DELETE FROM wallet WHERE owner_id=?", (self.u,))
+            c.execute("DELETE FROM wallet_ledger WHERE owner_id=?", (self.u,))
+        db.wallet_topup(self.u, 100000)                               # 1000ج
+        self.seen = []
+
+    def _campaign(self, outcome):
+        """يرسل حملة ويرجّع ما خُصم فعلاً بالقروش. `outcome(peers) -> (sent, failed)`."""
+        def fake(bot_id, name, language, values=None, peers=None):
+            self.seen.append(peers)
+            return outcome(peers or [])
+        web.manager.broadcast_template = fake
+        c = _client()
+        c.post("/login", data={"username": "cmp_owner", "password": self.pw, "csrf_token": "tk"})
+        c.post(self.path, data={"mode": "template", "template": "promo", "template_lang": "ar",
+                                "csrf_token": "tk"})
+        return 100000 - db.wallet_balance(self.u)
+
+    def test_the_charge_covers_everyone_the_template_reaches(self):
+        spent = self._campaign(lambda peers: (len(peers), 0))
+        self.assertEqual(len(self.seen[0]), 11, "القالب يصل لكل المشتركين")
+        self.assertEqual(spent, 11 * web.mkt_price())
+
+    def test_the_charged_list_is_the_list_that_is_sent(self):
+        self._campaign(lambda peers: (len(peers), 0))
+        self.assertIsNotNone(self.seen[0], "القائمة المحسوبة يجب أن تُمرَّر للإرسال")
+
+    def test_only_delivered_messages_are_paid_for(self):
+        spent = self._campaign(lambda peers: (4, 3))     # 4 وصلت · 3 فشلت · 4 لم تُحاوَل
+        self.assertEqual(spent, 4 * web.mkt_price())
+
+    def test_a_crashed_send_is_refunded_in_full(self):
+        self.assertEqual(self._campaign(lambda peers: (0, len(peers))), 0)
+
+
+class TopupInputAndAlertTests(unittest.TestCase):
+    """مدخلات الشحن الشاذة · تنبيه تليجرام · إعدادات الأدمن الرقمية."""
+
+    @classmethod
+    def setUpClass(cls):
+        _boot()
+        cls.pw = "inp_" + os.urandom(6).hex()
+        cls.u = db.create_user("inp_user", auth.hash_password(cls.pw))
+
+    def setUp(self):
+        web._login_attempts.clear()
+
+    def _as(self, user, pw):
+        c = _client()
+        c.post("/login", data={"username": user, "password": pw, "csrf_token": "tk"})
+        return c
+
+    def test_non_finite_amounts_are_refused_not_crashed(self):
+        topups = lambda: [p for p in db.list_payments(self.u) if p["plan"] == db.WALLET_PLAN]
+        before = len(topups())
+        c = self._as("inp_user", self.pw)
+        for bad in ("inf", "-inf", "nan", "1e999"):
+            r = c.post("/wallet/topup", data={"amount": bad, "csrf_token": "tk"})
+            self.assertEqual(r.status_code, 302, bad)
+        self.assertEqual(len(topups()), before, "لا يُنشأ طلب شحن لمبلغ غير محدود")
+
+    def test_the_telegram_alert_calls_a_topup_a_topup(self):
+        import platform_bot as PB
+        pid = db.create_payment(self.u, db.WALLET_PLAN, "instapay", 250.0, "R", "x.png", "hal", "{}")
+        cap = PB.build_caption(db.get_payment(pid), "inp_user", "")
+        self.assertNotIn("Free", cap)
+        self.assertNotIn("اشتراك", cap)
+        self.assertIn("250", cap)
+
+    def test_an_annual_payment_alert_says_365_days(self):
+        import platform_bot as PB
+        pid = db.create_payment(self.u, "merchant", "instapay", 2510, "R", "x.png", "han", "{}",
+                                billing_cycle="annual")
+        self.assertIn("365", PB.build_caption(db.get_payment(pid), "inp_user", ""))
+
+    def test_the_admin_sets_the_price_in_pounds_stored_in_piastres(self):
+        a = self._as("admin", os.environ["ADMIN_PASS"])
+        a.post("/admin/platform", data={"mkt_msg_price_egp": "3.5", "bot_capacity": "150",
+                                        "csrf_token": "tk"})
+        self.assertEqual(db.get_platform("mkt_msg_price"), "350")
+        self.assertEqual(db.get_platform("bot_capacity"), "150")
+        self.assertEqual(web.mkt_price(), 350)
+
+    def test_bad_values_are_never_saved(self):
+        db.set_platform("mkt_msg_price", "328"); db.set_platform("bot_capacity", "90")
+        a = self._as("admin", os.environ["ADMIN_PASS"])
+        for price, cap in (("0", "0"), ("abc", "-3"), ("-1", "x"), ("nan", "1.5"), ("inf", "1e9")):
+            a.post("/admin/platform", data={"mkt_msg_price_egp": price, "bot_capacity": cap,
+                                            "csrf_token": "tk"})
+            self.assertEqual(db.get_platform("mkt_msg_price"), "328", price)
+            self.assertEqual(db.get_platform("bot_capacity"), "90", cap)
+
+    def test_a_form_without_the_fields_leaves_them_alone(self):
+        db.set_platform("mkt_msg_price", "400")
+        self._as("admin", os.environ["ADMIN_PASS"]).post("/admin/platform", data={"csrf_token": "tk"})
+        self.assertEqual(db.get_platform("mkt_msg_price"), "400")
+
+
 class WalletPageTests(unittest.TestCase):
 
     @classmethod

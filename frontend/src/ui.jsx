@@ -5,6 +5,11 @@ import { motion, useInView, useReducedMotion, animate } from "motion/react";
 export const BY = window.BY || { t: {}, urls: {}, icons: {}, demos: [], lang: "ar", dir: "rtl" };
 export const t = (k) => (BY.t[k] != null ? BY.t[k] : k);
 export const isRTL = BY.dir === "rtl";
+/* يملأ {n} و{price}… في نصّ مترجم */
+export const fill = (s, o) =>
+  Object.entries(o || {}).reduce((a, [k, v]) => a.split(`{${k}}`).join(String(v)), String(s || ""));
+/* أرقام إنجليزية بفواصل آلاف وكسرين كحد أقصى — كما في باقي المنصة */
+export const num = (v) => Number(v || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 /* ---------------------------------------------------------------- أيقونة */
 export function Icon({ name, size = 18, className = "" }) {

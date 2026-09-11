@@ -1,7 +1,7 @@
 # GitGuardian configuration file
 # https://docs.gitguardian.com/ggshield-docs/configuration
 version: 2
-paths-ignore:
-  - "tests/**"
-  - "test_full.py"
-  - "tools/**"
+# لا استثناء لأي مسار — عمداً. كلمة مرور الأدمن الحقيقية تسرّبت سابقاً من
+# `test_full.py` تحديداً (REVIEW.md §2.1)، فاستثناء الاختبارات من الفحص يُعمي
+# الأداة عن المكان الذي حدث فيه التسريب فعلاً. بيانات الاختبار كلها تُولَّد
+# عشوائياً (`secrets.token_hex`)، فلا شيء فيها يُطلق تنبيهاً.

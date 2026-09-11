@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="{{ P.lang }}" dir="{{ P.dir }}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ seo.title }}</title>
+<meta name="description" content="{{ seo.description }}">
+<meta name="robots" content="{{ seo.robots }}">
+<link rel="canonical" href="{{ seo.canonical }}">
+{% for a in seo.alternates %}<link rel="alternate" hreflang="{{ a.lang }}" href="{{ a.href }}">
+{% endfor %}
+<meta name="theme-color" content="#05070D">
+<meta name="color-scheme" content="dark">
+<meta name="author" content="Youssef Alsherief">
+<link rel="icon" href="{{ url_for('static', filename='mark.svg') }}" type="image/svg+xml">
+<link rel="icon" href="{{ url_for('static', filename='brand/favicon-32.png') }}" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/apple-touch-icon.png') }}">
+<link rel="manifest" href="{{ url_for('webmanifest') }}">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="BotYalla">
+<meta property="og:title" content="{{ seo.title }}">
+<meta property="og:description" content="{{ seo.description }}">
+<meta property="og:url" content="{{ seo.canonical }}">
+<meta property="og:image" content="{{ seo.og_image }}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="{{ seo.title }}">
+<meta property="og:locale" content="{{ seo.og_locale }}">
+<meta property="og:locale:alternate" content="{{ seo.og_locale_alt }}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ seo.title }}">
+<meta name="twitter:description" content="{{ seo.description }}">
+<meta name="twitter:image" content="{{ seo.og_image }}">
+{% if seo.gsv %}<meta name="google-site-verification" content="{{ seo.gsv }}">{% endif %}
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;600;700;800&family=Noto+Kufi+Arabic:wght@700;800;900&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='dist/style.css') }}">
+<style nonce="{{ csp_nonce }}">
+  html{background:#05070D;}
+  body{font-family:{% if P.lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}
+  /* المحتوى المرسوم في الخادم: يُفهرَس ويُقرأ بلا جافاسكربت، ويختفي فور تركيب React */
+  .react-on #fallback{display:none;}
+  #fallback{max-width:1080px;margin:0 auto;padding:22px 24px 72px;color:#AEB9D4;font-size:16px;line-height:1.85;}
+  #fallback a{color:#8FE9FF;}
+  #fallback .fb-top{display:flex;flex-wrap:wrap;align-items:center;gap:18px;margin-bottom:48px;}
+  #fallback .fb-top nav{display:flex;flex-wrap:wrap;gap:16px;margin-inline-start:auto;font-weight:700;}
+  #fallback h1{font-size:clamp(32px,6vw,58px);line-height:1.25;color:#F2F5FC;margin:0 0 18px;}
+  #fallback h2{color:#F2F5FC;font-size:24px;margin:52px 0 12px;}
+  #fallback h3{color:#F2F5FC;font-size:17px;margin:22px 0 6px;}
+  #fallback p{margin:0 0 14px;}
+  #fallback .cta a{display:inline-block;margin-inline-end:12px;margin-bottom:10px;padding:14px 26px;
+    border-radius:999px;font-weight:800;text-decoration:none;background:linear-gradient(100deg,#8FE9FF,#B9AFFF);color:#07090F;}
+  #fallback .cta a.alt{background:transparent;color:#F2F5FC;box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);}
+  #fallback .fb-foot{margin-top:64px;padding-top:24px;border-top:1px solid rgba(255,255,255,.08);font-size:14px;}
+  #fallback .fb-foot a{margin-inline-end:16px;}
+</style>
+{# علامة "الجافاسكربت يعمل": بدونها يبقى كل محتوى React ظاهراً بلا حركة #}
+<script nonce="{{ csp_nonce }}">document.documentElement.className += " js";</script>
+<script nonce="{{ csp_nonce }}">window.BY = {{ by_json|safe }};</script>
+{% if seo.jsonld %}<script nonce="{{ csp_nonce }}" type="application/ld+json">{{ seo.jsonld|safe }}</script>{% endif %}
+</head>
+<body>
+
+<div id="landing-root">
+  <div id="fallback">
+    <header class="fb-top">
+      <a href="{{ P.urls.home }}"><img src="{{ P.urls.logo }}" alt="BotYalla" width="140" height="36"></a>
+      <nav>
+        <a href="{{ P.urls.home }}#features">{{ P.t.lp2_nav_features }}</a>
+        <a href="{{ P.urls.home }}#pricing">{{ P.t.lp2_nav_pricing }}</a>
+        <a href="{{ P.urls.home }}#faq">{{ P.t.lp2_nav_faq }}</a>
+        <a href="{{ P.urls.login }}">{{ P.t.login }}</a>
+        <a href="{{ P.urls.lang }}">{{ 'English' if P.lang == 'ar' else 'العربية' }}</a>
+      </nav>
+    </header>
+
+    <main>
+    {% if P.page == 'home' %}
+      <h1>{{ P.t.lp2_h1a }} {{ P.t.lp2_h1b }}</h1>
+      <p style="font-size:18px;max-width:62ch;">{{ P.t.lp2_sub }}</p>
+      <div class="cta">
+        <a href="{{ P.urls.register }}">{{ P.t.get_started_free }}</a>
+        <a class="alt" href="#pricing">{{ P.t.lp2_cta_secondary }}</a>
+      </div>
+
+      <section id="features">
+        <h2>{{ P.t.lp2_feats_t }}</h2>
+        <p>{{ P.t.lp2_feats_sub }}</p>
+        {% for c in P.bento %}<h3>{{ c.t }}</h3><p>{{ c.d }}</p>{% endfor %}
+      </section>
+
+      <section>
+        <h2>{{ P.t.lp2_ch_t }}</h2>
+        <p>{{ P.t.lp2_ch_sub }}</p>
+        {% for c in P.channels %}
+          <h3>{{ c.t }}</h3><p>{{ c.d }}</p>
+          <ul>{% for b in c.b %}<li>{{ b }}</li>{% endfor %}</ul>
+        {% endfor %}
+      </section>
+
+      <section id="how">
+        <h2>{{ P.t.lp_how_t }}</h2>
+        {% for s in P.steps %}<h3>{{ s.t }}</h3><p>{{ s.d }}</p>{% endfor %}
+      </section>
+
+      <section id="pricing">
+        <h2>{{ P.t.lp2_pr_t }}</h2>
+        <p>{{ P.t.lp2_pr_sub }}</p>
+        {% for p in P.plans %}
+          <h3>{{ p.name }} —
+            {% if p.price %}{{ '%g'|format(p.price) }}{{ P.t.lp2_egp }}{{ P.t.lp2_per_month }}
+              · {{ '%g'|format(p.annual_price) }}{{ P.t.lp2_egp }}{{ P.t.lp2_per_year }}
+            {% else %}{{ P.t.lp2_free_price }}{% endif %}</h3>
+          <ul>{% for f in p.features %}<li>{{ f }}</li>{% endfor %}</ul>
+        {% endfor %}
+        <p>{{ P.t.lp2_carry_d }}</p>
+        <p>{{ P.t.lp2_wallet_d|replace('{price}', '%g'|format(P.mktPrice)) }}</p>
+      </section>
+
+      <section id="faq">
+        <h2>{{ P.t.lp_faq_t }}</h2>
+        {% for x in P.faq %}<h3>{{ x.q }}</h3><p>{{ x.a }}</p>{% endfor %}
+      </section>
+
+    {% elif P.page == 'legal' %}
+      <h1>{{ P.legal.title }}</h1>
+      <p>{{ P.t.legal_updated }}: {{ P.legal.updated }}</p>
+      <p style="font-size:18px;">{{ P.legal.intro }}</p>
+      {% for s in P.legal.sections %}
+        <section id="{{ s.id }}">
+          <h2>{{ s.h }}</h2>
+          {% for b in s.body %}
+            {% if b is string %}<p>{{ b }}</p>
+            {% else %}<ul>{% for x in b %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+          {% endfor %}
+        </section>
+      {% endfor %}
+
+    {% else %}
+      <h1>{{ P.t.lp2_nf_t }}</h1>
+      <p>{{ P.t.lp2_nf_d }}</p>
+      <div class="cta"><a href="{{ P.urls.home }}">{{ P.t.lp2_nf_home }}</a></div>
+    {% endif %}
+    </main>
+
+    <footer class="fb-foot">
+      <p>{% for d in P.legalDocs %}<a href="{{ d.url }}">{{ d.title }}</a>{% endfor %}</p>
+      <p>{% for c in P.contact %}<a href="{{ c.h }}">{{ c.l }}</a>{% endfor %}</p>
+      <p>© {{ P.year }} BotYalla — Youssef Alsherief</p>
+    </footer>
+  </div>
+</div>
+
+<script nonce="{{ csp_nonce }}" type="module" src="{{ url_for('static', filename='dist/landing.js') }}"></script>
+</body>
+</html>

@@ -7,7 +7,8 @@ import { BY, t, Icon, Counter, useSpotlight, useAnimEnabled } from "./ui.jsx";
    العرض الحيّ: يختار الزائر نوع البوت فتتبدّل المحادثة والأرقام أمامه مباشرة.
    يعرض قوّة المنصة الفعلية بدل صورة ثابتة.
    ========================================================================== */
-export default function LiveDemo() {
+export default function LiveDemo({ channel = "telegram" }) {
+  const wa = channel === "whatsapp";
   const demos = BY.demos || [];
   const [idx, setIdx] = useState(0);
   const [auto, setAuto] = useState(true);
@@ -45,7 +46,7 @@ export default function LiveDemo() {
             <i className="block size-[11px] rounded-full bg-[#FEBC2E]" />
             <i className="block size-[11px] rounded-full bg-[#28C840]" />
             <span className="ms-3.5 rounded-full bg-black/35 px-4 py-1 text-[11.5px] tracking-wide text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]">
-              t.me/{d.handle}
+              {wa ? "wa.me/20 10•• ••• ••••" : `t.me/${d.handle}`}
             </span>
             <span className="ms-auto inline-flex items-center gap-1.5 rounded-full bg-au-teal/15 px-3 py-1 text-[11px] font-extrabold text-au-teal">
               <i className="block size-1.5 rounded-full bg-current blip" />
@@ -56,7 +57,7 @@ export default function LiveDemo() {
           <div className="grid gap-5 p-6 lg:grid-cols-[1.05fr_0.95fr]">
             {/* المحادثة */}
             <div className="flex min-h-[300px] flex-col gap-2.5 rounded-2xl bg-black/35 p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]">
-              <div key={`${idx}-${animOk}`} className="flex flex-1 flex-col gap-2.5">
+              <div key={`${idx}-${animOk}-${channel}`} className="flex flex-1 flex-col gap-2.5">
                   {d.msgs.map((m, i) => (
                     <motion.div
                       key={i}
@@ -69,7 +70,9 @@ export default function LiveDemo() {
                       }}
                       className={
                         "max-w-[84%] rounded-[19px] px-4 py-2.5 text-[13.5px] leading-relaxed " +
-                        (m.me
+                        (m.me && wa
+                          ? "self-end rounded-ee-[6px] bg-[linear-gradient(115deg,#25D366,#1DAA61)] font-bold text-[#04130A] shadow-[0_8px_22px_-10px_rgb(37_211_102/0.8)]"
+                          : m.me
                           ? "self-end rounded-ee-[6px] bg-[linear-gradient(115deg,#7C6CF6,#22D3EE)] font-bold text-[#08111C] shadow-[0_8px_22px_-10px_rgb(34_211_238/0.9)]"
                           : "self-start rounded-es-[6px] bg-white/[0.07] text-ink shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]")
                       }

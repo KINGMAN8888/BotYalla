@@ -54,6 +54,21 @@ class StageTests(unittest.TestCase):
                 "config_json": json.dumps(cfg or {}, ensure_ascii=False),
                 "running": running, "stats": {"subscribers": subs}}
 
+    def test_a_flow_bot_greets_from_its_flow_not_from_welcome(self):
+        """بوتات الفلو (4 من 7 أنواع) لا تقرأ `welcome` — فحصه وحده كان يُبقي
+        البطاقة معلّقة للأبد. والنص الجاهز لا يُعدّ تخصيصاً."""
+        import templates_bot as TB
+        flow = json.loads(json.dumps(TB.PRESET_FLOWS["support"]))
+        ready = dict(self._bot(cfg={"flow": flow}, running=True, subs=3), template="support")
+        self.assertEqual(web._onboarding([ready])["stage"], "first_run", "الافتراضي ليس تخصيصاً")
+        flow["start_message"] = "أهلاً بك في دعم متجر النور 👋"
+        custom = dict(self._bot(cfg={"flow": flow}, running=True, subs=3), template="support")
+        self.assertEqual(web._onboarding([custom])["stage"], "done")
+
+    def test_the_card_says_where_a_flow_bot_sets_its_greeting(self):
+        self.assertTrue(web._onboarding([dict(self._bot(), template="flow")])["flowBot"])
+        self.assertFalse(web._onboarding([dict(self._bot(), template="store")])["flowBot"])
+
     def test_no_bots_means_the_botfather_guide(self):
         self.assertEqual(web._onboarding([])["stage"], "first_bot")
 

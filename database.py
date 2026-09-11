@@ -606,7 +606,7 @@ def get_subscription(user_id):
             d["status"] = "expired"
         return d
 
-def activate_subscription(user_id, plan, days=30, conn=None, cycle="monthly"):
+def activate_subscription(user_id, plan, days=30, conn=None, cycle="monthly", extra_days=0.0):
     """يفعّل الاشتراك ويرجّع تاريخ الانتهاء.
     التجديد المبكر على **نفس** الباقة يُضاف إلى المتبقّي بدل أن يلغيه (العميل
     دفع عن 30 يوماً فيأخذها كاملة). تغيير الباقة أو اشتراك منتهٍ يبدأ من الآن."""
@@ -619,7 +619,9 @@ def activate_subscription(user_id, plan, days=30, conn=None, cycle="monthly"):
             if r and r["plan"] == plan and r["expires_at"] and r["expires_at"] > now:
                 base = r["expires_at"]                  # مدّد من نهاية الفترة الحالية
                 started = r["started_at"] or now        # واحتفظ ببداية الاشتراك الأصلية
-        exp = base + days * 86400
+        # `extra_days`: رصيد منقول من باقة سابقة (carry_over_days) — بالثانية لا باليوم
+        # الكامل، فلا يُقرَّب لصالح أحد.
+        exp = base + days * 86400 + int(round(max(0.0, float(extra_days or 0)) * 86400))
         c.execute("INSERT INTO subscriptions(user_id,plan,status,started_at,expires_at,billing_cycle) "
                   "VALUES(?,?, 'active',?,?,?) "
                   "ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan, status='active', "
@@ -630,6 +632,55 @@ def activate_subscription(user_id, plan, days=30, conn=None, cycle="monthly"):
         # تجديد الاشتراك يمسح سجل التذكيرات ليسمح بتذكيرات الدورة التالية
         clear_reminder_log(user_id, conn=c)
     return exp
+
+def _paid_daily_rate(c, user_id, plan):
+    """ما دفعه المشترك فعلاً عن اليوم الواحد في باقته، من آخر دفعة معتمدة لها.
+    None لو لم يدفع عنها شيئاً (باقة منحها الأدمن يدوياً): لا قيمة مدفوعة تُنقل."""
+    r = c.execute("SELECT amount, billing_cycle FROM payments WHERE user_id=? AND plan=? "
+                  "AND status='approved' ORDER BY decided_at DESC, id DESC LIMIT 1",
+                  (user_id, plan)).fetchone()
+    if not r or not r["amount"] or float(r["amount"]) <= 0:
+        return None
+    return float(r["amount"]) / (365 if r["billing_cycle"] == "annual" else 30)
+
+
+def carry_over_days(user_id, new_plan, new_period_price, new_days, conn=None, now=None):
+    """قيمة ما تبقّى **مدفوعاً** من الباقة الحالية، محوَّلةً إلى أيام في الباقة الجديدة.
+
+    بدونها كان تغيير الباقة يبدأ من الآن ويُسقط المتبقي: مشترك «تاجر» سنوي
+    ينتقل إلى «واتساب» بعد شهر كان يخسر 335 يوماً دفع ثمنها. الآن:
+        القيمة  = الأيام المتبقية × ما دفعه فعلاً عن اليوم (آخر دفعة معتمدة للباقة)
+        الرصيد = القيمة ÷ السعر اليومي للباقة الجديدة
+    الترقية تعطي أياماً أقل والتخفيض أياماً أكثر — القيمة نفسها في الحالتين.
+
+    السعر الجديد هو **سعر القائمة** للدورة (`base_amount`) لا المبلغ بعد كود
+    الخصم: كود 100% كان سيقسم على صفر، وأي كود كان سيضخّم الرصيد المنقول.
+
+    يرجّع None حين لا شيء يُنقل: نفس الباقة (التمديد في `activate_subscription`
+    يتكفّل بها) · المجانية · اشتراك منتهٍ · باقة لم يُدفع عنها شيء.
+    """
+    now = int(now or time.time())
+    try:
+        price_new = float(new_period_price or 0)
+        new_days = float(new_days or 0)
+    except (TypeError, ValueError):
+        return None
+    if price_new <= 0 or new_days <= 0:
+        return None
+    with _conn_or(conn) as c:
+        s = c.execute("SELECT plan, expires_at FROM subscriptions WHERE user_id=?",
+                      (user_id,)).fetchone()
+        if (not s or s["plan"] in ("free", new_plan) or not s["expires_at"]
+                or s["expires_at"] <= now):
+            return None
+        rate_old = _paid_daily_rate(c, user_id, s["plan"])
+        if not rate_old:
+            return None
+        remaining = (s["expires_at"] - now) / 86400.0
+        value = remaining * rate_old
+        return {"from_plan": s["plan"], "remaining_days": remaining,
+                "value": round(value, 2), "credit_days": value / (price_new / new_days)}
+
 
 # ---------- payments ----------
 def create_payment(user_id, plan, method, amount, ref, screenshot, img_hash, auto_check,
@@ -692,9 +743,16 @@ def finalize_payment(pid, status):
             # المدة من **دورة الدفعة نفسها** لا من افتراض ثابت — فدفعة سنوية
             # تفعّل 365 يوماً حتى لو اعتُمدت من زرّ تليجرام بعد أيام.
             cyc = row.get("billing_cycle") or "monthly"
+            days = 365 if cyc == "annual" else 30
+            # تغيير الباقة لا يُسقط ما دُفع: قيمة الأيام المتبقية تُنقل إلى الجديدة.
+            # تُحسب **قبل** التفعيل لأنه يكتب فوق صفّ الاشتراك الحالي، وداخل نفس
+            # المعاملة فلا تُنقل قيمة لتسوية لم تثبت.
+            carry = carry_over_days(row["user_id"], row["plan"],
+                                    row.get("base_amount") or row["amount"], days, conn=c)
+            row["carried_days"] = int(carry["credit_days"]) if carry else 0
             row["expires_at"] = activate_subscription(
-                row["user_id"], row["plan"],
-                days=365 if cyc == "annual" else 30, conn=c, cycle=cyc)
+                row["user_id"], row["plan"], days=days, conn=c, cycle=cyc,
+                extra_days=carry["credit_days"] if carry else 0)
             # التسوية هنا لا في المسار الويبي وحده: الموافقة تأتي أيضاً من زرّ
             # تليجرام، ولو تُركت بالخارج لفات الكود والعمولة على ذلك المسار.
             if row.get("promo_id"):
@@ -702,9 +760,10 @@ def finalize_payment(pid, status):
             ref = credit_referral(row["user_id"], row["id"], row["amount"], conn=c)
     # التسجيل بعد خروج `with` فقط — أي بعد commit. سطر «approved» في السجل يعني
     # أن التسوية ثبتت فعلاً، لا أنها بدأت.
-    log.info("payment #%s %s user=%s plan=%s amount=%s expires_at=%s promo=%s referral=%s",
+    log.info("payment #%s %s user=%s plan=%s amount=%s expires_at=%s carried_days=%s "
+             "promo=%s referral=%s",
              row["id"], status, row["user_id"], row["plan"], row["amount"],
-             row.get("expires_at"), promo, ref)
+             row.get("expires_at"), row.get("carried_days", 0), promo, ref)
     return row
 
 def img_hash_seen(img_hash, exclude_id=None):

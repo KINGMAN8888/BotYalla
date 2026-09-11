@@ -260,6 +260,9 @@ def receipt_email(row, status, lang="ar"):
                      ("Billing", cycle_l), ("Active until", _date(row.get("expires_at")))] if en else
                     [("رقم الدفعة", f"#{row['id']}"), ("الباقة", pname), ("المبلغ", amount),
                      ("الدورة", cycle_l), ("ساري حتى", _date(row.get("expires_at")))])
+            if row.get("carried_days"):
+                rows.append(("Carried over", f"+{row['carried_days']} days from your previous plan")
+                            if en else ("رصيد منقول", f"+{row['carried_days']} يوماً من باقتك السابقة"))
             outro = ("Your subscription is active. Keep this email as your receipt." if en
                      else "اشتراكك مفعَّل الآن. احتفظ بهذه الرسالة كإيصال.")
     else:

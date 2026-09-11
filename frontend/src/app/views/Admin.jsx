@@ -295,7 +295,7 @@ export function AdminRequests() {
 
 /* -------------------------------------------------------------- المنصة */
 export function AdminPlatform() {
-  const { plat = {}, running } = P;
+  const { plat = {}, running, capacity = null } = P;
   const F = ({ name, label, ph }) => (
     <Field label={label}><Input name={name} defaultValue={plat[name] || ""} placeholder={ph} /></Field>
   );
@@ -355,6 +355,24 @@ export function AdminPlatform() {
               {typeof window !== "undefined" ? window.location.origin : ""}/wh/whatsapp
             </code>
           </p>
+        </Card>
+
+        {/* قيمتان تتغيّران مع السوق والخادم — تُعدَّلان هنا بلا نشر */}
+        <Card className="mb-5">
+          <SectionTitle icon="wallet">{t("plat_ops")}</SectionTitle>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label={t("plat_mkt_price")} hint={t("plat_mkt_price_h")}>
+              <Input name="mkt_msg_price_egp" type="number" step="0.01" min="0.01" max="1000"
+                     inputMode="decimal" dir="ltr" defaultValue={plat.mkt_msg_price_egp || ""} />
+            </Field>
+            <Field label={t("plat_capacity")}
+                   hint={capacity ? t("plat_capacity_h").replace("{r}", capacity.running)
+                                                        .replace("{c}", capacity.capacity) : ""}>
+              <Input name="bot_capacity" type="number" step="1" min="1" inputMode="numeric" dir="ltr"
+                     defaultValue={plat.bot_capacity || ""}
+                     placeholder={capacity ? String(capacity.capacity) : ""} />
+            </Field>
+          </div>
         </Card>
 
         <Card>

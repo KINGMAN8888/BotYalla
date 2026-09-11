@@ -218,7 +218,7 @@ class PrivacyTests(unittest.TestCase):
             cl.get("/register")
             with cl.session_transaction() as s:
                 tok = s.get("_csrf")
-            cl.post("/register", data={"username": name, "password": "Passw0rd!123",
+            cl.post("/register", data={"username": name, "password": "tst_" + os.urandom(6).hex(),
                                        "csrf_token": tok}, follow_redirects=True)
         with cls.owner.session_transaction() as s:
             cls.owner_uid = s.get("uid")

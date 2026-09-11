@@ -31,6 +31,7 @@ import database as db
 import auth
 from bot_manager import manager
 import templates_bot as T
+from flow_engine import DEFAULT_CS_FLOW as _DEFAULT_FLOW
 import tg_helpers as tg
 from channels.whatsapp import verify_credentials as wa_verify
 import channels.wa_templates as WT
@@ -42,6 +43,8 @@ import plans
 import payments as pay
 import platform_bot as PB
 import mailer
+import legal_content as LEGAL
+from xml.sax.saxutils import escape as _xesc
 import time as _time
 import logging
 from logging.handlers import RotatingFileHandler
@@ -50,6 +53,7 @@ import re as _re
 import hashlib
 import hmac
 import secrets as _secrets
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from markupsafe import Markup
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import InternalServerError
@@ -132,6 +136,14 @@ def _capture_ref():
     code = request.args.get("ref")
     if code and not session.get("uid"):
         session["ref"] = code.strip().upper()[:32]
+
+@app.before_request
+def _lang_from_query():
+    """`?lang=en` على أي صفحة: روابط hreflang ثابتة تجعل النسخة الإنجليزية قابلة
+    للفهرسة، ورابطاً يُشارَك فيفتح بلغة صاحبه. تفضيل عرض فقط — لا حالة حسّاسة."""
+    code = request.args.get("lang")
+    if request.method == "GET" and code in i18n.LANGS and session.get("lang") != code:
+        session["lang"] = code
 
 @app.before_request
 def _revalidate_identity():
@@ -366,7 +378,7 @@ def set_lang(code):
     # حماية من Open Redirect: ارجع فقط لمسار داخلي
     if ref.startswith(request.host_url):
         return redirect(ref)
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("dashboard") if session.get("uid") else url_for("home"))
 
 # ---------- المصادقة ----------
 @app.route("/register", methods=["GET", "POST"])
@@ -514,7 +526,7 @@ def reset_password(token):
     return resp
 
 # ---------- الرئيسية ----------
-@app.route("/")
+@app.route("/dashboard")
 @login_required
 def dashboard():
     bots = db.list_bots(uid())
@@ -549,14 +561,36 @@ def _onboarding(bots):
     # دالة خالصة عمداً: لا `url_for` ولا أي شيء يحتاج سياق طلب — فتُختبر وحدها
     # بلا خادم، والواجهة تبني `/bot/{id}` من `botId` كما تفعل في كل مكان آخر.
     steps = [
-        {"k": "greeting", "done": bool((cfg.get("welcome") or "").strip())},
+        {"k": "greeting", "done": _greeting_set(b, cfg)},
         {"k": "run", "done": bool(b.get("running"))},
         {"k": "try", "done": bool((b.get("stats") or {}).get("subscribers"))},
     ]
     if all(x["done"] for x in steps):
         return {"stage": "done"}
     return {"stage": "first_run", "botId": b["id"], "botName": b.get("name"),
-            "channel": b.get("channel") or "telegram", "steps": steps}
+            "channel": b.get("channel") or "telegram", "steps": steps,
+            # لتقول الواجهة أين تُضبط التحية: «باني المحادثة» لا صفحة الإعدادات
+            "flowBot": _is_flow_bot(b, cfg)}
+
+
+def _is_flow_bot(b, cfg):
+    return bool(cfg.get("flow")) or b.get("template") in T.PRESET_FLOWS or b.get("template") == "flow"
+
+
+def _greeting_set(b, cfg):
+    """هل خصّص صاحب البوت رسالة الترحيب؟
+
+    نوعا البوت يحيّيان من مكانين مختلفين: القوالب الثابتة (متجر · حجز…) من
+    `welcome`، وبوتات الفلو من `flow.start_message` — ولا تقرأ `welcome` إطلاقاً.
+    فحص `welcome` وحده كان يترك بطاقة البدء معلّقة للأبد عند 4 من 7 أنواع.
+    والنص الجاهز (قالب الفلو أو الافتراضي) لا يُعدّ تخصيصاً، كما أن الترحيب
+    الافتراضي للمتجر لا يُعدّ."""
+    if (cfg.get("welcome") or "").strip():
+        return True
+    sm = ((cfg.get("flow") or {}).get("start_message") or "").strip()
+    defaults = {(T.PRESET_FLOWS.get(b.get("template")) or {}).get("start_message", "").strip(),
+                (_DEFAULT_FLOW.get("start_message") or "").strip()}
+    return bool(sm) and sm not in defaults
 
 def _owned(bot_id):
     b = db.get_bot(bot_id, uid())
@@ -866,7 +900,12 @@ def broadcast(bot_id):
                            "Could not confirm the template category with Meta right now. Try again "
                            "shortly — we don't send a campaign before knowing its cost."), "error")
                     return redirect(url_for("broadcast", bot_id=bot_id))
-                q = _campaign_quote(uid(), reachable, cat)
+                # الجمهور = من سيصلهم القالب فعلاً: **كل** المشتركين، لا نافذة الـ24
+                # ساعة (القوالب وُجدت أصلاً لمن هم خارجها). الحساب على `reachable`
+                # كان يخصم رسالة ويُرسل عشراً، والفرق تدفعه المنصة لـMeta.
+                # القائمة نفسها تُمرَّر للإرسال — المحسوب هو المُرسَل إليه حرفياً.
+                audience = db.list_bot_peers(bot_id)
+                q = _campaign_quote(uid(), len(audience), cat)
                 charged = 0
                 if q["billable"]:
                     if not q["enough"]:
@@ -886,14 +925,16 @@ def broadcast(bot_id):
                               "Could not reserve credit — please retry.", "error")
                         return redirect(url_for("broadcast", bot_id=bot_id))
                     charged = q["cost"]
-                sent, failed = manager.broadcast_template(bot_id, name, lang_code, values)
+                sent, failed = manager.broadcast_template(bot_id, name, lang_code, values,
+                                                          peers=audience)
                 if charged:
-                    # لا نحاسب على ما لم يصل. الردّ بالسعر نفسه المخصوم به،
-                    # لا بسعر اليوم — فتغيير الإعداد بين الخصم والردّ لا يسرق.
-                    back = min(charged, failed * q["price"])
+                    # لا نحاسب إلا على ما وصل: كل ما لم يُرسَل يُردّ — الفاشل، وما لم
+                    # يُحاوَل أصلاً (انقطاع أو مهلة). بالسعر نفسه المخصوم به لا بسعر
+                    # اليوم — فتغيير الإعداد بين الخصم والردّ لا يسرق.
+                    back = max(0, charged - sent * q["price"])
                     if back:
                         db.wallet_refund(uid(), back, ref=f"bot:{bot_id}",
-                                         note=f"failed {failed} of {q['n']}")
+                                         note=f"undelivered {q['n'] - sent} of {q['n']}")
                     log.info("campaign bot=%s tpl=%s cat=%s n=%s sent=%s failed=%s "
                              "charged=%s refunded=%s", bot_id, name, cat, q["n"], sent,
                              failed, charged, back)
@@ -918,6 +959,8 @@ def broadcast(bot_id):
 
     return react_page("broadcast", "campaign_title",
                       {"bot": b, "subs": subs, "isWa": is_wa, "reachable": reachable,
+                       # جمهور القالب (كل المشتركين) — هو ما تُعرض عليه التكلفة
+                       "audience": len(db.list_bot_peers(bot_id)) if is_wa else subs,
                        "waba": _waba_of(b)[0] if is_wa else "",
                        # التكلفة تُعرض **قبل** التأكيد — والخادم يعيد حسابها عند الإرسال
                        "wallet": {"balance": db.wallet_balance(uid()),
@@ -1139,9 +1182,16 @@ def subscribe(plan_id):
     cyc = plans.norm_cycle(request.args.get("cycle"))
     _pr = _plan_pricing(plan_id, cycle=cyc)
     _mo = _plan_pricing(plan_id, cycle="monthly")
+    # معاينة نقل الرصيد قبل الدفع — بنفس ما تستعمله `finalize_payment` عند
+    # الاعتماد (سعر القائمة للدورة). تقديرية: الأيام تُحسب فعلياً يوم الاعتماد.
+    _carry = db.carry_over_days(uid(), plan_id, _pr["list_price"], plans.cycle_days(cyc))
     return react_page("subscribe", "pay_title",
                       {"planId": plan_id, "plan": dict(p, id=plan_id, **_pr), "plat": plat,
                        "cycle": cyc, "days": plans.cycle_days(cyc),
+                       "carry": ({"fromPlan": plans.plan_name(_carry["from_plan"],
+                                                              session.get("lang", i18n.DEFAULT)),
+                                  "remaining": int(_carry["remaining_days"]),
+                                  "credit": int(_carry["credit_days"])} if _carry else None),
                        "monthlyPrice": _mo["price"],
                        "annualSavingPct": (int(round((1 - _pr["price"] / (_mo["price"] * 12.0)) * 100))
                                            if cyc == "annual" and _mo["price"] > 0 else 0),
@@ -1240,6 +1290,8 @@ def admin_platform():
                   "support_email","support_whatsapp","support_telegram",
                   "wa_verify_token","wa_app_secret"):
             db.set_platform(k, request.form.get(k, "").strip())
+        for bad in _save_ops_settings(request.form):
+            flash(bad, "error")
         tok = db.get_platform("platform_bot_token",""); adm = db.get_platform("admin_chat_id","")
         if tok and adm:
             ok, msg = manager.start_platform_bot(tok)
@@ -1248,7 +1300,9 @@ def admin_platform():
             flash("تم الحفظ." if session.get("lang")!="en" else "Saved.", "ok")
         return redirect(url_for("admin_platform"))
     return react_page("admin_platform", "platform_title",
-                      {"plat": db.all_platform(), "running": manager.platform_running()})
+                      {"plat": dict(db.all_platform(), mkt_msg_price_egp=f"{mkt_price() / 100:g}"),
+                       "running": manager.platform_running(),
+                       "capacity": manager.capacity_status()})
 
 # ---------- لوحة تحكم الأدمن ----------
 @app.route("/admin")
@@ -1621,7 +1675,8 @@ def quote(plan_id, user_id, code=None, cycle="monthly"):
     }
 
 _LANDING_ICONS = ("store","calendar","shield","grid","flow","sparkles","chart","megaphone",
-                  "check","rocket","tag","phone","bot","card","users","wallet","bolt")
+                  "check","rocket","tag","phone","bot","card","users","wallet","bolt",
+                  "globe","image","lock","key","download","link","back","clock","play")
 
 # ---------------------------------------------------------------------------
 #  طبقة تقديم React: Flask يبقى مسؤولاً عن التوجيه والصلاحيات والنماذج،
@@ -1693,7 +1748,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
             "billing": url_for("billing"), "account": url_for("account"),
             "wallet": url_for("wallet_page"),
             "logout": url_for("logout"), "login": url_for("login"),
-            "register": url_for("register"), "landing": url_for("landing"),
+            "register": url_for("register"), "landing": url_for("home"),
             "forgot": url_for("forgot"),
             "requestBot": url_for("request_bot"), "botCreate": url_for("bot_create"),
             "logo": url_for("static", filename="logo.svg"),
@@ -1860,7 +1915,8 @@ def affiliate():
     return react_page("affiliate", "aff_title", {
         "aff": aff,
         "summary": db.affiliate_summary(uid()) if aff else {"signups": 0, "conversions": 0},
-        "link": (url_for("landing", _external=True) + "?ref=" + aff["code"]) if aff else None,
+        # رابط يُنشر خارج المنصة: من PUBLIC_URL (النطاق الرسمي) لا من ترويسة Host
+        "link": (_site_base() + url_for("home") + "?ref=" + aff["code"]) if aff else None,
         "defaultRate": db.get_platform("aff_default_rate", "20"),
     })
 
@@ -1975,6 +2031,38 @@ def mkt_price():
     return v if v > 0 else MKT_PRICE_FALLBACK
 
 
+def _save_ops_settings(form):
+    """سعر الرسالة التسويقية وسقف البوتات من لوحة الأدمن.
+
+    يُحفظ كلٌّ منهما **فقط لو أرسله النموذج** (نموذج أقدم بلا الحقل لا يمسحه)،
+    ويُتحقَّق منه قبل الحفظ: قيمة فاسدة لا تُحفظ أبداً — فلا يصير السعر صفراً
+    (حملات تسويقية مجانية على حساب المنصة) ولا السقف بلا حدّ. السعر يُكتب
+    بالجنيه (3.28) ويُخزَّن بالقروش الصحيحة (328) بـDecimal لا بالعائم.
+    يرجّع رسائل الخطأ."""
+    lang = session.get("lang", i18n.DEFAULT)
+    errors = []
+    if "mkt_msg_price_egp" in form:
+        try:
+            d = Decimal((form.get("mkt_msg_price_egp") or "").strip())
+            ok = d.is_finite() and Decimal("0.01") <= d <= Decimal("1000")
+        except InvalidOperation:
+            ok = False
+        if ok:
+            db.set_platform("mkt_msg_price",
+                            str(int((d * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))))
+        else:
+            errors.append(i18n.t("plat_bad_price", lang))
+    if "bot_capacity" in form:
+        raw = (form.get("bot_capacity") or "").strip()
+        if raw == "":
+            db.set_platform("bot_capacity", "")        # فارغ = الاحتياطي المحافظ
+        elif raw.isdigit() and 1 <= int(raw) <= 100000:
+            db.set_platform("bot_capacity", str(int(raw)))
+        else:
+            errors.append(i18n.t("plat_bad_capacity", lang))
+    return errors
+
+
 def _egp(piastres):
     """قروش → جنيهات للعرض. القسمة هنا فقط — الحساب كله بالقروش."""
     return round(int(piastres or 0) / 100.0, 2)
@@ -2046,7 +2134,7 @@ def wallet_topup():
     ar = session.get("lang") != "en"
     try:
         amount = int(float(request.form.get("amount", "0") or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):    # "inf" / "1e999" ترمي OverflowError
         amount = 0
     if not (TOPUP_MIN <= amount <= TOPUP_MAX):
         flash((f"مبلغ الشحن بين {TOPUP_MIN} و{TOPUP_MAX} ج.م." if ar else

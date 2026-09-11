@@ -80,8 +80,14 @@ if [[ -f "$APP_DIR/botyalla.db" ]]; then
   mv "$APP_DIR/botyalla.db" "$SAFE"
   say "أُزيحت الحالية إلى: $SAFE"
 fi
-# ملفات WAL/SHM القديمة تُربك SQLite مع قاعدة جديدة — تُزال معها
-rm -f "$APP_DIR/botyalla.db-wal" "$APP_DIR/botyalla.db-shm"
+# ملف WAL جزء من القاعدة الحالية لا فضلة: قد يحمل آخر المعاملات لو لم يكن
+# الإيقاف نظيفاً. يُنقل مع نسختها الاحتياطية — لو حُذف صارت «نسخة الرجوع»
+# ناقصة. وإزاحته من مكانه ضرورية: SQLite كان سيطبّقه على القاعدة المستعادة.
+for ext in wal shm; do
+  if [[ -f "$APP_DIR/botyalla.db-$ext" ]]; then
+    mv "$APP_DIR/botyalla.db-$ext" "$SAFE-$ext"
+  fi
+done
 
 # ---- 4) ضع النسخة ---------------------------------------------------------
 cp "$TMP/restore.db" "$APP_DIR/botyalla.db"

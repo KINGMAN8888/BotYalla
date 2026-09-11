@@ -121,7 +121,7 @@ export function FlowBuilder() {
 
 /* ------------------------------------------------------------- البث */
 export function Broadcast() {
-  const { bot, subs, isWa = false, reachable = subs, waba = "",
+  const { bot, subs, isWa = false, reachable = subs, audience = reachable, waba = "",
           wallet = { balance: 0, price: 0 } } = P;
   const [text, setText] = useState("");
   const [mode, setMode] = useState("text");
@@ -142,7 +142,8 @@ export function Broadcast() {
      القالب من Meta، فتعديل أي شيء في هذه الصفحة لا يغيّر قرشاً. */
   const egp = (p) => Number(p || 0) / 100;
   const billable = !!chosen && (chosen.category || "").toUpperCase() === "MARKETING";
-  const cost = billable ? reachable * (wallet.price || 0) : 0;
+  // القالب يصل لكل المشتركين لا لنافذة الـ24 ساعة وحدها — فعليهم تُحسب التكلفة
+  const cost = billable ? audience * (wallet.price || 0) : 0;
   const short = Math.max(0, cost - (wallet.balance || 0));
   const fill = (k, o) => Object.entries(o).reduce((a, [x, y]) => a.replace(`{${x}}`, y), t(k));
 
@@ -222,7 +223,7 @@ export function Broadcast() {
                       {billable ? (
                         <>
                           <div className="mt-2 text-[14px] font-extrabold text-ink tnum">
-                            {fill("camp_cost_calc", { n: num(reachable), p: num(egp(wallet.price)),
+                            {fill("camp_cost_calc", { n: num(audience), p: num(egp(wallet.price)),
                                                       c: num(egp(cost)) })}
                           </div>
                           <div className="mt-1 text-[12.5px] text-ink-3 tnum">

@@ -17,17 +17,31 @@ def _kb(pid):
     ]])
 
 def build_caption(payment, username, auto_verdict):
-    plan = plans.plan_name(payment["plan"], "en")
+    # شحن المحفظة ليس باقة: `plan_name` تُسقط أي معرّف مجهول إلى «Free»، فكان
+    # الأدمن يقرأ «اشتراك في المجانية» على دفعة مال حقيقية وهو يقرّر اعتمادها.
+    # والمدة من دورة الدفعة: دفعة سنوية تفعّل 365 يوماً لا 30.
+    if payment["plan"] == db.WALLET_PLAN:
+        head = "💳 طلب شحن رصيد / Wallet top-up"
+        item = "📦 البند / Item: رصيد الرسائل التسويقية / Marketing credit"
+        action = ("اضغط موافقة لإضافة المبلغ إلى رصيد العميل، أو رفض للإلغاء.\n"
+                  "Tap Approve to credit the wallet, or Reject.")
+    else:
+        annual = (payment.get("billing_cycle") or "monthly") == "annual"
+        days = 365 if annual else 30
+        head = "💳 طلب اشتراك جديد / New subscription payment"
+        item = (f"📦 الباقة / Plan: {plans.plan_name(payment['plan'], 'en')} · "
+                + ("سنوي / annual" if annual else "شهري / monthly"))
+        action = (f"اضغط موافقة لتفعيل الاشتراك {days} يوماً، أو رفض للإلغاء.\n"
+                  f"Tap Approve to activate {days} days, or Reject.")
     return (
-        f"💳 طلب اشتراك جديد / New subscription payment\n\n"
+        f"{head}\n\n"
         f"👤 المستخدم / User: {username} (#{payment['user_id']})\n"
-        f"📦 الباقة / Plan: {plan}\n"
+        f"{item}\n"
         f"💰 المبلغ / Amount: {payment['amount']} EGP\n"
         f"🏦 الطريقة / Method: {payment['method']}\n"
         f"🧾 المرجع / Ref: {payment.get('ref') or '—'}\n"
         f"{auto_verdict}\n\n"
-        f"اضغط موافقة لتفعيل الاشتراك 30 يوماً، أو رفض للإلغاء.\n"
-        f"Tap Approve to activate 30 days, or Reject."
+        f"{action}"
     )
 
 async def _send_alert_async(app, admin_id, payment, username, caption, screenshot_path):
@@ -133,7 +147,11 @@ def register(app: Application):
         # إيصال بالإيميل — نفس ما يحدث في الموافقة من الويب. في خيط خلفي،
         # فلا يحجب حلقة asyncio، وفشله لا يمسّ التسوية التي ثبتت فعلاً.
         mailer.send_payment_receipt(row, status)
-        if status == "approved":
+        if status == "approved" and row["plan"] == db.WALLET_PLAN:
+            bal = row.get("wallet_after")
+            tail = (f"\n\n✅ تمت الموافقة وشحن الرصيد — الرصيد الآن {(bal or 0) / 100:g} EGP"
+                    f" / Approved & credited.")
+        elif status == "approved":
             tail = f"\n\n✅ تمت الموافقة وتفعيل «{plans.plan_name(row['plan'],'ar')}» / Approved & activated."
         else:
             tail = "\n\n❌ تم الرفض / Rejected."

@@ -264,7 +264,9 @@ function FirstBotGuide() {
 
 /* بعد أول بوت: بوت موجود ≠ بوت يعمل. هذه الثلاث هي الفجوة بينهما. */
 function FirstRunChecklist({ ob }) {
-  const map = { greeting: ["ob_greeting", "ob_greeting_d"], run: ["ob_run", "ob_run_d"],
+  // بوت الفلو يحيّي من «باني المحادثة» لا من الإعدادات — الإرشاد يقول أين بالضبط
+  const map = { greeting: ["ob_greeting", ob.flowBot ? "ob_greeting_flow_d" : "ob_greeting_d"],
+                run: ["ob_run", "ob_run_d"],
                 try: ["ob_try", "ob_try_d"] };
   const steps = ob.steps || [];
   const done = steps.filter((s) => s.done).length;
@@ -330,6 +332,16 @@ export default function Dashboard() {
         sub={t("dash_sub")}
         actions={<Btn icon="plus" href="#create">{t("create_bot")}</Btn>}
       />
+
+      {/* بلا إيميل لا استرجاع للحساب ولا إيصالات — مطالبة لطيفة لا إجبار */}
+      {BY.user.hasEmail === false && (
+        <Card className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <span className="flex items-center gap-2 text-[14px] text-ink">
+            <Icon name="shield" size={16} className="text-au-cyan" />{t("email_prompt")}
+          </span>
+          <Btn sm variant="ghost" icon="settings" href={BY.urls.account}>{t("add_email")}</Btn>
+        </Card>
+      )}
 
       {fresh && <FirstBotGuide />}
       {stage === "first_run" && <FirstRunChecklist ob={onboarding} />}

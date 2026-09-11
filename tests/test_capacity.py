@@ -86,7 +86,7 @@ class StartGuardTests(unittest.TestCase):
         # بوت حقيقي: «غير موجود» تُفحص قبل السقف عمداً (رسالة أدقّ لمعرّف خاطئ)،
         # فاختبار الحارس يحتاج صفّاً فعلياً لا رقماً وهمياً.
         import auth
-        u = db.create_user("cap_owner", auth.hash_password("cap-pw-123"))
+        u = db.create_user("cap_owner", auth.hash_password(TEST_PW))
         cls.bid = db.create_bot(u, "بوت السعة", "999:CAPTEST", "flow",
                                 {"business_name": "س", "flow": None, "menu_items": []})
 
@@ -117,6 +117,45 @@ class StartGuardTests(unittest.TestCase):
         before = dict(self.m._apps)
         self.m.start_bot(self.bid)
         self.assertEqual(self.m._apps, before)
+
+
+class WhatsAppCapacityTests(unittest.TestCase):
+    """بوت واتساب ويبهوك بلا polling — لا يستهلك سعة العملية ولا يُحجب بها."""
+
+    @classmethod
+    def setUpClass(cls):
+        _boot()
+        cls.m = bot_manager.BotManager()
+        import auth
+        u = db.create_user("cap_wa_owner", auth.hash_password(TEST_PW))
+        cls.bid = db.create_bot(u, "تليجرام", "998:CAPWA", "flow",
+                                {"business_name": "ت", "flow": None, "menu_items": []})
+        cls.wa_bid = db.create_bot(u, "واتساب السعة", "wa:captest", "flow",
+                                   {"business_name": "و", "flow": None, "menu_items": []},
+                                   channel="whatsapp")
+
+    def setUp(self):
+        db.set_platform("bot_capacity", "2")
+        self.m._apps = {}
+
+    def tearDown(self):
+        self.m._apps = {}
+        db.set_platform("bot_capacity", "")
+
+    def test_whatsapp_bots_do_not_count_toward_the_cap(self):
+        self.m._apps = {1: {"type": "whatsapp"}, 2: {"type": "whatsapp"}}   # السقف 2
+        st = self.m.capacity_status()
+        self.assertEqual(st["running"], 0)
+        self.assertFalse(st["full"])
+
+    def test_a_whatsapp_bot_starts_even_when_telegram_filled_the_cap(self):
+        import asyncio
+        self.m._apps = {101: object(), 102: object()}                       # ممتلئ بتليجرام
+        self.m._submit = lambda coro, timeout=None: asyncio.run(coro)
+        ok, _ = self.m.start_bot(self.wa_bid)
+        self.assertTrue(ok)
+        self.assertIn(self.wa_bid, self.m._apps)
+        self.assertFalse(self.m.start_bot(self.bid)[0], "تليجرام ما زال محجوباً عند السقف")
 
 
 class AdminWarningTests(unittest.TestCase):

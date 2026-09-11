@@ -296,7 +296,7 @@ export function Pricing() {
 /* ---------------------------------------------------------------- الاشتراك */
 export function Subscribe() {
   const { plan = {}, plat = {}, qr, action, planId,
-          cycle = "monthly", days = 30, annualSavingPct = 0 } = P;
+          cycle = "monthly", days = 30, annualSavingPct = 0, carry = null } = P;
   const annual = cycle === "annual";
   const [copied, setCopied] = useState("");
   const [code, setCode] = useState("");
@@ -371,6 +371,15 @@ export function Subscribe() {
         <div className="mt-2 text-[12.5px] text-ink-3">
           {t("sub_cycle")}: {t(annual ? "cycle_annual" : "cycle_monthly")} ({days} {BY.lang === "ar" ? "يوم" : "days"}) · {t("pay_secure_note")}
         </div>
+        {/* نقل الرصيد يُعرض قبل الدفع لا بعده — المشترك يعرف ما سيحدث لأيامه المدفوعة */}
+        {carry && carry.credit > 0 && (
+          <div className="mt-4 rounded-xl bg-au-teal/10 p-3.5 text-[13px] font-bold leading-relaxed text-au-teal
+                          shadow-[inset_0_0_0_1px_rgb(45_212_191/0.3)]">
+            <Icon name="check" size={14} className="me-1.5 inline" />
+            {t("carry_note").replace("{r}", num(carry.remaining)).replace("{p}", carry.fromPlan)
+                            .replace("{c}", num(carry.credit))}
+          </div>
+        )}
       </Card>
 
       {/* كود الخصم — التسعيرة تُحسب في الخادم، والحقل يُرسَل مع النموذج */}
