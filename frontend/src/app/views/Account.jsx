@@ -30,6 +30,9 @@ export function Account() {
           <Field label={t("username")} className="mb-4">
             <Input name="username" defaultValue={me.username} required minLength={3} autoComplete="username" />
           </Field>
+          <Field label={`${t("email")} (${t("optional")})`} hint={t("email_hint")} className="mb-4">
+            <Input type="email" name="email" defaultValue={me.email || ""} autoComplete="email" dir="ltr" />
+          </Field>
           <Field label={t("new_password")} className="mb-5">
             <Input type="password" name="new_password" placeholder="••••••" minLength={6} autoComplete="new-password" />
           </Field>
@@ -277,6 +280,9 @@ export function Subscribe() {
       if (d.ok) {
         setQ({ listPrice: d.listPrice, total: d.total, planDiscountPct: d.planDiscountPct,
                promoCode: d.promoCode, promoCut: d.promoCut });
+        setErr(d.error || null);
+      } else {
+        // 429 (محاولات كثيرة) وغيرها: أظهر السبب بدل زرّ لا يفعل شيئاً
         setErr(d.error || null);
       }
     } catch { setErr(null); }

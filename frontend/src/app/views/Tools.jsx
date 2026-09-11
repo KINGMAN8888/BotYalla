@@ -4,6 +4,7 @@ import {
   BY, P, t, bi, Icon, Card, Btn, Field, Input, Textarea, Select, Form,
   Grid, Stat, Pill, Empty, PageHead, SectionTitle, num,
 } from "../kit.jsx";
+import { Flashes } from "../AppShell.jsx";
 
 /* ---------------------------------------------------------- باني الفلو */
 export function FlowBuilder() {
@@ -310,6 +311,7 @@ export function Auth({ mode }) {
   const isLogin = mode === "login";
   return (
     <div className="mx-auto flex min-h-screen max-w-[440px] flex-col justify-center px-5 py-16">
+      <Flashes />
       <a href={BY.urls.landing} className="mb-6 flex justify-center no-underline">
         <img src={BY.urls.logo} alt={BY.brand} className="h-11 w-auto" />
       </a>
@@ -325,6 +327,11 @@ export function Auth({ mode }) {
             <Input name="username" required autoFocus autoComplete="username"
                    minLength={isLogin ? undefined : 3} />
           </Field>
+          {!isLogin && (
+            <Field label={`${t("email")} (${t("optional")})`} hint={t("email_hint")} className="mb-4">
+              <Input type="email" name="email" autoComplete="email" dir="ltr" />
+            </Field>
+          )}
           <Field label={t("password")}
                  hint={isLogin ? undefined : t("pw_hint")}>
             <Input type="password" name="password" required minLength={isLogin ? undefined : 6}
@@ -336,6 +343,14 @@ export function Auth({ mode }) {
             </Btn>
           </div>
         </Form>
+
+        {isLogin && (
+          <p className="mt-4 text-center text-[13px]">
+            <a href={BY.urls.forgot} className="text-ink-3 underline-offset-4 hover:text-ink hover:underline">
+              {t("forgot_link")}
+            </a>
+          </p>
+        )}
 
         {!isLogin && (
           <div className="mt-5 flex flex-wrap justify-center gap-x-5 gap-y-2 text-[12px] text-ink-3">
@@ -351,6 +366,53 @@ export function Auth({ mode }) {
           <a href={isLogin ? BY.urls.register : BY.urls.login}
              className="font-bold text-au-cyan underline-offset-4 hover:underline">
             {isLogin ? t("signup_link") : t("signin_link")}
+          </a>
+        </p>
+      </Card>
+    </div>
+  );
+}
+
+/* استرجاع كلمة المرور: طلب الرابط (forgot) ثم ضبط كلمة جديدة (reset).
+   نموذج POST عادي إلى نفس المسار — Flask يتحقق ويحوّل ويعرض flash. */
+export function Recover({ mode }) {
+  const isReset = mode === "reset";
+  return (
+    <div className="mx-auto flex min-h-screen max-w-[440px] flex-col justify-center px-5 py-16">
+      <Flashes />
+      <a href={BY.urls.landing} className="mb-6 flex justify-center no-underline">
+        <img src={BY.urls.logo} alt={BY.brand} className="h-11 w-auto" />
+      </a>
+      <Card className="!p-8">
+        <h1 className="m-0 text-center text-[24px] font-extrabold tracking-tight text-ink">
+          {isReset ? t("reset_title") : t("forgot_title")}
+        </h1>
+        <p className="mb-7 mt-2 text-center text-[14px] text-ink-3">
+          {isReset ? t("reset_sub") : t("forgot_sub")}
+        </p>
+        <Form action="">
+          {isReset ? (
+            <Field label={t("password")} hint={t("pw_hint")}>
+              <Input type="password" name="password" required minLength={6} autoFocus
+                     autoComplete="new-password" />
+            </Field>
+          ) : (
+            <Field label={t("email")}>
+              <Input type="email" name="email" required autoFocus autoComplete="email" dir="ltr" />
+            </Field>
+          )}
+          <div className="mt-6">
+            <Btn block icon={isReset ? "lock" : "link"} type="submit">
+              {isReset ? t("reset_save") : t("forgot_send")}
+            </Btn>
+          </div>
+        </Form>
+        {!isReset && (
+          <p className="mb-0 mt-5 text-center text-[12px] text-ink-3">{t("forgot_no_email")}</p>
+        )}
+        <p className="mt-6 text-center text-[13px] text-ink-3">
+          <a href={BY.urls.login} className="font-bold text-au-cyan underline-offset-4 hover:underline">
+            {t("signin_link")}
           </a>
         </p>
       </Card>

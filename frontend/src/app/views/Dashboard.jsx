@@ -223,6 +223,16 @@ export default function Dashboard() {
         actions={<Btn icon="plus" href="#create">{t("create_bot")}</Btn>}
       />
 
+      {/* بلا إيميل لا استرجاع للحساب ولا إيصالات — مطالبة لطيفة لا إجبار */}
+      {BY.user.hasEmail === false && (
+        <Card className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <span className="flex items-center gap-2 text-[14px] text-ink">
+            <Icon name="shield" size={16} className="text-au-cyan" />{t("email_prompt")}
+          </span>
+          <Btn sm variant="ghost" icon="settings" href={BY.urls.account}>{t("add_email")}</Btn>
+        </Card>
+      )}
+
       <Grid cols={4} className="mb-7">
         <Stat icon="users"    value={total.subscribers} label={t("stat_subs")} />
         <Stat icon="store"    value={total.orders}      label={t("stat_orders")} />

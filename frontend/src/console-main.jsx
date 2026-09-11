@@ -8,7 +8,7 @@ import Dashboard from "./app/views/Dashboard.jsx";
 import BotDetail from "./app/views/BotDetail.jsx";
 import { Account, Settings, Billing, Pricing, Subscribe, RequestBot } from "./app/views/Account.jsx";
 import { AdminOverview, AdminUsers, AdminPayments, AdminRequests, AdminPlatform } from "./app/views/Admin.jsx";
-import { FlowBuilder, Broadcast, Analytics, Auth } from "./app/views/Tools.jsx";
+import { FlowBuilder, Broadcast, Analytics, Auth, Recover } from "./app/views/Tools.jsx";
 import { AdminPricing, AdminPromos, AdminAffiliates, Affiliate } from "./app/views/Revenue.jsx";
 import { Terms, Privacy } from "./app/views/Legal.jsx";
 import WaTemplates from "./app/views/WaTemplates.jsx";
@@ -41,7 +41,12 @@ const VIEWS = {
 };
 
 /* صفحات المصادقة بلا قشرة لوحة */
-const BARE = { login: () => <Auth mode="login" />, register: () => <Auth mode="register" /> };
+const BARE = {
+  login:    () => <Auth mode="login" />,
+  register: () => <Auth mode="register" />,
+  forgot:   () => <Recover mode="forgot" />,
+  reset:    () => <Recover mode="reset" />,
+};
 
 /* حاجز أخطاء: خطأ في عرض واحد لا يجوز أن يترك الصفحة سوداء فارغة.
    يعرض رسالة مفهومة وطريق خروج بدل انهيار صامت. */

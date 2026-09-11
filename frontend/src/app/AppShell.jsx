@@ -70,8 +70,9 @@ function SideContent({ view }) {
   );
 }
 
-/* إشعارات flash القادمة من Flask */
-function Flashes() {
+/* إشعارات flash القادمة من Flask. مُصدَّرة لأن صفحات المصادقة بلا قشرة
+   (BARE) تحتاجها أيضاً — بدونها لا يرى المستخدم «بيانات دخول غير صحيحة». */
+export function Flashes() {
   const [list, setList] = useState(BY.flashes || []);
   useEffect(() => {
     if (!list.length) return;
