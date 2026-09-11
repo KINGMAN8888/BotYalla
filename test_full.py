@@ -147,7 +147,7 @@ class BotYallaE2ETest(unittest.TestCase):
         tk = self._tk()
         with open("dummy_receipt.png", "wb") as f: f.write(b"dummy")
         
-        r = self.client.post("/subscribe/pro", data={
+        r = self.client.post("/subscribe/merchant", data={
             "method": "instapay",
             "ref": "REF123",
             "screenshot": (open("dummy_receipt.png", "rb"), "receipt.png"),
@@ -168,7 +168,7 @@ class BotYallaE2ETest(unittest.TestCase):
         self.client.get("/logout")
         self.client.post("/login", data={"username": ADMIN_USER, "password": ADMIN_PASS, "csrf_token": self._tk()})
         # تأكيد نجاح الدخول صراحةً: بدونه يفشل الاختبار لاحقاً عند فحص الباقة
-        # برسالة مضلِّلة ('free' != 'pro') بدل السبب الحقيقي — كلمة مرور خاطئة.
+        # برسالة مضلِّلة ('free' != 'merchant') بدل السبب الحقيقي — كلمة مرور خاطئة.
         with self.client.session_transaction() as s:
             self.assertEqual(s.get("role"), "admin", "فشل دخول الأدمن — راجع ADMIN_USER/ADMIN_PASS")
 
@@ -178,7 +178,7 @@ class BotYallaE2ETest(unittest.TestCase):
         
         # التحقق من الاشتراك
         sub = db.get_subscription(pay["user_id"])
-        self.assertEqual(sub["plan"], "pro")
+        self.assertEqual(sub["plan"], "merchant")
         self.assertEqual(sub["status"], "active")
 
     def test_05_subscription_reminders(self):
@@ -206,7 +206,7 @@ class BotYallaE2ETest(unittest.TestCase):
         self.assertTrue(db.reminder_sent(uid, "pre3"))
         
         # 3. التأكد من مسح التذكيرات عند التجديد
-        db.activate_subscription(uid, "pro", days=30)
+        db.activate_subscription(uid, "merchant", days=30)
         self.assertFalse(db.reminder_sent(uid, "pre3"), "Reminders should be cleared after renewal")
 
 if __name__ == "__main__":

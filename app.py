@@ -626,7 +626,9 @@ def bot_detail(bot_id):
     plan_id = sub["plan"] if sub["status"] == "active" else "free"
     p = plans.plan(plan_id)
     if current_role() in ("admin", "support"):
-        p = plans.plan("business") # Full access
+        # أعلى باقة = وصول كامل. تُقرأ من ORDER ولا تُثبَّت باسم، فإضافة باقة
+        # أعلى مستقبلاً لا تترك الأدمن عالقاً على باقة صارت وسطى.
+        p = plans.plan(plans.ORDER[-1])
 
     usage = None
     if (b.get("channel") or "telegram") == "whatsapp":
@@ -1007,7 +1009,9 @@ def pricing():
 @app.route("/subscribe/<plan_id>", methods=["GET"])
 @login_required
 def subscribe(plan_id):
-    if plan_id not in plans.PLANS or plan_id == "free":
+    # `is_sellable` لا `in PLANS`: الباقات الموروثة موجودة في PLANS لتخدم
+    # مشتركيها القدامى، لكنها ليست معروضة للبيع لأحد جديد.
+    if not plans.is_sellable(plan_id):
         return redirect(url_for("pricing"))
     p = plans.plan(plan_id)
     plat = db.all_platform()
@@ -1020,7 +1024,7 @@ def subscribe(plan_id):
 @app.route("/subscribe/<plan_id>", methods=["POST"])
 @login_required
 def subscribe_pay(plan_id):
-    if plan_id not in plans.PLANS or plan_id == "free":
+    if not plans.is_sellable(plan_id):
         return redirect(url_for("pricing"))
     # التسعيرة تُحسب في الخادم: سعر الباقة بعد تجاوز المالك وخصمها، ثم كود
     # الخصم إن صحّ. لا يُقرأ أي مبلغ من الفورم (AGENTS.md §3.3).
@@ -1665,7 +1669,7 @@ def api_promo_check():
     المبلغ المخزَّن يُحسب من جديد داخل subscribe_pay."""
     d = request.get_json(silent=True) or {}
     plan_id = d.get("plan")
-    if plan_id not in plans.PLANS or plan_id == "free":
+    if not plans.is_sellable(plan_id):
         return jsonify({"ok": False})
     # المسار يجيب بنعم/لا عن صلاحية أي كود، فبدون حدّ يصبح أداة تخمين آلي.
     # الحدّ على المستخدم لا على الـIP: الحساب هو ما يلزم لبلوغ المسار أصلاً.

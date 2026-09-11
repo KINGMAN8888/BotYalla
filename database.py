@@ -75,6 +75,12 @@ def _migrate(c):
         c.execute("ALTER TABLE bot_users ADD COLUMN last_in_at INTEGER")
         c.execute("UPDATE bot_users SET last_in_at=created_at WHERE last_in_at IS NULL")
 
+    # ---- الباقات الجديدة: لا ترحيل، وهذا مقصود ----
+    # الباقتان القديمتان (`pro` / `business`) تبقيان في `plans.PLANS` بحدودهما
+    # الأصلية وخارج `plans.ORDER`. السبب: `pro` كانت تشمل واتساب و`merchant`
+    # لا تشمله، و`business` كانت بلا حدّ للبوتات — فأي ترحيل يسحب من مشتركٍ
+    # ميزةً دفع مقابلها. لا صفّ اشتراك أو دفعة يُلمس هنا إطلاقاً.
+
 def init_db():
     with get_conn() as c:
         # WAL: يسمح بقراءات متزامنة مع الكتابة. إعداد دائم يُضبط مرة واحدة.

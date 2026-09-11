@@ -47,7 +47,7 @@ class SettlementAtomicityTests(unittest.TestCase):
 
     def test_a_crash_mid_settlement_rolls_the_decision_back(self):
         """لا تبقى دفعة «معتمدة» بلا اشتراك مفعَّل."""
-        pid = db.create_payment(self.uid, "business", "instapay", 499, "R", "s.png", "HX", "{}")
+        pid = db.create_payment(self.uid, "whatsapp", "instapay", 899, "R", "s.png", "HX", "{}")
         before = db.get_subscription(self.uid)["plan"]
         orig = db.credit_referral
         db.credit_referral = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("crash"))
@@ -60,13 +60,13 @@ class SettlementAtomicityTests(unittest.TestCase):
         self.assertEqual(db.get_subscription(self.uid)["plan"], before, "لا ترقية بلا تسوية مكتملة")
 
     def test_the_same_payment_settles_cleanly_after_recovery(self):
-        pid = db.create_payment(self.uid, "pro", "instapay", 199, "R2", "s2.png", "HY", "{}")
+        pid = db.create_payment(self.uid, "merchant", "instapay", 299, "R2", "s2.png", "HY", "{}")
         self.assertIsNotNone(db.finalize_payment(pid, "approved"))
         sub = db.get_subscription(self.uid)
-        self.assertEqual((sub["plan"], sub["status"]), ("pro", "active"))
+        self.assertEqual((sub["plan"], sub["status"]), ("merchant", "active"))
 
     def test_a_decided_payment_is_never_settled_twice(self):
-        pid = db.create_payment(self.uid, "pro", "instapay", 199, "R3", "s3.png", "HZ", "{}")
+        pid = db.create_payment(self.uid, "merchant", "instapay", 299, "R3", "s3.png", "HZ", "{}")
         self.assertIsNotNone(db.finalize_payment(pid, "approved"))
         self.assertIsNone(db.finalize_payment(pid, "approved"), "البتّ مرة واحدة فقط")
 
@@ -97,7 +97,7 @@ class RateLimitTests(unittest.TestCase):
         c = _client()
         c.post("/login", data={"username": "promoprobe", "password": "password123",
                                "csrf_token": "tk"})
-        codes = [c.post("/api/promo/check", json={"plan": "pro", "code": f"GUESS{i}"},
+        codes = [c.post("/api/promo/check", json={"plan": "merchant", "code": f"GUESS{i}"},
                         headers={"X-CSRF-Token": "tk"}).status_code for i in range(25)]
         self.assertIn(429, codes, "فحص الأكواد بلا حدّ يصبح أداة تخمين آلي")
 
