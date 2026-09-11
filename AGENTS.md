@@ -39,7 +39,7 @@
 | `icons.py` | مجموعة أيقونات SVG (خطية). `icon('name', size)` |
 
 ## 2) قاعدة البيانات (جداول SQLite)
-`users` · `settings` · `bots` · `bot_users` · `leads` · `orders` · `bookings` · `subscriptions` · `payments` · `platform` · `bot_requests` · `events` · `chat_state` · `usage_msgs` · `seen_msgs` · `media` · `plan_overrides` · `promos` · `promo_uses` · `affiliates` · `referrals` · `reminder_log`
+`users` · `settings` · `bots` · `bot_users` · `leads` · `orders` · `bookings` · `subscriptions` · `payments` · `platform` · `bot_requests` · `events` · `chat_state` · `usage_msgs` · `seen_msgs` · `media` · `plan_overrides` · `promos` · `promo_uses` · `affiliates` · `referrals` · `reminder_log` · `password_resets`
 
 - **`chat_state`**: موضع كل عميل في الفلو. **لا تُعِد حالة المحادثة إلى `ctx.user_data`** — الذاكرة تضيع مع كل إعادة تشغيل، وواتساب بلا حالة أصلاً.
 - **`usage_msgs`**: عدّاد الرسائل الشهري لكل بوت. **`seen_msgs`**: منع تكرار معالجة ويبهوك واتساب.
@@ -72,6 +72,10 @@
 11. **تسوية الدفعة في معاملة واحدة:** `finalize_payment` تفتح اتصالاً واحداً وتمرّره عبر `conn=` إلى التفعيل وحرق الكود واحتساب العمولة. أي خطوة جديدة في التسوية تُضاف **داخل** نفس الاتصال (`_conn_or`) — لا باتصال مستقل، وإلا عاد احتمال دفعة «معتمدة» بلا اشتراك.
 12. **تحقّق قبل الكتابة على القرص:** الإيصالات تُفحص بـ`pay.validate_bytes(data)` **قبل** الحفظ. وأي stub في اختبار يجب أن يغطّي `validate_bytes` لا `validate_image` وحدها.
 13. **اسم المستخدم عبر `USERNAME_RE`** في كل مسار ينشئ أو يعدّل اسماً (تسجيل · «حسابي» · إنشاء الأدمن لحساب). في «حسابي» يُفحص **عند تغيير الاسم فقط** — النموذج يعيد إرسال الاسم الحالي، وحسابات قديمة قد لا تطابق القاعدة.
+14. **أي رابط يُرسل بالإيميل يُبنى من `PUBLIC_URL`** لا من `request.host`/`url_for(_external=True)`. nginx يمرّر ترويسة Host كما أرسلها العميل، فرابط استرجاع مبني منها يسرّب التوكن لنطاق المهاجم. بلا `PUBLIC_URL` لا يُرسل رابط — افشل مغلقاً (`_reset_link`).
+15. **الإيميل best-effort وخارج المعاملات.** استخدم `mailer.send_async` (خيط خلفي) — لا `send_mail` داخل `with get_conn()` ولا داخل حلقة asyncio. الإيصال يُرسل **بعد** `finalize_payment` لا داخلها، وفشله لا يمسّ التسوية.
+16. **بصمة كلمة المرور في الجلسة (`session["pwv"]`):** تغيير `pw_hash` يُنهي كل الجلسات القديمة تلقائياً (`_revalidate_identity`). لو غيّرتها للمستخدم **الحالي** حدّث `session["pwv"] = _pw_stamp(new_hash)` وإلا طُرد هو أيضاً.
+17. **لا أسرار في السجل.** `httpx` مقيَّد بـ WARNING لأن روابط تليجرام تحمل توكن البوت. لا تسجّل توكنات أو كلمات مرور أو روابط استرجاع أو عناوين إيميل كاملة (`mailer._mask`).
 
 ---
 
@@ -114,8 +118,8 @@
   - **stub لاستدعاءات إعداد البوت:** `tg._tg_post = lambda *a, **k: (True, "OK")`.
   - **stub للـ AI:** `ai_agent._call = lambda *a: json.dumps({...})`.
   - **CSRF في الاختبار:** اقرأ التوكن من الجلسة: `with c.session_transaction() as s: token = s.get("_csrf")` وأرسله في الفورم (`csrf_token`) أو الترويسة (`X-CSRF-Token`).
-- **🔴 لا تختبر على `botyalla.db` ولا على `uploads/` أبداً.** اضبط `BOTYALLA_DB`
-  و`BOTYALLA_UPLOADS` **قبل** استيراد `database` أو `app` أو `media_store` —
+- **🔴 لا تختبر على `botyalla.db` ولا على `uploads/` ولا على `logs/` أبداً.** اضبط `BOTYALLA_DB`
+  و`BOTYALLA_UPLOADS` (و`BOTYALLA_LOGS` لو ستنادي `bootstrap()`) **قبل** استيراد `database` أو `app` أو `media_store` —
   الاستيراد يقرأ المتغيّرين مرة واحدة. سكربتات سابقة لم تفعل، فكتبت أسراراً وحساباً
   وهمياً في قاعدة الإنتاج و12 إيصال دفع وهمياً بين الإيصالات الحقيقية.
 - **قالب اختبار سريع:**
@@ -143,6 +147,8 @@
 - **🔴 لا تضِف `botyalla.db` إلى أي `rm` في `run_tests.sh` أو غيره.** جذر المستودع هو
   `WorkingDirectory` على الخادم، فحذفها هناك = حذف قاعدة الإنتاج. (حدث هذا فعلاً في
   نسخة سابقة من السكربت — REVIEW.md §8.1.)
+- **الإيميل في الاختبار:** `mailer.SYNC = True` واستبدل `mailer.send_mail` بدالة تجمع
+  الرسائل. واضبط `PUBLIC_URL` قبل أي اختبار استرجاع.
 - **حد أدنى قبل التسليم:** كل الصفحات ترندر 200 في اللغتين (`/lang/ar` ثم `/lang/en`) + السيناريو الذي عدّلته يعمل.
 - **لا OCR محلياً على ويندوز** — طبيعي؛ الفحص الآلي يظهر «غير متاح، راجع الصورة يدوياً» (يعمل OCR على السيرفر لأن `deploy/hostinger_deploy.sh` يثبّت tesseract).
 

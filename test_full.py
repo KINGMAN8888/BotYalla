@@ -5,6 +5,8 @@ import os, json, tempfile, time, shutil, unittest
 # لا تكتب كلمة مرور حقيقية في هذا الملف — إنه متتبَّع في git (راجع REVIEW.md §2.1).
 ADMIN_USER = os.environ.setdefault("ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.setdefault("ADMIN_PASS", "e2e-test-only-pass-123")
+# bootstrap() يفعّل سجل الملف — لا يُكتب في logs/ الحقيقي (على الخادم = سجل الإنتاج)
+os.environ.setdefault("BOTYALLA_LOGS", tempfile.mkdtemp(prefix="botyalla-e2e-logs-"))
 
 import database as db
 import app as A

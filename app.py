@@ -12,7 +12,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 from flask import (Flask, request, redirect, url_for, render_template,
                    session, flash, abort, jsonify, Response, send_from_directory, g,
-                   get_flashed_messages)
+                   get_flashed_messages, make_response)
 
 # تحميل متغيرات .env تلقائياً إذا وُجد الملف
 _env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -41,7 +41,10 @@ import i18n
 import plans
 import payments as pay
 import platform_bot as PB
+import mailer
 import time as _time
+import logging
+from logging.handlers import RotatingFileHandler
 import datetime as _dt
 import re as _re
 import hashlib
@@ -49,6 +52,7 @@ import hmac
 import secrets as _secrets
 from markupsafe import Markup
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import InternalServerError
 from icons import icon
 import icons
 
@@ -74,6 +78,40 @@ UPLOAD_DIR = os.environ.get(
     "BOTYALLA_UPLOADS",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# ---------- تسجيل الأخطاء والأحداث ----------
+log = logging.getLogger("botyalla")
+LOG_DIR = os.environ.get(
+    "BOTYALLA_LOGS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs"))
+
+def setup_logging():
+    """INFO إلى stderr (يلتقطه journald) وإلى ملف دوّار `logs/botyalla.log` (10MB × 5).
+    تُستدعى من `bootstrap()` وحده لا عند الاستيراد — حتى لا تكتب الاختبارات في
+    logs/ الحقيقي. تكرار الاستدعاء بلا أثر."""
+    root = logging.getLogger()
+    if any(getattr(h, "_botyalla", False) for h in root.handlers):
+        return
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    root.setLevel(logging.INFO)
+    handlers = [logging.StreamHandler()]
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        handlers.append(RotatingFileHandler(os.path.join(LOG_DIR, "botyalla.log"),
+                                            maxBytes=10 * 1024 * 1024, backupCount=5,
+                                            encoding="utf-8"))
+    except OSError as e:
+        print(f"file logging disabled: {e}", file=sys.stderr)
+    for h in handlers:
+        h.setFormatter(fmt)
+        h._botyalla = True
+        root.addHandler(h)
+    # Flask يضيف معالج stderr خاصاً به؛ مع معالج root يتكرر كل سطر مرتين.
+    from flask.logging import default_handler
+    app.logger.removeHandler(default_handler)
+    # ⚠️ httpx يسجّل كل طلب بمستوى INFO والرابط فيه **توكن البوت**
+    # (api.telegram.org/bot<TOKEN>/getUpdates) كل بضع ثوانٍ لكل بوت — سرّ في
+    # ملف السجل وملف يتضخّم. لا يُسجَّل منه إلا التحذيرات.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ---------- حماية CSRF (خفيفة، بدون مكتبات) ----------
 _login_attempts = {}   # ip -> (count, first_ts)
@@ -110,6 +148,18 @@ def _revalidate_identity():
         session.clear()
         if lang: session["lang"] = lang
         flash("تم حظر هذا الحساب." if lang != "en" else "This account is blocked.", "error")
+        return
+    # بصمة كلمة المرور: تغييرها (استرجاع أو «حسابي») يُنهي كل جلسة قديمة —
+    # الجهاز المسروق أو المنسيّ يخرج فوراً. جلسة من قبل هذه الميزة بلا بصمة
+    # تُعتمد مرة واحدة حتى لا يُطرد كل المستخدمين عند النشر.
+    stamp = _pw_stamp(row["pw_hash"])
+    if not session.get("pwv"):
+        session["pwv"] = stamp
+    elif not _secrets.compare_digest(str(session["pwv"]), stamp):
+        lang = session.get("lang")
+        session.clear()
+        if lang: session["lang"] = lang
+        flash(i18n.t("session_pw_changed", lang or i18n.DEFAULT), "error")
         return
     g.user = row
     # مزامنة الجلسة مع القاعدة (قد يكون الأدمن غيّر الدور أو الاسم)
@@ -182,6 +232,18 @@ def _csrf_ctx():
 # تنسيق غير مرئية (U+061C علامة الاتجاه، U+0600–U+0605، U+06DD) والتشكيل؛
 # بها يصنع مهاجم اسماً يطابق «admin» بصرياً في قائمة الأدمن.
 USERNAME_RE = _re.compile(r"^[A-Za-z0-9_.\-ؠ-ي٠-٩ٱ-ۓ]{3,32}\Z")
+
+# إيميل واحد عادي: لا مسافات ولا أقواس ولا فواصل (عنوان واحد لا قائمة)، ونطاق ASCII.
+EMAIL_RE = _re.compile(r"^(?=.{6,254}\Z)[^@\s<>\"',;]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}\Z")
+
+def _norm_email(v):
+    return (v or "").strip().lower()
+
+def _pw_stamp(pw_hash):
+    """بصمة كلمة المرور المحفوظة في الجلسة. HMAC بمفتاح الخادم لأن كوكي الجلسة
+    موقَّع لا مشفَّر — يُقرأ ولا يُزوَّر، فلا نضع فيه مشتقاً خاماً من التجزئة."""
+    return hmac.new(app.secret_key.encode(), (pw_hash or "").encode(),
+                    hashlib.sha256).hexdigest()[:24]
 
 _last_prune = 0
 _bucket_window = {}    # bucket -> window: كل دلو يُنظَّف بنافذته هو لا بنافذة من استدعى
@@ -264,6 +326,22 @@ def notify_admins(text):
     except Exception:
         pass
 
+_err_notified = {}    # (نوع الخطأ، المسار) -> آخر إشعار
+
+@app.errorhandler(InternalServerError)
+def _on_server_error(e):
+    """Flask سجّل الـtraceback كاملاً قبل الوصول هنا (`log_exception` → ملف السجل).
+    هنا يُشعَر الأدمن على تليجرام — مرة لكل (نوع الخطأ، المسار) كل 10 دقائق،
+    حتى لا يُغرق عطلٌ متكرر تليجرام بمئات الرسائل. الاستجابة نفسها لا تتغيّر."""
+    orig = getattr(e, "original_exception", None) or e
+    key = (type(orig).__name__, request.endpoint)
+    now = _time.time()
+    if now - _err_notified.get(key, 0) > 600:
+        _err_notified[key] = now
+        notify_admins(f"🔥 خطأ في الخادم / Server error\n{request.method} {request.path}\n"
+                      f"{type(orig).__name__}: {str(orig)[:300]}")
+    return e
+
 @app.context_processor
 def inject():
     lang = session.get("lang", i18n.DEFAULT)
@@ -301,16 +379,23 @@ def register():
             return react_page("register", "register")
         u = request.form.get("username", "").strip()
         p = request.form.get("password", "")
+        email = _norm_email(request.form.get("email", ""))       # اختياري
+        lang = session.get("lang", i18n.DEFAULT)
         if not USERNAME_RE.match(u) or len(p) < 6:
             flash(("اسم المستخدم 3–32 حرفاً (حروف/أرقام و _ . -) وكلمة المرور 6 على الأقل."
                    if session.get("lang") != "en" else
                    "Username must be 3–32 chars (letters/digits and _ . -) and password at least 6."), "error")
+        elif email and not EMAIL_RE.match(email):
+            flash(i18n.t("email_invalid", lang), "error")
         elif db.get_user_by_name(u):
             flash("اسم المستخدم موجود بالفعل.", "error")
+        elif email and db.get_user_by_email(email):
+            flash(i18n.t("email_taken", lang), "error")
         else:
-            user_id = db.create_user(u, auth.hash_password(p))
+            user_id = db.create_user(u, auth.hash_password(p), email=email or None)
             urow = db.get_user(user_id)
             session["uid"] = user_id; session["uname"] = u; session["role"] = urow["role"]
+            session["pwv"] = _pw_stamp(urow["pw_hash"])
             ref_code = session.pop("ref", None)      # التُقط من ?ref= على أي صفحة
             if ref_code:
                 db.attach_referral(user_id, ref_code)
@@ -333,6 +418,7 @@ def login():
             return react_page("login", "login")
         if row and auth.verify_password(p, row["pw_hash"]):
             session["uid"] = row["id"]; session["uname"] = u; session["role"] = row.get("role","user")
+            session["pwv"] = _pw_stamp(row["pw_hash"])
             return redirect(url_for("dashboard"))
         flash("بيانات دخول غير صحيحة.", "error")
     return react_page("login", "login")
@@ -340,6 +426,80 @@ def login():
 @app.route("/logout")
 def logout():
     session.clear(); return redirect(url_for("login"))
+
+# ---------- استرجاع كلمة المرور ----------
+RESET_TTL = 3600          # ساعة واحدة، واستخدام مرة واحدة
+
+def _token_hash(tok):
+    return hashlib.sha256((tok or "").encode()).hexdigest()
+
+def _reset_link(token):
+    """الرابط يُبنى من `PUBLIC_URL` لا من ترويسة Host. nginx يمرّر Host كما أرسله
+    العميل، فلو بُني الرابط منها لطلب مهاجمٌ استرجاعاً لحساب ضحية بـ Host مزوّر،
+    فيصلها رابط يسرّب التوكن إلى نطاقه (password-reset poisoning).
+    بلا PUBLIC_URL لا يُرسل أي رابط — افشل مغلقاً."""
+    base = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    if not base.startswith(("https://", "http://")):
+        return None
+    return base + url_for("reset_password", token=token)
+
+def _send_reset(email, lang):
+    u = db.get_user_by_email(email)
+    if not u or u.get("is_blocked"):
+        return
+    tok = _secrets.token_urlsafe(32)
+    link = _reset_link(tok)
+    if not link:
+        log.error("password reset requested but PUBLIC_URL is not set — no link sent")
+        return
+    db.create_password_reset(u["id"], _token_hash(tok), RESET_TTL)
+    ulang = db.get_setting(u["id"], "lang", lang) or lang
+    mailer.send_async(email, *mailer.reset_email(link, ulang, RESET_TTL // 60))
+    log.info("password reset link issued user=%s", u["id"])
+
+@app.route("/forgot", methods=["GET", "POST"])
+def forgot():
+    lang = session.get("lang", i18n.DEFAULT)
+    if request.method == "POST":
+        email = _norm_email(request.form.get("email", ""))
+        # كل الفروع تنتهي بنفس الرسالة ونفس التحويل: المسار لا يكشف أبداً هل
+        # الإيميل مسجّل (منع تعداد الحسابات). الحدّان: 3 لكل إيميل و10 لكل IP
+        # في الساعة — والإرسال نفسه في خيط خلفي فلا يفضح زمنُ الردّ شيئاً.
+        if (EMAIL_RE.match(email)
+                and not _rate_limited(request.remote_addr or "?", limit=10, window=3600, bucket="reset_ip")
+                and not _rate_limited(email, limit=3, window=3600, bucket="reset")):
+            _send_reset(email, lang)
+        flash(i18n.t("forgot_sent", lang), "ok")
+        return redirect(url_for("forgot"))
+    return react_page("forgot", "forgot_title")
+
+@app.route("/reset/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    lang = session.get("lang", i18n.DEFAULT)
+    th = _token_hash(token)
+    if not db.get_password_reset(th):
+        flash(i18n.t("reset_invalid", lang), "error")
+        return redirect(url_for("forgot"))
+    if request.method == "POST":
+        p = request.form.get("password", "")
+        if len(p) < 6:
+            flash(i18n.t("pw_short", lang), "error")
+            return redirect(url_for("reset_password", token=token))
+        user_id = db.consume_password_reset(th, auth.hash_password(p))
+        if not user_id:
+            flash(i18n.t("reset_invalid", lang), "error")
+            return redirect(url_for("forgot"))
+        log.info("password reset completed user=%s", user_id)
+        # الجلسات القائمة على أي جهاز تنتهي تلقائياً: بصمة كلمة المرور تغيّرت.
+        session.clear()
+        session["lang"] = lang
+        flash(i18n.t("reset_done", lang), "ok")
+        return redirect(url_for("login"))
+    resp = make_response(react_page("reset", "reset_title"))
+    # التوكن في الرابط: لا يُخزَّن في كاش ولا يُرسل في Referer لأي طرف.
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
 
 # ---------- الرئيسية ----------
 @app.route("/")
@@ -903,6 +1063,8 @@ def subscribe_pay(plan_id):
                             promo_id=(q["promo"]["id"] if q["promo"] else None),
                             discount=round(q["list_price"] - q["total"], 2),
                             base_amount=q["list_price"])
+    log.info("payment #%s created user=%s plan=%s amount=%s method=%s promo=%s verdict=%s",
+             pid, uid(), plan_id, q["total"], method, q["promo_code"], ac.get("verdict"))
     # تنبيه الأدمن على تليجرام بزرّي موافقة/رفض (طبقة التحقق الثانية)
     admin_id = db.get_platform("admin_chat_id", "")
     payment = db.get_payment(pid)
@@ -996,6 +1158,7 @@ def admin_user_plan(user_id):
     elif plan_id in plans.PLANS:
         db.activate_subscription(user_id, plan_id, days=30)
     u = db.get_user(user_id)
+    log.info("manual plan change user=%s -> %s by admin=%s", user_id, plan_id, uid())
     notify_admins(f"✏️ تعديل يدوي للباقة: {u['username'] if u else user_id} -> {plan_id}")
     flash("تم تحديث الباقة." if session.get("lang")!="en" else "Plan updated.", "ok")
     return redirect(url_for("admin_users"))
@@ -1023,6 +1186,8 @@ def admin_payment_decide(pid, decision):
     status = "approved" if decision == "approve" else "rejected"
     row = db.finalize_payment(pid, status)
     if row:
+        # بعد ثبات التسوية وخارج معاملتها: فشل الإيميل لا يمسّها
+        mailer.send_payment_receipt(row, status)
         u = db.get_user(row["user_id"])
         if status == "approved":
             settle_payment(row)
@@ -1088,14 +1253,36 @@ def account():
         if new_pw and len(new_pw) < 6:
             flash("كلمة المرور قصيرة." if session.get("lang")!="en" else "Password too short.", "error")
             return redirect(url_for("account"))
+        # الإيميل يُعالج فقط لو أرسله النموذج: بناء واجهة أقدم بلا هذا الحقل
+        # يجب ألا يمسح إيميلاً محفوظاً. ويُفحص كله **قبل** أي كتابة.
+        lang = session.get("lang", i18n.DEFAULT)
+        new_email = _norm_email(request.form.get("email", ""))
+        email_changed = "email" in request.form and new_email != (me.get("email") or "")
+        if email_changed and new_email:
+            if not EMAIL_RE.match(new_email):
+                flash(i18n.t("email_invalid", lang), "error")
+                return redirect(url_for("account"))
+            other = db.get_user_by_email(new_email)
+            if other and other["id"] != me["id"]:
+                flash(i18n.t("email_taken", lang), "error")
+                return redirect(url_for("account"))
+        new_hash = auth.hash_password(new_pw) if new_pw else None
         ok, err = db.update_user_credentials(
             uid(),
             username=new_user if (new_user and new_user != me["username"]) else None,
-            pw_hash=auth.hash_password(new_pw) if new_pw else None)
+            pw_hash=new_hash)
         if not ok and err == "username_taken":
             flash("اسم المستخدم مستخدم بالفعل." if session.get("lang")!="en" else "Username already taken.", "error")
             return redirect(url_for("account"))
+        if email_changed:
+            ok, err = db.set_user_email(uid(), new_email or None)
+            if not ok:
+                flash(i18n.t("email_taken", lang), "error")
+                return redirect(url_for("account"))
         if new_user: session["uname"] = new_user
+        if new_hash:
+            # هذه الجلسة تبقى، وكل جلسة أخرى (جهاز آخر أو مسروقة) تنتهي.
+            session["pwv"] = _pw_stamp(new_hash)
         flash("تم تحديث بيانات حسابك ✅" if session.get("lang")!="en" else "Account updated ✅", "ok")
         return redirect(url_for("account"))
     return react_page("account", "account_title", {
@@ -1336,7 +1523,9 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
     payload = {
         "view": view, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
         "csrf": _csrf_token(),
-        "user": {"name": session.get("uname"), "role": role},
+        "user": {"name": session.get("uname"), "role": role,
+                 # لمطالبة لطيفة بإضافة إيميل — بدونه لا استرجاع للحساب
+                 "hasEmail": bool((getattr(g, "user", None) or {}).get("email"))},
         "t": {k: i18n.t(k, lang) for k in i18n.T},
         "icons": {n: _icon_svg(n) for n in icons._P},
         "nav": nav, "adminNav": admin_nav,
@@ -1346,6 +1535,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
             "billing": url_for("billing"), "account": url_for("account"),
             "logout": url_for("logout"), "login": url_for("login"),
             "register": url_for("register"), "landing": url_for("landing"),
+            "forgot": url_for("forgot"),
             "requestBot": url_for("request_bot"), "botCreate": url_for("bot_create"),
             "logo": url_for("static", filename="logo.svg"),
             "lang": url_for("set_lang", code="en" if lang == "ar" else "ar"),
@@ -1655,6 +1845,7 @@ def _migrate_ai_key():
             db.set_platform("ai_provider", db.get_setting(1, "ai_provider", "gemini"))
 
 def bootstrap():
+    setup_logging()
     db.init_db(); seed_platform_defaults(); contact_defaults(); seed_default_admin(); _migrate_ai_key()
     manager.start(); manager.resume_active_bots()
     tok = db.get_platform("platform_bot_token", "")

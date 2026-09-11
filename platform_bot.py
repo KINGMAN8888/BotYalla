@@ -6,6 +6,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 import database as db
 import plans
 import i18n
+import mailer
 
 log = logging.getLogger("platform_bot")
 
@@ -129,6 +130,9 @@ def register(app: Application):
         if not row:
             await q.edit_message_caption(caption=(q.message.caption or "") + "\n\n⚠️ سبق البتّ في هذا الطلب / Already decided.")
             return
+        # إيصال بالإيميل — نفس ما يحدث في الموافقة من الويب. في خيط خلفي،
+        # فلا يحجب حلقة asyncio، وفشله لا يمسّ التسوية التي ثبتت فعلاً.
+        mailer.send_payment_receipt(row, status)
         if status == "approved":
             tail = f"\n\n✅ تمت الموافقة وتفعيل «{plans.plan_name(row['plan'],'ar')}» / Approved & activated."
         else:

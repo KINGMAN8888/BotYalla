@@ -1,8 +1,11 @@
 """BotYalla — قاعدة البيانات (SQLite).
 جداول: users (لوحة التحكم)، bots، bot_users (مشتركو كل بوت للبث)،
 leads، orders، bookings، events (للتحليلات)."""
-import sqlite3, json, os, time
+import sqlite3, json, os, time, logging
 from contextlib import contextmanager
+
+# سجل الأحداث المالية (بتّ الدفعات والتفعيل وحرق الأكواد) — يصل ملف السجل عبر root.
+log = logging.getLogger("billing")
 
 # BOTYALLA_DB يسمح للاختبارات بالعمل على قاعدة مؤقتة بدل قاعدة الإنتاج.
 DB_PATH = os.environ.get("BOTYALLA_DB", "botyalla.db")
@@ -43,6 +46,10 @@ def _migrate(c):
         c.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
     if "ref_by" not in cols:                      # كود الأفيليت الذي جاء منه المستخدم
         c.execute("ALTER TABLE users ADD COLUMN ref_by TEXT")
+    if "email" not in cols:                       # اختياري: استرجاع الحساب والإيصالات
+        c.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    # فهرس جزئي: الإيميل فريد إن وُجد، والحسابات القديمة بلا إيميل (NULL) لا تتعارض.
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email) WHERE email IS NOT NULL")
     # أول مستخدم = admin دائماً
     c.execute("UPDATE users SET role='admin' WHERE id=1 AND role<>'admin'")
 
@@ -80,6 +87,7 @@ def init_db():
             pw_hash  TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'user',       -- admin | support | user
             is_blocked INTEGER NOT NULL DEFAULT 0,
+            email TEXT,                              -- اختياري؛ فريد إن وُجد (ix_users_email)
             created_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS settings(
@@ -290,16 +298,26 @@ def init_db():
             UNIQUE(user_id, kind),
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+        -- روابط استرجاع كلمة المرور. تُخزَّن **تجزئة** التوكن لا التوكن: تسريب
+        -- القاعدة يجب ألا يعطي مفاتيح دخول صالحة.
+        CREATE TABLE IF NOT EXISTS password_resets(
+            token_hash TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            used_at INTEGER,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
         """)
         _migrate(c)
 
 # ---------- users ----------
-def create_user(username, pw_hash):
+def create_user(username, pw_hash, email=None):
     with get_conn() as c:
         n = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         role = "admin" if n == 0 else "user"   # أول مستخدم = admin
-        cur = c.execute("INSERT INTO users(username,pw_hash,role,created_at) VALUES(?,?,?,?)",
-                        (username, pw_hash, role, int(time.time())))
+        cur = c.execute("INSERT INTO users(username,pw_hash,role,created_at,email) VALUES(?,?,?,?,?)",
+                        (username, pw_hash, role, int(time.time()), email or None))
         return cur.lastrowid
 
 def get_user_by_name(username):
@@ -608,18 +626,25 @@ def finalize_payment(pid, status):
     بلا اشتراك مفعَّل. الحراسة ضد الازدواج تبقى كما هي: التحديث المشروط في
     `decide_payment`، وقيد UNIQUE في `consume_promo`، وشرط `converted_at IS NULL`
     في `credit_referral`."""
+    promo = ref = None
     with get_conn() as c:
         row = decide_payment(pid, status, conn=c)
         if not row:
             return None
         if status == "approved":
-            activate_subscription(row["user_id"], row["plan"], days=30, conn=c)
+            # تاريخ الانتهاء يُرجَع مع الصف لإيصال الإيميل (mailer.send_payment_receipt)
+            row["expires_at"] = activate_subscription(row["user_id"], row["plan"], days=30, conn=c)
             # التسوية هنا لا في المسار الويبي وحده: الموافقة تأتي أيضاً من زرّ
             # تليجرام، ولو تُركت بالخارج لفات الكود والعمولة على ذلك المسار.
             if row.get("promo_id"):
-                consume_promo(row["promo_id"], row["user_id"], row["id"], conn=c)
-            credit_referral(row["user_id"], row["id"], row["amount"], conn=c)
-        return row
+                promo = consume_promo(row["promo_id"], row["user_id"], row["id"], conn=c)
+            ref = credit_referral(row["user_id"], row["id"], row["amount"], conn=c)
+    # التسجيل بعد خروج `with` فقط — أي بعد commit. سطر «approved» في السجل يعني
+    # أن التسوية ثبتت فعلاً، لا أنها بدأت.
+    log.info("payment #%s %s user=%s plan=%s amount=%s expires_at=%s promo=%s referral=%s",
+             row["id"], status, row["user_id"], row["plan"], row["amount"],
+             row.get("expires_at"), promo, ref)
+    return row
 
 def img_hash_seen(img_hash, exclude_id=None):
     with get_conn() as c:
@@ -653,6 +678,59 @@ def update_user_credentials(user_id, username=None, pw_hash=None):
         if pw_hash:
             c.execute("UPDATE users SET pw_hash=? WHERE id=?", (pw_hash, user_id))
     return True, None
+
+def get_user_by_email(email):
+    if not email:
+        return None
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        return dict(r) if r else None
+
+def set_user_email(user_id, email):
+    """يضبط الإيميل (أو يمسحه بـ None). يرجّع (ok, error). الفهرس الفريد هو
+    الحارس الأخير لو سبق طلبٌ متزامن الفحصَ."""
+    with get_conn() as c:
+        if email and c.execute("SELECT id FROM users WHERE email=? AND id<>?",
+                               (email, user_id)).fetchone():
+            return False, "email_taken"
+        try:
+            c.execute("UPDATE users SET email=? WHERE id=?", (email or None, user_id))
+        except sqlite3.IntegrityError:
+            return False, "email_taken"
+    return True, None
+
+# ---------- استرجاع كلمة المرور ----------
+def create_password_reset(user_id, token_hash, ttl=3600):
+    """رابط واحد صالح لكل مستخدم: الطلب الجديد يُبطل ما قبله وينظّف المنتهي."""
+    now = int(time.time())
+    with get_conn() as c:
+        c.execute("DELETE FROM password_resets WHERE user_id=? OR expires_at<?", (user_id, now))
+        c.execute("INSERT INTO password_resets(token_hash,user_id,created_at,expires_at) VALUES(?,?,?,?)",
+                  (token_hash, user_id, now, now + ttl))
+
+def get_password_reset(token_hash):
+    """الصف إن كان الرابط صالحاً (لم يُستعمل ولم ينتهِ)، وإلا None."""
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM password_resets WHERE token_hash=? AND used_at IS NULL "
+                      "AND expires_at>?", (token_hash, int(time.time()))).fetchone()
+        return dict(r) if r else None
+
+def consume_password_reset(token_hash, pw_hash):
+    """يستهلك الرابط ويضبط كلمة المرور في معاملة واحدة. يرجّع user_id أو None.
+    **ذرّي:** التحديث المشروط (`used_at IS NULL`) هو القفل — طلبان متزامنان بنفس
+    الرابط لا ينجحان معاً (نفس نمط `decide_payment`)."""
+    now = int(time.time())
+    with get_conn() as c:
+        r = c.execute("SELECT user_id FROM password_resets WHERE token_hash=? AND used_at IS NULL "
+                      "AND expires_at>?", (token_hash, now)).fetchone()
+        if not r:
+            return None
+        cur = c.execute("UPDATE password_resets SET used_at=? WHERE token_hash=? AND used_at IS NULL",
+                        (now, token_hash))
+        if cur.rowcount != 1:
+            return None
+        c.execute("UPDATE users SET pw_hash=? WHERE id=?", (pw_hash, r["user_id"]))
+        return r["user_id"]
 
 def admin_create_user(username, pw_hash, role="user"):
     """إنشاء حساب بواسطة الأدمن بدور محدد. يرجّع (user_id, error)."""

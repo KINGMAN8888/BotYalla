@@ -3,6 +3,9 @@ __pycache__/
 *.pyo
 botyalla.db
 botyalla.db-journal
+# ملفات WAL قد تحمل صفحات بيانات حقيقية لم تُدمج بعد في القاعدة
+botyalla.db-wal
+botyalla.db-shm
 uploads/*
 !uploads/.gitkeep
 .env
@@ -10,4 +13,5 @@ venv/
 .venv/
 node_modules/
 *.log
+logs/
 .DS_Store

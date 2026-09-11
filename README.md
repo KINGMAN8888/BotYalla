@@ -286,6 +286,12 @@ The platform loads configuration values from `.env`. An annotated template is av
 | `META_APP_ID` | String | None | Meta app ID used by the WhatsApp Cloud API integration. |
 | `BOTYALLA_DB` | Path | `botyalla.db` | Database file. Test suites set this to a temporary path — **read once at import time**. |
 | `BOTYALLA_UPLOADS` | Path | `./uploads` | Payment-receipt directory. Overridden by tests so fixtures never mix with real receipts. |
+| `BOTYALLA_LOGS` | Path | `./logs` | Rotating log directory (`botyalla.log`, 10 MB × 5). Tests that call `bootstrap()` point it at a temp dir. |
+| `PUBLIC_URL` | URL | None | Canonical origin, e.g. `https://botyalla.com`, used for links sent by email. **Required for password-reset emails** — without it no link is sent, because links are never built from the request's `Host` header. |
+| `SMTP_HOST` / `SMTP_PORT` | String / Integer | None / `587` | Outgoing mail server. Without `SMTP_HOST` and `SMTP_FROM` no email is sent (logged, never an error). |
+| `SMTP_USER` / `SMTP_PASS` | String | None | SMTP credentials. |
+| `SMTP_FROM` | String | None | Sender, e.g. `BotYalla <no-reply@yourdomain.com>`. |
+| `SMTP_TLS` | String | `starttls` | `starttls` (587), `ssl` (465) or `none`. |
 
 > **Never commit real credentials.** `.env` is git-ignored — keep it that way, and never hard-code an admin password inside a tracked file such as a test.
 
