@@ -103,14 +103,15 @@ export function Flashes() {
 }
 
 export default function AppShell({ view, children }) {
-  const [open, setOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [desktopClosed, setDesktopClosed] = useState(false);
 
   useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
-    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.body.style.overflow = mobileOpen ? "hidden" : "";
+    const esc = (e) => { if (e.key === "Escape") setMobileOpen(false); };
     document.addEventListener("keydown", esc);
     return () => { document.removeEventListener("keydown", esc); document.body.style.overflow = ""; };
-  }, [open]);
+  }, [mobileOpen]);
 
   return (
     <>
@@ -122,18 +123,29 @@ export default function AppShell({ view, children }) {
 
       <div className="flex min-h-screen">
         {/* شريط جانبي — ثابت على سطح المكتب */}
-        <aside className="sticky top-0 hidden h-screen w-[252px] shrink-0 flex-col overflow-y-auto
-                          bg-black/25 p-4 backdrop-blur-xl
-                          shadow-[inset_-1px_0_0_rgb(255_255_255/0.07)] lg:flex"
-               aria-label={bi("التنقّل الرئيسي", "Main navigation")}>
-          <SideContent view={view} />
-        </aside>
+        <AnimatePresence initial={false}>
+          {!desktopClosed && (
+            <motion.aside
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 252, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 400, damping: 40 }}
+              className="sticky top-0 hidden h-screen shrink-0 flex-col overflow-y-auto overflow-x-hidden
+                         bg-black/25 backdrop-blur-xl
+                         shadow-[inset_-1px_0_0_rgb(255_255_255/0.07)] lg:flex"
+              aria-label={bi("التنقّل الرئيسي", "Main navigation")}>
+              <div className="flex min-h-full w-[252px] flex-col p-4">
+                <SideContent view={view} />
+              </div>
+            </motion.aside>
+          )}
+        </AnimatePresence>
 
         {/* درج الجوال */}
         <AnimatePresence>
-          {open && (
+          {mobileOpen && (
             <>
-              <motion.div key="scrim" onClick={() => setOpen(false)}
+              <motion.div key="scrim" onClick={() => setMobileOpen(false)}
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="fixed inset-0 z-[190] bg-black/60 backdrop-blur-sm lg:hidden" />
               <motion.aside key="drawer"
@@ -155,11 +167,21 @@ export default function AppShell({ view, children }) {
           <header className="sticky top-0 z-[150] bg-ob-0/70 backdrop-blur-xl backdrop-saturate-150
                              shadow-[inset_0_-1px_0_rgb(255_255_255/0.07)]">
             <div className="flex items-center gap-3 px-5 py-3.5">
-              <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
+              <button type="button" onClick={() => setMobileOpen((o) => !o)} aria-expanded={mobileOpen}
                       aria-label={bi("القائمة", "Menu")}
                       className="grid size-10 shrink-0 place-items-center rounded-xl text-ink
                                  shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
                                  transition-colors hover:bg-white/[0.06] lg:hidden">
+                <span className="relative block h-0.5 w-[18px] rounded bg-current
+                                 before:absolute before:-top-1.5 before:block before:h-0.5 before:w-[18px] before:rounded before:bg-current before:content-['']
+                                 after:absolute after:top-1.5 after:block after:h-0.5 after:w-[18px] after:rounded after:bg-current after:content-['']" />
+              </button>
+
+              <button type="button" onClick={() => setDesktopClosed((c) => !c)} aria-expanded={!desktopClosed}
+                      aria-label={bi("القائمة", "Menu")}
+                      className="hidden size-10 shrink-0 place-items-center rounded-xl text-ink
+                                 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
+                                 transition-colors hover:bg-white/[0.06] lg:grid">
                 <span className="relative block h-0.5 w-[18px] rounded bg-current
                                  before:absolute before:-top-1.5 before:block before:h-0.5 before:w-[18px] before:rounded before:bg-current before:content-['']
                                  after:absolute after:top-1.5 after:block after:h-0.5 after:w-[18px] after:rounded after:bg-current after:content-['']" />
