@@ -1,35 +1,113 @@
 """BotYalla — قاعدة البيانات (SQLite).
 جداول: users (لوحة التحكم)، bots، bot_users (مشتركو كل بوت للبث)،
 leads، orders، bookings، events (للتحليلات)."""
-import sqlite3, json, os, time, logging
+import sqlite3, json, os, time, logging, hmac, hashlib
 from contextlib import contextmanager
+
+# ============================================================================
+#  تشفير توكنات البوتات في القاعدة (Fernet)
+# ============================================================================
+# التوكن مفتاح تشغيل البوت كاملاً — نسخة مسرّبة من القاعدة يجب ألا تسلّم بوتات العملاء.
+# · المفتاح من FERNET_KEY في .env، وإلا ملف `.token.key` يُولَّد مرة بجانب القاعدة
+#   (خارج Git · صلاحية 600 · يُنسخ احتياطياً مع .env). **لا مفتاح مكتوب في الكود.**
+# · Fernet عشوائي: نفس التوكن يُشفَّر كل مرة بنص مختلف، فالبحث بالتوكن (ويبهوك واتساب
+#   بـ`wa:<phone_id>`) ومنع إضافة نفس البوت مرتين يمرّان بفهرس أعمى حتمي
+#   `token_idx` = HMAC-SHA256(التوكن). بدونه يضيع كل وارد واتساب بصمت.
+# · المفتاح الذي كان مكتوباً في الكود سابقاً يُقبل **للقراءة فقط** ويُدوَّر عند التهجير.
+# · فشل فكّ التشفير (مفتاح خاطئ) يُسجَّل ويرجّع توكناً فارغاً — يفشل مغلقاً، فلا يُرسل
+#   نص مشفّر إلى تليجرام على أنه توكن.
 try:
-    from cryptography.fernet import Fernet, InvalidToken
-    FERNET_KEY = os.environ.get("FERNET_KEY", "Ym90eWFsbGEtZGV2LXNlY3JldC1mZXJuZXQta2V5LTE=").encode()
-    _fernet = Fernet(FERNET_KEY)
-except ImportError:
-    _fernet = None
+    from cryptography.fernet import Fernet, MultiFernet, InvalidToken
+except ImportError:          # بيئة بلا المكتبة: التوكنات تبقى كما هي
+    Fernet = MultiFernet = None
     class InvalidToken(Exception): pass
 
+_ENC_PREFIX = "gAAAAA"      # كل رمز Fernet يبدأ بها؛ توكن تليجرام يبدأ بأرقام وواتساب بـ wa:
+_LEGACY_KEY = b"Ym90eWFsbGEtZGV2LXNlY3JldC1mZXJuZXQta2V5LTE="   # كان مكتوباً في الكود — قراءة فقط
+_seclog = logging.getLogger("security")
+_crypto_cache = {}
+
+
+def _key_path():
+    return os.environ.get("BOTYALLA_KEYFILE") or os.path.join(
+        os.path.dirname(os.path.abspath(DB_PATH)), ".token.key")
+
+
+def _load_key():
+    k = (os.environ.get("FERNET_KEY") or "").strip()
+    if k:
+        return k.encode()
+    path = _key_path()
+    try:
+        with open(path, "rb") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        pass
+    key = Fernet.generate_key()
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
+        _seclog.warning("FERNET_KEY is not set — generated %s. Back it up with .env: "
+                        "without it, stored bot tokens cannot be read.", path)
+        return key
+    except FileExistsError:                  # عملية أخرى أنشأته للتو
+        with open(path, "rb") as f:
+            return f.read().strip()
+
+
+def _crypto():
+    """(MultiFernet, Fernet الحالي, مفتاح الفهرس) — يُحمَّل عند أول حاجة لا عند
+    الاستيراد، فيحترم .env الذي يحمّله app.py وقاعدة الاختبار المؤقتة.
+    مفتاح بصيغة فاسدة يرمي هنا عند أول استعمال (init_db) — يفشل عالياً لا بصمت."""
+    if Fernet is None:
+        return None, None, None
+    c = _crypto_cache.get("k")
+    if c is None:
+        key = _load_key()
+        primary = Fernet(key)
+        keys = [primary] + ([Fernet(_LEGACY_KEY)] if key != _LEGACY_KEY else [])
+        idx_key = hashlib.sha256(b"botyalla-token-index\0" + key).digest()
+        c = _crypto_cache["k"] = (MultiFernet(keys), primary, idx_key)
+    return c
+
+
 def _encrypt(token):
-    if not token: return token
-    if _fernet and not token.startswith("gAAAAA"):
-        return _fernet.encrypt(token.encode()).decode()
-    return token
+    if not token:
+        return token
+    multi, _, _ = _crypto()
+    if multi is None or token.startswith(_ENC_PREFIX):
+        return token
+    return multi.encrypt(token.encode()).decode()
+
 
 def _decrypt(token):
-    if not token: return token
-    if _fernet and token.startswith("gAAAAA"):
-        try:
-            return _fernet.decrypt(token.encode()).decode()
-        except InvalidToken:
-            pass
-    return token
+    if not token or not token.startswith(_ENC_PREFIX):
+        return token
+    multi, _, _ = _crypto()
+    if multi is None:
+        return ""
+    try:
+        return multi.decrypt(token.encode()).decode()
+    except InvalidToken:
+        _seclog.error("a bot token could not be decrypted — is FERNET_KEY the key it was stored with?")
+        return ""
+
+
+def _token_idx(token):
+    """فهرس أعمى حتمي: نفس التوكن ← نفس القيمة، ولا يُستخرج منه التوكن."""
+    token = (token or "").strip()
+    _, _, k = _crypto()
+    if not token or k is None:
+        return None
+    return hmac.new(k, token.encode(), hashlib.sha256).hexdigest()
+
 
 def _map_bot(r):
     if not r: return r
     b = dict(r)
     b["token"] = _decrypt(b.get("token", ""))
+    b.pop("token_idx", None)
     return b
 
 # سجل الأحداث المالية (بتّ الدفعات والتفعيل وحرق الأكواد) — يصل ملف السجل عبر root.
@@ -125,14 +203,37 @@ def _migrate(c):
     # لا تشمله، و`business` كانت بلا حدّ للبوتات — فأي ترحيل يسحب من مشتركٍ
     # ميزةً دفع مقابلها. لا صفّ اشتراك أو دفعة يُلمس هنا إطلاقاً.
 
-    # ---- تشفير التوكن (التهجير لمرة واحدة) ----
-    bot_rows = c.execute("SELECT id, token FROM bots").fetchall()
-    for row in bot_rows:
-        tk = row["token"]
-        if tk and not tk.startswith("gAAAAA"):
-            enc = _encrypt(tk)
-            if enc != tk:
-                c.execute("UPDATE bots SET token=? WHERE id=?", (enc, row["id"]))
+    # ---- تشفير التوكن + الفهرس الأعمى (راجع أعلى الملف) ----
+    # كل تشغيل: يُشفَّر ما بقي نصاً، ويُدوَّر ما شُفّر بالمفتاح القديم المكتوب في الكود،
+    # ويُملأ token_idx. الصفوف السليمة لا تُلمس (لا كتابة بلا تغيير).
+    bcols = {r[1] for r in c.execute("PRAGMA table_info(bots)").fetchall()}
+    if "token_idx" not in bcols:
+        c.execute("ALTER TABLE bots ADD COLUMN token_idx TEXT")
+    multi, primary, _ = _crypto()
+    for row in c.execute("SELECT id, token, token_idx FROM bots").fetchall():
+        stored = row["token"] or ""
+        plain = _decrypt(stored)
+        if not plain:
+            continue                       # لم يُفكّ (مفتاح خاطئ) — لا نكتب فوقه أبداً
+        enc = stored
+        if multi is not None:
+            if not stored.startswith(_ENC_PREFIX):
+                enc = _encrypt(plain)
+            else:
+                try:
+                    primary.decrypt(stored.encode())
+                except InvalidToken:
+                    enc = multi.rotate(stored.encode()).decode()   # مفتاح قديم ← الحالي
+        idx = _token_idx(plain)
+        if enc != stored or idx != row["token_idx"]:
+            c.execute("UPDATE bots SET token=?, token_idx=? WHERE id=?", (enc, idx, row["id"]))
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_bots_token_idx ON bots(token_idx) "
+                  "WHERE token_idx IS NOT NULL")
+    except sqlite3.IntegrityError:
+        # قاعدة قديمة فيها نفس التوكن مرتين: البحث يعمل، والتكرار يُمنع عند الإنشاء في التطبيق
+        log.error("duplicate bot tokens found — ix_bots_token_idx created non-unique")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_bots_token_idx_nu ON bots(token_idx)")
 
 def init_db():
     with get_conn() as c:
@@ -160,7 +261,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             owner_id INTEGER NOT NULL,
             name TEXT NOT NULL,
-            token TEXT NOT NULL UNIQUE,
+            token TEXT NOT NULL UNIQUE,          -- مشفّر (Fernet) — لا يُبحث به مباشرة
+            token_idx TEXT,                      -- HMAC للتوكن: البحث ومنع التكرار
             template TEXT NOT NULL,              -- flow | store | booking | customer_service
             config_json TEXT NOT NULL DEFAULT '{}',
             is_active INTEGER NOT NULL DEFAULT 0,
@@ -532,9 +634,10 @@ def count_users():
 # ---------- bots ----------
 def create_bot(owner_id, name, token, template, config, channel="telegram"):
     with get_conn() as c:
-        cur = c.execute("INSERT INTO bots(owner_id,name,token,template,config_json,is_active,created_at,channel)"
-                        " VALUES(?,?,?,?,?,0,?,?)",
-                        (owner_id, name, _encrypt(token.strip()), template,
+        # token_idx فريد: إضافة نفس البوت مرتين ترمي IntegrityError كما كانت قبل التشفير
+        cur = c.execute("INSERT INTO bots(owner_id,name,token,token_idx,template,config_json,"
+                        "is_active,created_at,channel) VALUES(?,?,?,?,?,?,0,?,?)",
+                        (owner_id, name, _encrypt(token.strip()), _token_idx(token), template,
                          json.dumps(config, ensure_ascii=False), int(time.time()), channel))
         return cur.lastrowid
 
@@ -1489,9 +1592,15 @@ def purge_stale_chat_state(max_age_seconds=7 * 24 * 3600):
         return cur.rowcount
 
 def get_bot_by_token(token):
+    """البحث بالتوكن (ويبهوك واتساب: wa:<phone_id>) عبر الفهرس الأعمى — التوكن نفسه
+    مخزّن مشفّراً بنص عشوائي فلا يطابقه `WHERE token=?`."""
+    idx = _token_idx(token)
     with get_conn() as c:
-        r = c.execute("SELECT * FROM bots WHERE token=?", (token,)).fetchone()
-        return dict(r) if r else None
+        if idx:
+            r = c.execute("SELECT * FROM bots WHERE token_idx=?", (idx,)).fetchone()
+        else:
+            r = c.execute("SELECT * FROM bots WHERE token=?", (token,)).fetchone()
+        return _map_bot(r) if r else None
 
 # ---------- استهلاك الرسائل (واتساب مدفوع لكل رسالة) ----------
 def _month():
@@ -1676,7 +1785,8 @@ def purge_seen_msgs(max_age_seconds=3 * 24 * 3600):
 def update_bot_token(bot_id, token):
     """توكن جديد لبوت قائم — تليجرام يدوّره (replaceManagedBotToken) ولا يتغيّر البوت."""
     with get_conn() as c:
-        c.execute("UPDATE bots SET token=? WHERE id=?", (token.strip(), bot_id))
+        c.execute("UPDATE bots SET token=?, token_idx=? WHERE id=?",
+                  (_encrypt(token.strip()), _token_idx(token), bot_id))
 
 
 def bot_by_tg_id(tg_bot_id):
@@ -1684,7 +1794,7 @@ def bot_by_tg_id(tg_bot_id):
     with get_conn() as c:
         r = c.execute("SELECT * FROM bots WHERE json_extract(config_json,'$.tg_bot_id')=? "
                       "ORDER BY id LIMIT 1", (int(tg_bot_id),)).fetchone()
-        return dict(r) if r else None
+        return _map_bot(r) if r else None
 
 
 # ============================================================================

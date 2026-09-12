@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  BotYalla — نشر الإنتاج على سيرفر Hostinger
+#  BotYalla — Production Deployment on Hostinger VPS
 #
-#  التشغيل على السيرفر (كـ root):
-#     bash hostinger_deploy.sh                 # أول نشر بلا دومين (عبر IP)
-#     bash hostinger_deploy.sh botyalla.com    # مع دومين + HTTPS
-#     bash hostinger_deploy.sh --update        # تحديث فقط (سحب + بناء + إعادة تشغيل)
+#  Run on the server (as root):
+#     bash hostinger_deploy.sh                 # Initial deployment without domain (via IP)
+#     bash hostinger_deploy.sh botyalla.com    # With domain + HTTPS
+#     bash hostinger_deploy.sh --update        # Update only (pull + build + restart)
 #
-#  آمن للتكرار: تشغيله مرتين لا يكسر شيئاً ولا يعيد توليد الأسرار.
+#  Idempotent: Running it twice breaks nothing and doesn't regenerate secrets.
 # ============================================================================
 set -euo pipefail
 
@@ -30,26 +30,26 @@ log()  { echo -e "\n\033[1;36m▸ $*\033[0m"; }
 warn() { echo -e "\033[1;33m  ! $*\033[0m"; }
 die()  { echo -e "\033[1;31m✗ $*\033[0m" >&2; exit 1; }
 
-[[ $EUID -eq 0 ]] || die "شغّل السكربت كـ root"
+[[ $EUID -eq 0 ]] || die "Run this script as root"
 
-# ---------------------------------------------------------------- 1) الحزم
+# ---------------------------------------------------------------- 1) Packages
 if [[ $UPDATE_ONLY -eq 0 ]]; then
-  log "[1/9] تثبيت الحزم"
+  log "[1/9] Installing packages"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   apt-get install -y python3 python3-venv python3-pip nginx git curl sqlite3 ufw fail2ban
-  # OCR اختياري: يفحص المبلغ داخل صورة الإيصال
-  apt-get install -y tesseract-ocr tesseract-ocr-ara || warn "تعذّر تثبيت OCR — الفحص اليدوي يبقى شغّالاً"
+  # OCR is optional: extracts amount from receipt image
+  apt-get install -y tesseract-ocr tesseract-ocr-ara || warn "Could not install OCR — manual check remains available"
 
-  # Node مطلوب لبناء الواجهة. لو فشل التثبيت نعتمد على static/dist المرفوع مع الكود.
+  # Node is required for frontend build. If installation fails, we rely on uploaded static/dist.
   if ! command -v node >/dev/null 2>&1; then
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - || true
-    apt-get install -y nodejs || warn "تعذّر تثبيت Node — سنستخدم static/dist المرفوع"
+    apt-get install -y nodejs || warn "Could not install Node — we will use the uploaded static/dist"
   fi
 fi
 
-# ------------------------------------------------------- 2) المستخدم والكود
-log "[2/9] المستخدم والكود"
+# ------------------------------------------------------- 2) User and Source Code
+log "[2/9] User and Source Code"
 id -u "$SVC_USER" &>/dev/null || useradd -r -m -d "$APP_DIR" -s /usr/sbin/nologin "$SVC_USER"
 
 if [[ -d "$APP_DIR/.git" ]]; then
@@ -57,7 +57,7 @@ if [[ -d "$APP_DIR/.git" ]]; then
   git -C "$APP_DIR" reset --hard "origin/$BRANCH"
 else
   mkdir -p "$APP_DIR"
-  # لو المجلد غير فارغ (نشر يدوي سابق) نستنسخ في مسار مؤقت وننقل .git فقط
+  # If directory is not empty (previous manual deploy), clone to a temp dir and copy .git only
   if [[ -n "$(ls -A "$APP_DIR" 2>/dev/null)" ]]; then
     tmp="$(mktemp -d)"
     git clone --branch "$BRANCH" --depth 1 "$REPO" "$tmp/src"
@@ -70,20 +70,20 @@ else
 fi
 mkdir -p "$APP_DIR/uploads" /var/log/botyalla
 
-# ------------------------------------------------------------ 3) بايثون
-log "[3/9] البيئة الافتراضية"
+# ------------------------------------------------------------ 3) Python
+log "[3/9] Virtual Environment"
 [[ -d "$APP_DIR/venv" ]] || python3 -m venv "$APP_DIR/venv"
 "$APP_DIR/venv/bin/pip" install --quiet --upgrade pip
 "$APP_DIR/venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
 "$APP_DIR/venv/bin/pip" install --quiet pytesseract Pillow || true
 
-# ------------------------------------------------------------ 4) الأسرار
-log "[4/9] ملف البيئة"
+# ------------------------------------------------------------ 4) Secrets
+log "[4/9] Environment File"
 if [[ ! -f "$APP_DIR/.env" ]]; then
   SECRET="$("$APP_DIR/venv/bin/python" -c 'import secrets;print(secrets.token_hex(32))')"
-  # كلمة مرور أدمن عشوائية — لا قيمة افتراضية معروفة إطلاقاً
+  # Random admin password — no known default value at all
   ADMPASS="$("$APP_DIR/venv/bin/python" -c 'import secrets;print(secrets.token_urlsafe(14))')"
-  # بلا دومين نصل عبر http، وكوكي Secure لن يُرسَل أصلاً فيفشل الدخول صامتاً.
+  # Without a domain we access via http, and Secure cookie won't be sent so login would fail silently.
   if [[ -n "$DOMAIN" ]]; then COOKIE=1; else COOKIE=0; fi
   cat > "$APP_DIR/.env" <<ENV
 FLASK_SECRET=$SECRET
@@ -94,29 +94,29 @@ ENV
   NEW_CREDS=1
 else
   NEW_CREDS=0
-  # ارفع COOKIE_SECURE تلقائياً عند إضافة دومين لاحقاً
+  # Automatically upgrade COOKIE_SECURE when adding a domain later
   if [[ -n "$DOMAIN" ]] && grep -q '^COOKIE_SECURE=0' "$APP_DIR/.env"; then
     sed -i 's/^COOKIE_SECURE=0/COOKIE_SECURE=1/' "$APP_DIR/.env"
-    warn "تم رفع COOKIE_SECURE إلى 1 (دومين + HTTPS)"
+    warn "Upgraded COOKIE_SECURE to 1 (Domain + HTTPS)"
   fi
 fi
 chmod 600 "$APP_DIR/.env"
 
-# ------------------------------------------------------------ 5) الواجهة
-log "[5/9] بناء الواجهة"
+# ------------------------------------------------------------ 5) Frontend
+log "[5/9] Building Frontend"
 if command -v npm >/dev/null 2>&1; then
   ( cd "$APP_DIR/frontend" && npm ci --silent && npm run build --silent ) \
-    && echo "  ✓ تم بناء الواجهة" \
-    || warn "فشل البناء — سنستخدم static/dist المرفوع مع الكود"
+    && echo "  ✓ Frontend built successfully" \
+    || warn "Build failed — we will use the uploaded static/dist"
 else
-  echo "  ✓ Node غير متاح — نستخدم static/dist المرفوع مع الكود"
+  echo "  ✓ Node is not available — using the uploaded static/dist"
 fi
-[[ -f "$APP_DIR/static/dist/console.js" ]] || die "static/dist مفقود — الواجهة لن تعمل"
+[[ -f "$APP_DIR/static/dist/console.js" ]] || die "static/dist is missing — the frontend will not work"
 
 chown -R "$SVC_USER:$SVC_USER" "$APP_DIR" /var/log/botyalla
 
-# ------------------------------------------------------------ 6) الخدمة
-log "[6/9] خدمة systemd"
+# ------------------------------------------------------------ 6) Systemd Service
+log "[6/9] systemd service"
 cp "$APP_DIR/deploy/botyalla.service" /etc/systemd/system/botyalla.service
 systemctl daemon-reload
 systemctl enable --quiet botyalla
@@ -132,53 +132,53 @@ ln -sf /etc/nginx/sites-available/botyalla /etc/nginx/sites-enabled/botyalla
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 
-# ------------------------------------------- 8) الجدار الناري والنسخ الاحتياطي
+# ------------------------------------------- 8) Firewall and Backups
 if [[ $UPDATE_ONLY -eq 0 ]]; then
-  log "[8/9] الجدار الناري والنسخ الاحتياطي"
+  log "[8/9] Firewall and Backups"
   ufw allow OpenSSH >/dev/null 2>&1 || true
   ufw allow 'Nginx Full' >/dev/null 2>&1 || true
-  ufw --force enable >/dev/null 2>&1 || warn "تعذّر تفعيل ufw"
+  ufw --force enable >/dev/null 2>&1 || warn "Could not enable ufw"
   systemctl enable --now fail2ban >/dev/null 2>&1 || true
 
   chmod +x "$APP_DIR/deploy/backup.sh"
   cat > /etc/cron.d/botyalla-backup <<'CRON'
-# نسخة احتياطية يومية 3 صباحاً
+# Daily backup at 3 AM
 0 3 * * * root /opt/botyalla/deploy/backup.sh >> /var/log/botyalla/backup.log 2>&1
 CRON
   "$APP_DIR/deploy/backup.sh" >/dev/null 2>&1 || true
 fi
 
-# ------------------------------------------------------------ 9) التحقق
-log "[9/9] التحقق"
+# ------------------------------------------------------------ 9) Verification
+log "[9/9] Verification"
 sleep 3
 HEALTH="$(curl -fsS -m 10 http://127.0.0.1:8000/healthz 2>/dev/null || echo FAIL)"
 if [[ "$HEALTH" == *'"ok": true'* || "$HEALTH" == *'"ok":true'* ]]; then
-  echo "  ✓ التطبيق يستجيب والقاعدة تعمل"
+  echo "  ✓ Application is responding and database is working"
 else
-  echo "  ✗ الفحص الصحّي فشل — آخر السجلات:"
+  echo "  ✗ Health check failed — latest logs:"
   journalctl -u botyalla -n 30 --no-pager
-  die "النشر لم يكتمل"
+  die "Deployment incomplete"
 fi
 
 if [[ -n "$DOMAIN" ]]; then
   log "HTTPS"
   apt-get install -y certbot python3-certbot-nginx >/dev/null 2>&1 || true
-  echo "  شغّل الآن:  certbot --nginx -d $DOMAIN -d www.$DOMAIN"
-  echo "  ثم فعّل سطر HSTS في /etc/nginx/sites-available/botyalla وأعد تحميل nginx"
+  echo "  Run this now:  certbot --nginx -d $DOMAIN -d www.$DOMAIN"
+  echo "  Then uncomment the HSTS line in /etc/nginx/sites-available/botyalla and reload nginx"
 fi
 
 echo ""
 echo "============================================================"
-echo "  ✅ تم النشر"
-echo "  العنوان : http://${DOMAIN:-$(hostname -I | awk '{print $1}')}/"
+echo "  ✅ Deployment completed"
+echo "  URL : http://${DOMAIN:-$(hostname -I | awk '{print $1}')}/"
 if [[ "${NEW_CREDS:-0}" -eq 1 ]]; then
   echo ""
-  echo "  🔐 بيانات الدخول (تظهر مرة واحدة فقط — احفظها الآن):"
-  echo "     المستخدم : admin"
-  echo "     كلمة المرور: $(grep '^ADMIN_PASS=' "$APP_DIR/.env" | cut -d= -f2-)"
-  echo "     غيّرها فوراً من صفحة «حسابي»."
+  echo "  🔐 Login credentials (displayed only once — save them now):"
+  echo "     Username : admin"
+  echo "     Password: $(grep '^ADMIN_PASS=' "$APP_DIR/.env" | cut -d= -f2-)"
+  echo "     Change it immediately from the 'My Account' page."
 fi
 echo ""
-echo "  السجلات : journalctl -u botyalla -f"
-echo "  التحديث : bash $APP_DIR/deploy/hostinger_deploy.sh --update"
+echo "  Logs   : journalctl -u botyalla -f"
+echo "  Update : bash $APP_DIR/deploy/hostinger_deploy.sh --update"
 echo "============================================================"

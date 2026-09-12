@@ -34,12 +34,17 @@
 | `flow_engine.py` | محرك المحادثات العام (No-Code) + `send_intro` + التكامل الرسمي مع تليجرام (`configure_bot_profile`) في `tg_helpers` |
 | `templates_bot.py` | قوالب البوتات: `build_flow` / `build_store` / `build_booking` / `build_menu` + `PRESET_FLOWS` + `TEMPLATES` |
 | `tg_helpers.py` | التحقق من التوكن (getMe) + ربط الأدمن + أوامر مشتركة + `configure_bot_profile`/`setMy*` |
-| `ai_agent.py` | وكيل الـ AI (Gemini/Groq) + مولّد احتياطي. يُستدعى بمفتاح **المنصة** فقط |
+| `ai_agent.py` | وكيل الإعداد (`setup_step`) + «عقل البوت» (`brain_reply`) + مصمّم احتياطي بلا مفتاح. Gemini/Groq بمفتاح **المنصة** فقط |
+| `managed_bots.py` | إنشاء بوت تليجرام بضغطة (Managed Bots): رابط لمرة واحدة ← زر الإنشاء ← `getManagedBotToken` ← صفّ البوت |
+| `asset_store.py` | مكتبة وسائط صاحب النشاط: فحص البايتات والحدود والحصة + جلب الروابط بحماية SSRF |
 | `i18n.py` | قاموس الترجمة عربي/إنجليزي + `t()` |
 | `icons.py` | مجموعة أيقونات SVG (خطية). `icon('name', size)` |
 
 ## 2) قاعدة البيانات (جداول SQLite)
-`users` · `settings` · `bots` · `bot_users` · `leads` · `orders` · `bookings` · `subscriptions` · `payments` · `platform` · `bot_requests` · `events` · `chat_state` · `usage_msgs` · `seen_msgs` · `media` · `plan_overrides` · `promos` · `promo_uses` · `affiliates` · `referrals` · `reminder_log` · `password_resets`
+`users` · `settings` · `bots` · `bot_users` · `leads` · `orders` · `bookings` · `subscriptions` · `payments` · `platform` · `bot_requests` · `events` · `chat_state` · `usage_msgs` · `seen_msgs` · `media` · `plan_overrides` · `promos` · `promo_uses` · `affiliates` · `referrals` · `reminder_log` · `password_resets` · `managed_bot_requests` · `messages` · `conversations` · `ai_setup_sessions` · `bot_config_versions` · `ai_usage` · `assets` · `asset_refs`
+
+- **`messages` / `conversations`**: صندوق الوارد — كل رسالة واردة وصادرة، ووضع كل محادثة (`bot` | `human`). تُحذف بعد 12 شهراً (`purge_old_messages`).
+- **`assets` / `asset_refs`**: وسائط صاحب النشاط (`uploads/assets/`) ومرجعها لدى كل قناة (`file_id` تليجرام · `media_id` واتساب المنتهي بعد 30 يوماً).
 
 - **`chat_state`**: موضع كل عميل في الفلو. **لا تُعِد حالة المحادثة إلى `ctx.user_data`** — الذاكرة تضيع مع كل إعادة تشغيل، وواتساب بلا حالة أصلاً.
 - **`usage_msgs`**: عدّاد الرسائل الشهري لكل بوت. **`seen_msgs`**: منع تكرار معالجة ويبهوك واتساب.
@@ -86,6 +91,12 @@
 25. **الموقع العام عبر `_render_public` وحده.** كل صفحة عامة (`/` · السياسات · 404) تُرسم بـ`templates_web/public.html` عبر `_render_public(payload, _seo(...))`: وسوم SEO كاملة، ومحتوى مرسوم في الخادم يُفهرَس ويُقرأ بلا جافاسكربت، وبيانات منظّمة عبر `_js_json` وبـnonce. الروابط المطلقة (canonical · og · sitemap · رابط الأفيليت) من `_site_base()` لا من `url_for(_external=True)`. **`/` هي الصفحة العامة للجميع واللوحة على `/dashboard`** — لا تُعِد `/` إلى اللوحة. الأسعار المعروضة من `priced_plans` نفسها لا أرقام في الواجهة — `tests/test_public_site.py`.
 26. **لا دليل اجتماعي مختلق.** لا شهادات عملاء ولا أعداد مستخدمين ولا شعارات شركات غير حقيقية في الموقع. «الأرقام» الظاهرة حقائق عن المنتج (7 قوالب · قناتان · 3 وسائل دفع · خصم 30% · باقة مجانية). أضِف شهادة فقط حين تكون من عميل حقيقي وبموافقته.
 27. **النصوص القانونية في `legal_content.py`** بعناصر نائبة (`{email}` · `{whatsapp}` · `{updated}` · `{site}`) تُملأ عند العرض. أي تعديل فيها يحدّث `LEGAL_UPDATED` في app.py. ولا تكتب فيها وعداً لا تنفّذه المنصة فعلاً — هي تصف ما يحدث في الكود.
+28. **صندوق الوارد: كل رسالة تُسجَّل، وصاحب النشاط يتقدّم على الجميع.** المحرك يرسل عبر `flow_engine.LoggedChannel` لا القناة الخام، والوارد يُسجَّل أول سطر في `handle_message`. محادثة `conversations.mode='human'` لا يرد فيها فلو ولا ذكاء اصطناعي (`human_active`، عودة تلقائية بعد `HUMAN_IDLE`)؛ قوالب تليجرام غير الفلو يحرسها `_register_inbox_guard`. رد صاحب النشاط: `_inbox_peer` (عميل راسل **هذا** البوت) ← نافذة واتساب 24 ساعة ← `manager.send_to_peer` — `tests/test_inbox_brain.py`.
+29. **«عقل البوت» لا يرد بلا رصيد، ولا يحدّد سعراً.** كل رد يحجز عبر `db.ai_reply_allow` (الحصة الشهرية ثم المحفظة بالقروش، في معاملة واحدة) **بعد** نجاح التوليد و**قبل** الإرسال — فشل المزوّد لا يُحتسب، ورد بلا حجز لا يُرسل، وأي تعذّر يعيد العميل للفلو. الأدوات تمرّ بـ`_clean_action` ثم تُنفَّذ في `_ai_action`؛ مجموع الطلب من `cfg.products` لا من النموذج. التفعيل يشترط موافقة صريحة (`ai_consent_at`)، والاستدعاء في `asyncio.to_thread` — لا طلب شبكة متزامن داخل حلقة البوتات.
+30. **وكيل الإعداد لا يكتب قبل «تطبيق».** الجلسة تقترح فقط؛ التطبيق ذرّي (`close_setup_session`) ويحفظ الإعداد السابق بـ`save_config_version`، والاسترجاع لا يعيد الحقول التشغيلية (ربط المالك · التوكنات · هوية البوت). مخرجات النموذج تمرّ بـ`_coerce_config` و`_no_echo` — `tests/test_setup_agent.py`.
+31. **مكتبة الوسائط عبر `asset_store` وحده.** النوع من البايتات، والحدود أضيق القناتين (صورة 5MB · فيديو MP4 16MB)، والمساحة من `plans.asset_bytes_limit`. جلب رابط عبر `fetch_url` وحده (https:443 · العنوان يُحلّ ويُفحص ثم يُتصل به هو · كل تحويل يُفحص). الملفات خارج `static/` وتُقدَّم عبر `/assets/<id>` بالملكية في الاستعلام، وأي معرّف ملف يُحفظ في إعدادات بوت يمرّ بـ`_own_asset_id`.
+32. **الإنشاء بضغطة (Managed Bots) لا يُنشئ بلا طلب مربوط.** الكود لمرة واحدة ويُخزَّن تجزئةً (`token_hash`)، والربط ذرّي (`link_managed_request`) والإنشاء مرة واحدة (`claim_managed_request`)، وحدّ الباقة يُفحص عند إصدار الرابط **وعند** الإنشاء. داخل حلقة المدير استعمل `start_bot_async`/`restart_bot_async` — `start_bot` يستدعي `_submit` فينتظر الحلقة نفسها ويتجمّد.
+33. **توكنات البوتات مشفّرة (Fernet) — ابحث بالفهرس لا بالنص.** اقرأ صفوف `bots` عبر دوال `database` التي تمرّ بـ`_map_bot`، وابحث بالتوكن عبر `get_bot_by_token` (`token_idx` = HMAC) — `WHERE token=?` لا يطابق نصاً عشوائياً أبداً (هكذا ضاع وارد واتساب في أول نسخة). أي كتابة لتوكن تحدّث `token` و`token_idx` معاً. المفتاح `FERNET_KEY` أو `.token.key` بجانب القاعدة — لا يُكتب في الكود، ويُنسخ احتياطياً. توكن تليجرام لا يصل للمتصفح: كل حمولة صفحة تمرّر `_public_bot(b)` — `tests/test_token_crypto.py`.
 
 ---
 

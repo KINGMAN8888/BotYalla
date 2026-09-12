@@ -362,8 +362,13 @@ async def handle_message(bot_row, channel, msg):
             db.log_event(bot_id, f"src_{src}")
 
     mode = _mode_of(bot_row, cfg)
-    if mode == "ai" and await _ai_mode(bot_row, cfg, raw, channel, peer, msg, f):
-        return
+    ai_down = False
+    if mode == "ai":
+        if await _ai_mode(bot_row, cfg, raw, channel, peer, msg, f):
+            return
+        # الذكاء الاصطناعي لم يرد (لا مفتاح · نفدت الحصة والرصيد · تعطّل المزوّد):
+        # العميل لم يمرّ بالفلو قط، فالفلو يبدأ معه — لا «أرسل /start».
+        ai_down = True
 
     if msg["kind"] == "cancel":
         db.clear_chat_state(bot_id, peer)
@@ -384,7 +389,7 @@ async def handle_message(bot_row, channel, msg):
             return await _on_input(bot_row, channel, peer, f, steps, state, msg, mode, raw, cfg)
         # لا حالة محفوظة. أول تفاعل → نبدأ الفلو. أما من أنهى الفلو من قبل
         # فلا نعيد تشغيله عليه لمجرد أنه كتب «شكراً» — نذكّره كيف يبدأ.
-        if db.bot_user_exists(bot_id, peer):
+        if db.bot_user_exists(bot_id, peer) and not ai_down:
             db.touch_bot_user(bot_id, peer)
             word = _restart_word(bot_row)
             # الوضع الهجين: سؤال حرّ بعد انتهاء الفلو يجيبه الذكاء الاصطناعي
@@ -461,10 +466,12 @@ async def _ai_mode(bot_row, cfg, raw, channel, peer, msg, f):
     if db.get_chat_state(bot_id, peer):
         return False                  # عميل في منتصف فلو قديم — يكمله الفلو
     first = not db.bot_user_exists(bot_id, peer)
+    if not await _ai_answer(bot_row, cfg, raw, peer, msg.get("text", "")):
+        return False                  # لا تسجيل هنا — الفلو يسجّله ويحتسب بدايته مرة واحدة
     db.add_bot_user(bot_id, _peer_num(peer), msg.get("name", ""), peer=peer)
     if first:
         db.log_event(bot_id, "start")
-    return await _ai_answer(bot_row, cfg, raw, peer, msg.get("text", ""))
+    return True
 
 
 def _waits(step):

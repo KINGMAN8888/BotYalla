@@ -1,6 +1,6 @@
 # BotYalla — Tester Feedback: Problems, Root Causes & Implementation Plan
 
-> **Status:** plan only — no code has been changed.
+> **Status:** ✅ implemented (2026-09-12) — see [§10 Implementation status](#10-implementation-status) at the end.
 > **Date:** 2026-09-12
 > **Source:** a first-time, non-technical tester built a Telegram bot for a made-to-measure clothing shop ("محل ملابس", template *customer_service*, **free plan**), used the free AI setup, and shared the bot with a customer.
 > **Read with:** [AGENTS.md](../AGENTS.md) (invariants every change must respect) · [REVIEW.md](../REVIEW.md) · [business/LAUNCH_READINESS.md](../business/LAUNCH_READINESS.md)
@@ -327,3 +327,22 @@ Non-media file disguised as `.jpg` rejected; oversize per channel rejected with 
 - [python-telegram-bot changelog (v22.8: API 9.6 & 10.0)](https://docs.python-telegram-bot.org/en/stable/changelog.html)
 - [WhatsApp Cloud API — Interactive reply buttons messages (media headers)](https://developers.facebook.com/docs/whatsapp/cloud-api/messages/interactive-reply-buttons-messages/)
 - [WhatsApp Cloud API — Media (supported types & sizes)](https://developers.facebook.com/documentation/business-messaging/whatsapp/business-phone-numbers/media)
+
+---
+
+## 10) Implementation status
+
+| # | Item | Where | Tests |
+|---|---|---|---|
+| 1 | One-tap / QR creation (Managed Bots): one-time hashed link → platform bot → native `request_managed_bot` button + `t.me/newbot` fallback → `managed_bot` update → `getManagedBotToken` → bot row, profile sync, auto-start, owner linked. Plan limit re-checked at creation; claim-once lock; token-rotation updates; unknown Telegram users create nothing. Works on PTB 21.6 (`api_kwargs` + `do_api_request`) and 22.8 (typed objects). | `managed_bots.py`, `platform_bot.py`, `bot_manager.py`, `app.py` (`/bot/create/managed`), Dashboard one-tap card | `tests/test_managed_media.py` |
+| 2 | "Your bot is live" card: open · copy · share · QR (server SVG, `segno`) · printable A4 poster · QR download; per-source `start` payloads counted in Analytics; creation lands on the bot page; onboarding "try it" opens the bot. | `app.py` (`_bot_links`, `/qr.svg`, `/poster`), `templates_web/poster.html`, BotDetail, Analytics | `tests/test_managed_media.py::LinksTests` |
+| 3 | Setup Agent: multi-turn, ≤3 questions × 2 rounds, JSON-validated design, repair pass, no-echo guard, live chat preview + before/after diff, apply on approval, config versions + restore. Offline designer (no key / provider down) recognises 7 business types and designs per answers. Free plan gets the real agent with a 3-session quota. | `ai_agent.py`, `app.py` (`/ai/session*`, `/config/restore`), BotDetail | `tests/test_setup_agent.py` |
+| 4 | Response modes Flow · Hybrid · AI Brain (paid, labelled «يمكن تطبيقه في البوت المخصص»): grounded in a per-bot knowledge base, validated tools (lead · server-priced order · handoff · notify · product photo), monthly allowance then wallet (atomic), automatic fallback to the flow, explicit owner consent, privacy/terms updated. | `flow_engine.py`, `ai_agent.brain_reply`, `database.ai_reply_allow`, `app.py` (`/brain`), BotDetail | `tests/test_inbox_brain.py::BrainTests` |
+| 5 | Inbox + human takeover: `messages`/`conversations` tables, every in/out message logged, «محادثة» button on every customer row, take over / hand back, 12 h auto-return, one alert per unread burst, WhatsApp 24 h window enforced, free plan read-only, 12-month retention purge. | `database.py`, `flow_engine.py`, `bot_manager.py`, `app.py` (`/inbox*`), Inbox view | `tests/test_inbox_brain.py` |
+| 6 | Media Library: upload from device (drag & drop) or link (SSRF-pinned fetch), magic-byte sniffing, WhatsApp-safe limits, per-plan storage quota; used in welcome, products, new "show media" flow step (with buttons = interactive video), campaigns and inbox replies; Telegram `file_id` / WhatsApp `media_id` cached per bot. | `asset_store.py`, `channels/*.send_media`, `app.py` (`/media`, `/api/assets*`), media.jsx | `tests/test_managed_media.py::AssetsTests` |
+| — | Bot tokens encrypted at rest (Fernet) with a deterministic HMAC blind index (`token_idx`) for WhatsApp lookups and duplicate detection; key from `FERNET_KEY` or an auto-generated `.token.key` (git-ignored, backed up); legacy hard-coded key read-only and rotated away; Telegram tokens no longer sent to the browser. | `database.py`, `app.py` (`_public_bot`), `deploy/backup.sh` | `tests/test_token_crypto.py` |
+
+**Not done / deliberately deferred**
+- WhatsApp Embedded Signup (§1.6) — needs Meta Tech Provider approval (LAUNCH_READINESS L-12).
+- Telegram streaming replies (`sendMessageDraft`) — the typing indicator is used instead; add when replies get long.
+- Outbound logging for the PTB-native store/booking/FAQ templates on Telegram: their inbound messages and takeover are handled (group −1 guard); the canned replies they send are not yet mirrored in the inbox.

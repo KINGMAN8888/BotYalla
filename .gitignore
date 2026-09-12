@@ -9,6 +9,8 @@ botyalla.db-shm
 uploads/*
 !uploads/.gitkeep
 .env
+# مفتاح تشفير توكنات البوتات (يُولَّد تلقائياً لو FERNET_KEY غير مضبوط) — سرّ، لا يُرفع أبداً
+.token.key
 venv/
 .venv/
 node_modules/

@@ -167,10 +167,12 @@ function AiAgent({ bot, ai }) {
   const [more, setMore] = useState("");
   const [res, setRes] = useState(null);
   const [err, setErr] = useState(null);
-  const s = ai.setups || {};
+  const [used, setUsed] = useState((ai.setups || {}).used || 0);
+  const s = { ...(ai.setups || {}), used };
 
   function take(d) {
     if (!d.ok) { setErr(d); setStage(sid ? "questions" : "idle"); return; }
+    if (!sid) setUsed((n) => n + 1);          // جلسة جديدة احتُسبت من الحصة
     setErr(null); setSid(d.sid);
     if (d.status === "questions") { setQs(d.questions); setAnswers(d.questions.map(() => "")); setMore(""); setStage("questions"); }
     else { setRes(d); setStage("proposal"); }

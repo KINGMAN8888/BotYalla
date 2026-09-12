@@ -54,8 +54,9 @@ class Base(unittest.TestCase):
         db.init_db()
         with db.get_conn() as c:
             c.execute("INSERT OR IGNORE INTO users(id,username,pw_hash,role,created_at) VALUES(1,'root','x','admin',0)")
-            c.execute("INSERT INTO users(username,pw_hash,role,created_at) VALUES('owner','x','user',0)")
-            c.execute("INSERT INTO users(username,pw_hash,role,created_at) VALUES('other','x','user',0)")
+            # الفئات تتشارك قاعدة الملف — الإعداد متكرّر الأمان
+            c.execute("INSERT OR IGNORE INTO users(username,pw_hash,role,created_at) VALUES('owner','x','user',0)")
+            c.execute("INSERT OR IGNORE INTO users(username,pw_hash,role,created_at) VALUES('other','x','user',0)")
         cls.uid = db.get_user_by_name("owner")["id"]
         cls.other = db.get_user_by_name("other")["id"]
         cls.c = cls.client(cls.uid)

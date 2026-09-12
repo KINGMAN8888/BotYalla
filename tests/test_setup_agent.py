@@ -156,6 +156,11 @@ class RoutesTests(unittest.TestCase):
             {"ok": True, "result": {"id": 1, "username": "raghad_bot", "first_name": "R"}})
         tg._tg_post = lambda *a, **k: (True, "OK")
         db.init_db()
+        # أول مستخدم في القاعدة يصير admin (بلا حدود) — نحجز المعرّف 1 حتى يكون
+        # مستخدم الاختبار عميلاً عادياً تسري عليه حصة الباقة المجانية.
+        with db.get_conn() as c:
+            c.execute("INSERT OR IGNORE INTO users(id,username,pw_hash,role,created_at) "
+                      "VALUES(1,'root','x','admin',0)")
         cls.c = A.app.test_client()
         cls.c.get("/register")
         cls.c.post("/register", data={"username": "agentuser", "password": "secret123", "csrf_token": cls.tk()})

@@ -39,13 +39,15 @@ class Base(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         db.init_db()
+        # الفئات تتشارك قاعدة الملف — الإعداد يجب أن يكون متكرّر الأمان
         with db.get_conn() as c:
             c.execute("INSERT OR IGNORE INTO users(id,username,pw_hash,role,created_at) VALUES(1,'root','x','admin',0)")
-            c.execute("INSERT INTO users(username,pw_hash,role,created_at) VALUES('shop','x','user',0)")
+            c.execute("INSERT OR IGNORE INTO users(username,pw_hash,role,created_at) VALUES('shop','x','user',0)")
         cls.owner = db.get_user_by_name("shop")["id"]
-        cls.bid = db.create_bot(cls.owner, "shop", "tk-inbox", "customer_service",
-                                {"business_name": "رغد", "flow": FLOW,
-                                 "products": [{"name": "فستان سهرة", "price": 1500}]})
+        mine = [b for b in db.list_bots(cls.owner) if b["name"] == "shop"]
+        cls.bid = mine[0]["id"] if mine else db.create_bot(
+            cls.owner, "shop", "tk-inbox", "customer_service",
+            {"business_name": "رغد", "flow": FLOW, "products": [{"name": "فستان سهرة", "price": 1500}]})
 
     def setUp(self):
         self.ch = Mock()
@@ -128,6 +130,8 @@ class InboxRouteTests(Base):
         return self.c.post(url, json=body, headers={"X-CSRF-Token": "c" * 32})
 
     def test_free_plan_reads_but_cannot_reply(self):
+        with db.get_conn() as c:                     # فئات أخرى فعّلت باقة مدفوعة
+            c.execute("DELETE FROM subscriptions WHERE user_id=?", (self.owner,))
         self.assertEqual(self.c.get(f"/bot/{self.bid}/inbox").status_code, 200)
         r = self.post(f"/bot/{self.bid}/inbox/send", {"peer": "tg:77", "text": "أهلاً"})
         self.assertEqual(r.status_code, 403)

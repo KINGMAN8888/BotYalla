@@ -562,7 +562,7 @@ def dashboard():
     wa_ok = current_role() in ("admin", "support") or bool(plans.plan(plan_id).get("whatsapp"))
     info = manager.platform_info()
     return react_page("dashboard", "nav_bots",
-                      {"bots": bots, "total": total, "waAllowed": wa_ok,
+                      {"bots": [_public_bot(b) for b in bots], "total": total, "waAllowed": wa_ok,
                        "onboarding": _onboarding(bots),
                        # الإنشاء بضغطة متاح فقط لو بوت المنصة يعمل وفيه «وضع إدارة البوتات»
                        "oneTap": {"available": bool(info.get("username") and info.get("can_manage")),
@@ -622,6 +622,15 @@ def _greeting_set(b, cfg):
 def _owned(bot_id):
     b = db.get_bot(bot_id, uid())
     if not b: abort(404)
+    return b
+
+def _public_bot(b):
+    """نسخة من صفّ البوت صالحة لحمولة الصفحة: توكن تليجرام سرّ تشغيل البوت
+    كاملاً فلا يصل للمتصفح (ولا لأي XSS محتمل). `wa:<phone_id>` ليس سراً —
+    لوحة واتساب تعرضه — فيبقى."""
+    b = dict(b)
+    if not str(b.get("token") or "").startswith("wa:"):
+        b["token"] = ""
     return b
 
 @app.route("/bot/create", methods=["POST"])
@@ -736,7 +745,7 @@ def bot_detail(bot_id):
     staff = current_role() in ("admin", "support")
     replies_limit = None if staff else plans.ai_replies_limit(plan_id)
     return react_page("bot_detail", "nav_bots",
-                      {"bot": b, "leads": leads, "orders": orders, "bookings": bookings,
+                      {"bot": _public_bot(b), "leads": leads, "orders": orders, "bookings": bookings,
                        "plan": p, "usage": usage,
                        "links": _bot_links(b),
                        "isNew": bool(request.args.get("new")),
@@ -857,7 +866,7 @@ def flow_builder(bot_id):
         flash("تم حفظ الفلو ✅", "ok")
         return redirect(url_for("flow_builder", bot_id=bot_id))
     flow = cfg.get("flow") or {"start_message": "", "end_message": "", "steps": []}
-    return react_page("flow", "flow_title", {"bot": b, "flow": flow},
+    return react_page("flow", "flow_title", {"bot": _public_bot(b), "flow": flow},
                       title=i18n.t("flow_title", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
 
 # ---------- سعة الخادم (L-11) ----------
@@ -909,7 +918,7 @@ def bot_action(bot_id, action):
 @login_required
 def analytics(bot_id):
     b = _owned(bot_id); b["stats"] = db.stats_summary(bot_id)
-    return react_page("analytics", "analytics", {"bot": b}, needs_chart=True,
+    return react_page("analytics", "analytics", {"bot": _public_bot(b)}, needs_chart=True,
                       title=i18n.t("analytics", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
 
 @app.route("/api/bot/<int:bot_id>/stats")
@@ -1016,7 +1025,7 @@ def broadcast(bot_id):
         return redirect(url_for("broadcast", bot_id=bot_id))
 
     return react_page("broadcast", "campaign_title",
-                      {"bot": b, "subs": subs, "isWa": is_wa, "reachable": reachable,
+                      {"bot": _public_bot(b), "subs": subs, "isWa": is_wa, "reachable": reachable,
                        # جمهور القالب (كل المشتركين) — هو ما تُعرض عليه التكلفة
                        "audience": len(db.list_bot_peers(bot_id)) if is_wa else subs,
                        "waba": _waba_of(b)[0] if is_wa else "",
@@ -1050,7 +1059,7 @@ def wa_templates_page(bot_id):
     b = _wa_bot(bot_id)
     waba, hint = _waba_of(b)
     return react_page("wa_templates", "wa_tpl_title",
-                      {"bot": b, "waba": waba, "wabaHint": hint,
+                      {"bot": _public_bot(b), "waba": waba, "wabaHint": hint,
                        "cats": list(WT.CATEGORIES), "limits": WT.LIMITS},
                       title=i18n.t("wa_tpl_title", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
 
