@@ -82,7 +82,7 @@ function Bubble({ m, botId }) {
                  className="max-h-56 w-full object-cover" />
           </a>
         ) : m.kind === "media" ? (
-          <span className="mb-1 flex items-center gap-1.5 text-[12px] opacity-80"><Icon name="image" size={13} />📎</span>
+          <span className="mb-1 flex items-center gap-1.5 text-[12px] opacity-80"><Icon name="clip" size={13} /></span>
         ) : null}
         {m.text && <div className="whitespace-pre-wrap break-words text-[14px] leading-relaxed">{m.text}</div>}
         <div className={"mt-1 flex items-center gap-1.5 text-[10.5px] " + (m.sender === "human" ? "text-[#07090F]/70" : "text-ink-3")}>

@@ -1819,6 +1819,21 @@ def _qr_svg(data, scale=8, dark="#07090F"):
     return buf.getvalue().decode("utf-8")
 
 
+_QR_ROWS = {}
+
+
+def _qr_rows(data):
+    """مصفوفة QR كصفوف «0/1» يرسمها React مساراً واحداً — بلا innerHTML ولا صورة.
+    الذاكرة محدودة: الرابط واحد تقريباً لكل زائر (التسجيل أو اللوحة)."""
+    rows = _QR_ROWS.get(data)
+    if rows is None:
+        import segno
+        rows = ["".join("1" if c else "0" for c in r) for r in segno.make(data, error="m").matrix]
+        if len(_QR_ROWS) < 32:
+            _QR_ROWS[data] = rows
+    return rows
+
+
 @app.route("/bot/<int:bot_id>/qr.svg")
 @login_required
 def bot_qr(bot_id):
@@ -2186,6 +2201,23 @@ def _plan_pricing(plan_id, overrides=None, cycle="monthly"):
             "list_price": round(price, 2), "discount_pct": disc,
             "price": max(0.0, final), "has_discount": disc > 0 and final < price}
 
+def _plan_feature_lines(pid):
+    """سطور مزايا الإصدار الجديد (وكيل الإعداد · عقل البوت · صندوق الوارد) تُولَّد من
+    plans.FEATURES نفسها التي تُطبَّق بها الحدود — فلا يختلف رقم معروض عن حدّ فعلي."""
+    out = {"ar": [], "en": []}
+
+    def add(key, **kw):
+        for lg in out:
+            out[lg].append(i18n.t(key, lg).format(**kw))
+
+    add("pf_agent", n=f"{plans.ai_setups_limit(pid):,}")
+    if plans.ai_replies_limit(pid):
+        add("pf_brain", n=f"{plans.ai_replies_limit(pid):,}")
+    if plans.inbox_reply(pid):
+        add("pf_inbox")
+    return out
+
+
 def priced_plans(lang=None):
     """كل الباقات بأسعارها الفعلية على الدورتين — للعرض في الواجهة.
 
@@ -2196,6 +2228,9 @@ def priced_plans(lang=None):
     out = []
     for pid in plans.ORDER:
         p = dict(plans.PLANS[pid], id=pid)
+        extra = _plan_feature_lines(pid)                # نسخ جديدة — لا نعدّل PLANS نفسها
+        p["features_ar"] = list(p.get("features_ar", [])) + extra["ar"]
+        p["features_en"] = list(p.get("features_en", [])) + extra["en"]
         m = _plan_pricing(pid, ov, "monthly")
         a = _plan_pricing(pid, ov, "annual")
         p.update(m)                                    # الشهري هو الافتراضي المعروض
@@ -2256,7 +2291,10 @@ def quote(plan_id, user_id, code=None, cycle="monthly"):
 
 _LANDING_ICONS = ("store","calendar","shield","grid","flow","sparkles","chart","megaphone",
                   "check","rocket","tag","phone","bot","card","users","wallet","bolt",
-                  "globe","image","lock","key","download","link","back","clock","play")
+                  "globe","image","lock","key","download","link","back","clock","play","inbox",
+                  # أيقونات العروض الحيّة في البطل والقنوات والقصة
+                  "pizza","dress","stethoscope","bag","menu","cart","ruler","camera","ticket",
+                  "folder","chat","truck","return","refresh","user","close","arrow")
 
 # ---------------------------------------------------------------------------
 #  طبقة تقديم React: Flask يبقى مسؤولاً عن التوجيه والصلاحيات والنماذج،
@@ -2656,10 +2694,15 @@ def home():
     payload = _public_payload("home", lang)
     payload.update(i18n.landing_payload(lang))
     price = _egp(mkt_price())
+    ai_price = FE.ai_reply_price() / 100
     payload["mktPrice"] = price
-    # السعر يُملأ هنا لا في الواجهة: نفس النص يدخل البيانات المنظّمة لمحركات البحث
-    payload["faq"] = [{"q": x["q"], "a": x["a"].replace("{price}", f"{price:g}")}
+    # الأسعار تُملأ هنا لا في الواجهة: نفس النص يدخل البيانات المنظّمة لمحركات البحث
+    payload["faq"] = [{"q": x["q"], "a": x["a"].replace("{price}", f"{price:g}")
+                                               .replace("{ai_price}", f"{ai_price:g}")}
                       for x in payload["faq"]]
+    # QR البطل يفتح التسجيل (أو اللوحة) على موبايل الزائر — رابط حقيقي لا زخرفة
+    payload["heroQr"] = _qr_rows(_site_base() + (url_for("dashboard") if getattr(g, "user", None)
+                                                  else url_for("register")))
     plist = [_public_plan(p, lang) for p in priced_plans(lang)]
     payload["plans"] = plist
     payload["templates"] = [

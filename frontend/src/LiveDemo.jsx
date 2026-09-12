@@ -113,11 +113,11 @@ export default function LiveDemo({ channel = "telegram" }) {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: reduce ? 0 : 0.5 + i * 0.09, duration: 0.5 }}
                     whileHover={reduce ? {} : { y: -3 }}
-                    className="cursor-default rounded-xl bg-white/[0.05] px-3.5 py-2 text-xs font-bold text-ink-2
-                               shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)] transition-colors
-                               hover:bg-au-violet/20 hover:text-white"
+                    className="inline-flex cursor-default items-center gap-1.5 rounded-xl bg-white/[0.05] px-3.5 py-2
+                               text-xs font-bold text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]
+                               transition-colors hover:bg-au-violet/20 hover:text-white"
                   >
-                    {b}
+                    <Icon name={b.i} size={13} className="text-au-cyan" />{b.t}
                   </motion.b>
                 ))}
               </div>

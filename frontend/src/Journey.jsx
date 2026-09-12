@@ -5,9 +5,10 @@ import { BY, t, Icon } from "./ui.jsx";
 /* ============================================================================
    قصة التمرير: «من أول رسالة لأول طلب».
 
-   على الشاشات الواسعة القسم أطول من الشاشة، والمحتوى لاصق في منتصفها؛ كل ربع
-   من التمرير يقدّم مرحلة: زبون يسأل ← البوت يرد ← الطلب يتسجّل ← تنبيه لصاحب
-   النشاط. الهاتف على الجانب يتقدّم معها رسالةً رسالة.
+   على الشاشات الواسعة القسم أطول من الشاشة، والمحتوى لاصق في منتصفها؛ كل
+   مرحلة تأخذ نفس المسافة من التمرير: زبون يسأل ← البوت يرد ← الطلب يتسجّل ←
+   تنبيه لصاحب النشاط ← وصاحب النشاط يتدخّل بنفسه من صندوق الوارد. الهاتف على
+   الجانب يتقدّم معها رسالةً رسالة.
 
    على الجوال أو مع تقليل الحركة: لا تمرير مخطوف — كل المراحل ظاهرة والهاتف
    مكتمل. القصة تُقرأ، لا تُفرض.
@@ -44,7 +45,9 @@ export default function Journey() {
     <section id="story" ref={ref} aria-labelledby="story-t"
              // overflow-x-clip لا hidden: يقصّ وهج الهاتف دون أن ينشئ حاوية تمرير
              // (hidden كان سيكسر position:sticky للمحتوى اللاصق)
-             className={"relative overflow-x-clip " + (scrolly ? "h-[300vh]" : "")}>
+             className="relative overflow-x-clip"
+             // ‏75vh من التمرير لكل مرحلة — القسم يتمدّد مع عددها
+             style={scrolly ? { height: `${n * 75}vh` } : undefined}>
       <div className={scrolly ? "sticky top-0 flex h-screen items-center" : ""}>
         <div className="mx-auto grid w-full max-w-[1240px] grid-cols-1 items-center gap-12 px-5 sm:px-6
                         py-[clamp(64px,10vw,120px)] lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)] lg:py-0">
@@ -124,7 +127,14 @@ function Phone({ J, stage, reduce }) {
                   className={"max-w-[86%] rounded-[19px] px-4 py-2.5 text-[13.5px] leading-relaxed " +
                     (m.me
                       ? "self-end rounded-ee-[6px] bg-[linear-gradient(115deg,#7C6CF6,#22D3EE)] font-bold text-[#08111C]"
+                      : m.who === "human"
+                      ? "self-start rounded-es-[6px] bg-au-teal/15 text-ink shadow-[inset_0_0_0_1px_rgb(45_212_167/0.4)]"
                       : "self-start rounded-es-[6px] bg-white/[0.08] text-ink")}>
+                  {m.who === "human" && (
+                    <span className="mb-0.5 flex items-center gap-1 text-[11px] font-extrabold text-au-teal">
+                      <Icon name="user" size={12} />{t("lp2_j_you")}
+                    </span>
+                  )}
                   {m.text}
                 </motion.div>
               ))}

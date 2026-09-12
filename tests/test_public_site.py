@@ -115,9 +115,62 @@ class HomeTests(unittest.TestCase):
         self.assertIn('<html lang="en" dir="ltr">', html)
 
     def test_every_translation_key_exists_in_both_languages(self):
-        missing = [k for k, v in i18n.T.items() if k.startswith("lp2_")
+        missing = [k for k, v in i18n.T.items() if k.startswith(("lp2_", "pf_"))
                    and not (v.get("ar") and v.get("en"))]
         self.assertEqual(missing, [])
+
+    def test_the_hero_is_a_one_tap_demo_with_a_real_qr(self):
+        """البطل مسرح «ضغطة واحدة»: أنشطة تجريبية كاملة، وQR حقيقي (مربّع من 0/1)."""
+        by = _by(web.app.test_client().get("/?lang=ar").get_data(as_text=True))
+        self.assertGreaterEqual(len(by["hero"]), 3)
+        for h in by["hero"]:
+            self.assertTrue(h["name"] and h["label"] and h["q"] and h["a"] and h["kbd"])
+            self.assertRegex(h["handle"], r"^[a-z][a-z0-9_]{3,28}bot$")   # يوزر تليجرام صالح
+        rows = by["heroQr"]
+        self.assertTrue(rows and all(len(r) == len(rows) and set(r) <= {"0", "1"} for r in rows))
+
+    def test_faq_prices_are_filled_by_the_server(self):
+        """لا عنصر نائب في الأسئلة: سعر رسالة التسويق وسعر ردّ «عقل البوت» من الخادم."""
+        by = _by(web.app.test_client().get("/?lang=ar").get_data(as_text=True))
+        self.assertEqual([x["q"] for x in by["faq"] if "{" in x["a"]], [])
+        ai = f"{web.FE.ai_reply_price() / 100:g}"
+        self.assertTrue(any(ai in x["a"] for x in by["faq"]))
+
+    def test_plan_cards_show_the_limits_that_are_enforced(self):
+        """أرقام وكيل الإعداد و«عقل البوت» في بطاقات الأسعار = الحدود المطبَّقة فعلاً."""
+        by = _by(web.app.test_client().get("/?lang=en").get_data(as_text=True))
+        cards = {p["id"]: " | ".join(p["features"]) for p in by["plans"]}
+        for pid in ("free", "merchant", "whatsapp", "agency"):
+            self.assertIn(f"AI setup agent ({web.plans.ai_setups_limit(pid):,}/month)", cards[pid])
+            n = web.plans.ai_replies_limit(pid)
+            self.assertEqual(n > 0, f"{n:,} AI replies" in cards[pid])
+            self.assertEqual(web.plans.inbox_reply(pid), "manual replies" in cards[pid])
+        # PLANS نفسها لم تتغيّر: السطور المولَّدة نسخ، لا إلحاق على القوائم الأصلية
+        self.assertFalse(any("AI setup agent" in f for f in web.plans.PLANS["merchant"]["features_en"]))
+
+    def test_every_landing_icon_ships_with_the_page(self):
+        """كل أيقونة تطلبها بيانات الرئيسية موجودة في حمولة الصفحة — لا خانة فارغة."""
+        by = _by(web.app.test_client().get("/?lang=ar").get_data(as_text=True))
+        want = ({h["icon"] for h in by["hero"]} | {k["i"] for h in by["hero"] for k in h["kbd"]}
+                | {k["i"] for d in by["demos"] for k in d["kbd"]} | {c["icon"] for c in by["bento"]}
+                | {x["icon"] for x in by["trust"]} | {"refresh", "arrow", "user", "link", "check", "rocket"})
+        self.assertEqual(sorted(want - set(by["icons"])), [])
+
+    def test_the_landing_draws_icons_not_emoji(self):
+        """الرموز في العروض والقصة من مجموعة المنصة المرسومة (icons.py)، لا إيموجي."""
+        by = _by(web.app.test_client().get("/?lang=ar").get_data(as_text=True))
+        emoji = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
+        texts = json.dumps([by["hero"], by["demos"], by["journey"], by["t"].get("lp2_foot_hi")],
+                           ensure_ascii=False)
+        self.assertIsNone(emoji.search(texts))
+        self.assertNotIn("lp2_foot_made", by["t"])
+
+    def test_every_icon_is_valid_svg_on_the_24_grid(self):
+        import icons
+        for name in icons._P:
+            svg = ET.fromstring(str(icons.icon(name)))
+            self.assertEqual(svg.get("viewBox"), "0 0 24 24", name)
+            self.assertTrue(len(svg), name)
 
 
 class SeoTests(unittest.TestCase):
@@ -150,7 +203,7 @@ class SeoTests(unittest.TestCase):
                       for p in web.priced_plans("ar")}
         self.assertEqual({o["name"]: o["price"] for o in app_node["offers"]}, server)
         faq = next(n for n in ld["@graph"] if n["@type"] == "FAQPage")
-        self.assertEqual(len(faq["mainEntity"]), 8)
+        self.assertEqual(len(faq["mainEntity"]), len(i18n.LANDING2["faq"]))
         self.assertNotIn("{price}", json.dumps(faq, ensure_ascii=False), "سعر غير مملوء في الأسئلة")
 
     def test_every_script_on_public_pages_carries_the_nonce(self):

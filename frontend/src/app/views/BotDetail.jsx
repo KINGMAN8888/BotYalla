@@ -92,7 +92,7 @@ function LiveCard({ bot, links, isNew }) {
           <p className="mt-0 mb-4 text-[13px] leading-relaxed text-ink-3">{t("live_sub")}</p>
           <div className="flex flex-wrap justify-center gap-2 sm:justify-start">
             <Btn variant="green" sm icon="play" href={links.open} target="_blank" rel="noopener">{t("live_open")}</Btn>
-            <Btn variant="ghost" sm icon="copy" type="button" onClick={copy}>{copied ? t("live_copied") : t("live_copy")}</Btn>
+            <Btn variant="ghost" sm icon={copied ? "check" : "copy"} type="button" onClick={copy}>{copied ? t("live_copied") : t("live_copy")}</Btn>
             <Btn variant="ghost" sm icon="link" type="button" onClick={share}>{t("live_share")}</Btn>
             <Btn variant="ghost" sm icon="image" href={links.poster} target="_blank" rel="noopener">{t("live_poster")}</Btn>
             <Btn variant="ghost" sm icon="download" href={`${links.qr}?dl=1`}>{t("live_qr_dl")}</Btn>
@@ -149,7 +149,9 @@ function ChatPreview({ proposal }) {
               </div>
             )}
             {b.extra?.media && (
-              <div className="mt-1.5 text-[11.5px] text-au-cyan">📎 {b.extra.optional ? t("step_optional") : t("step_f")}</div>
+              <div className="mt-1.5 flex items-center gap-1 text-[11.5px] text-au-cyan">
+                <Icon name="clip" size={12} />{b.extra.optional ? t("step_optional") : t("step_f")}
+              </div>
             )}
           </div>
         ))}

@@ -134,7 +134,7 @@ function PickerModal({ open, onClose, onPick, kinds }) {
           <h2 className="m-0 flex items-center gap-2 text-[17px] font-extrabold text-ink">
             <Icon name="image" size={18} className="text-au-cyan" />{t("media_pick")}
           </h2>
-          <Btn sm variant="ghost" type="button" onClick={onClose} aria-label={t("cancel")}>✕</Btn>
+          <Btn sm variant="ghost" type="button" onClick={onClose} aria-label={t("cancel")}><Icon name="close" size={16} /></Btn>
         </div>
         <Uploader compact onAdded={(a, q) => setData((d) => ({ assets: [a, ...((d && d.assets) || [])], quota: q }))} />
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">

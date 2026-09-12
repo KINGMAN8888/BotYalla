@@ -94,7 +94,7 @@ function OneTapCreate() {
                                    (i < stepIdx ? "bg-au-teal text-[#04140E]"
                                      : i === stepIdx ? "bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] text-[#07090F]"
                                      : "bg-white/[0.07] text-ink-3")}>
-                    {i < stepIdx ? "✓" : i + 1}
+                    {i < stepIdx ? <Icon name="check" size={14} /> : i + 1}
                   </span>
                   <span className={i <= stepIdx ? "font-bold text-ink" : "text-ink-3"}>{t(k)}</span>
                 </li>
@@ -249,7 +249,10 @@ function CreateWizard({ collapsed = false }) {
               <div role="status" aria-live="polite"
                    className={"mt-2 text-[12.5px] font-bold " +
                      (status.ok === true ? "text-au-teal" : status.ok === false ? "text-red-300" : "text-ink-3")}>
-                {status.ok === true ? "✓ " : status.ok === false ? "✕ " : "⏳ "}{status.text}
+                <span className="inline-flex items-center gap-1.5">
+                  <Icon name={status.ok === true ? "check" : status.ok === false ? "close" : "pending"} size={14} />
+                  {status.text}
+                </span>
               </div>
             )}
           </div>

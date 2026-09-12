@@ -321,3 +321,15 @@ html.js .hr-side.in { opacity: 1; transform: none; }
     transition: none !important;
   }
 }
+
+/* ------------------------------------------------ نافذة البطل
+   مؤشّر الكتابة في خانة الاسم داخل شاشة إنشاء البوت */
+.caret {
+  display: inline-block; width: 2px; height: 1.05em; margin-inline-start: 2px; vertical-align: -0.18em;
+  background: var(--color-au-cyan); animation: caret 0.9s steps(1) infinite;
+}
+@keyframes caret { 50% { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .caret { animation: none !important; }
+}

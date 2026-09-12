@@ -217,7 +217,8 @@ export function AdminPayments() {
                   <div className="flex flex-col gap-1 text-[12px] leading-relaxed">
                     {(x.checks || []).map((c, i) => (
                       <span key={i} className={c.ok === true ? "text-au-teal" : c.ok === false ? "text-red-300" : "text-yellow-300"}>
-                        {c.ok === true ? "✓" : c.ok === false ? "✕" : "•"} {c.text}
+                        <Icon name={c.ok === true ? "check" : c.ok === false ? "close" : "pending"} size={13}
+                              className="me-1 align-[-2px]" />{c.text}
                       </span>
                     ))}
                   </div>
@@ -267,7 +268,8 @@ export function AdminRequests() {
                 <Td>{r.business || "—"}</Td>
                 <Td className="max-w-[340px]">
                   <div>{r.description}</div>
-                  {r.budget && <div className="mt-1 text-[12px] text-ink-3">💰 {r.budget}</div>}
+                  {r.budget && <div className="mt-1 flex items-center gap-1 text-[12px] text-ink-3">
+                    <Icon name="coins" size={13} />{r.budget}</div>}
                 </Td>
                 <Td>{r.contact || "—"}</Td>
                 <Td><Pill tone={tone[r.status]}>{label[r.status]}</Pill></Td>

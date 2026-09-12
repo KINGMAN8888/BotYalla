@@ -269,6 +269,16 @@ export function Finale() {
                 </>
               )}
             </div>
+            {/* الضمانات هنا لا في البطل: البطل للتجربة، والقرار يُتّخذ عند النداء الأخير */}
+            <ul className="m-0 mt-8 flex list-none flex-wrap justify-center gap-2 p-0">
+              {["lp2_trust_1", "lp2_trust_2", "lp2_trust_3", "lp2_trust_4"].map((k) => (
+                <li key={k}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-3 py-1.5 text-[12.5px]
+                               font-bold text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+                  <Icon name="check" size={13} className="text-au-teal" />{t(k)}
+                </li>
+              ))}
+            </ul>
           </div>
         </GlassCard>
       </Reveal>
@@ -487,7 +497,7 @@ export function Footer() {
         <div className="mt-10 flex flex-col items-center gap-1.5 text-[12.5px] text-ink-4">
           <span>© {BY.year} {BY.brand} — {t("lp2_foot_rights")}</span>
           <span>
-            {t("lp2_foot_made")} · {t("lp2_foot_by")}{" "}
+            {t("lp2_foot_by")}{" "}
             <a href="https://youssefalsherief.tech/" target="_blank" rel="noopener"
                className="font-bold text-ink-3 no-underline transition-colors hover:text-au-cyan">Youssef Alsherief</a>
           </span>
