@@ -56,7 +56,7 @@ echo(
 
 REM Pull the latest version of the script then run it - single step, safe to repeat
 ssh -o StrictHostKeyChecking=accept-new !SSHUSER!@!HOST! ^
- "set -e; command -v git >/dev/null || (apt-get update -y && apt-get install -y git); if [ -d /opt/botyalla/.git ]; then git -C /opt/botyalla fetch --all -q && git -C /opt/botyalla checkout -q origin/main -- deploy/hostinger_deploy.sh; else mkdir -p /opt/botyalla && git clone -q https://github.com/KINGMAN8888/BotYalla.git /opt/botyalla; fi; chmod +x /opt/botyalla/deploy/hostinger_deploy.sh; bash /opt/botyalla/deploy/hostinger_deploy.sh !ARGS!"
+ "set -e; command -v git >/dev/null || (apt-get update -y && apt-get install -y git); git config --global --add safe.directory /opt/botyalla; if [ -d /opt/botyalla/.git ]; then git -C /opt/botyalla fetch --all -q && git -C /opt/botyalla checkout -q origin/main -- deploy/hostinger_deploy.sh; else mkdir -p /opt/botyalla && git clone -q https://github.com/KINGMAN8888/BotYalla.git /opt/botyalla; fi; chmod +x /opt/botyalla/deploy/hostinger_deploy.sh; bash /opt/botyalla/deploy/hostinger_deploy.sh !ARGS!"
 
 if errorlevel 1 (
   echo(

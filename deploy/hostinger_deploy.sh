@@ -52,6 +52,8 @@ fi
 log "[2/9] User and Source Code"
 id -u "$SVC_USER" &>/dev/null || useradd -r -m -d "$APP_DIR" -s /usr/sbin/nologin "$SVC_USER"
 
+git config --global --add safe.directory "$APP_DIR"
+
 if [[ -d "$APP_DIR/.git" ]]; then
   git -C "$APP_DIR" fetch --all --prune
   git -C "$APP_DIR" reset --hard "origin/$BRANCH"
