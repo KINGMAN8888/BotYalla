@@ -68,7 +68,7 @@ export function useSpotlight() {
 }
 
 /* ------------------------------------------------------- زرّ مغناطيسي */
-export function Magnetic({ href, children, icon, variant = "solid", strength = 0.3 }) {
+export function Magnetic({ href, children, icon, variant = "solid", strength = 0.3, className = "" }) {
   const ref = useRef(null);
   const reduce = useReducedMotion();
 
@@ -105,7 +105,7 @@ export function Magnetic({ href, children, icon, variant = "solid", strength = 0
         "hover:bg-right hover:shadow-[0_20px_50px_-10px_rgb(124_108_246/0.9),inset_0_1px_0_rgb(255_255_255/0.6)]";
 
   return (
-    <a ref={ref} href={href} className={`${base} ${skin}`}>
+    <a ref={ref} href={href} className={`${base} ${skin} ${className}`}>
       {variant !== "ghost" && (
         <span
           aria-hidden="true"

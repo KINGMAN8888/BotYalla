@@ -45,7 +45,8 @@ def _login(c, user, pw):
 
 
 def _signed_in(c):
-    return c.get("/").status_code == 200
+    # «/» صارت الصفحة العامة (200 للجميع) — اللوحة هي ما يكشف الجلسة
+    return c.get("/dashboard").status_code == 200
 
 
 def _token_from_mail():

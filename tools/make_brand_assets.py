@@ -58,7 +58,7 @@ body{{position:relative;font-family:{c['font']};color:#F2F5FC}}
   linear-gradient(to bottom,rgba(255,255,255,.05) 1px,transparent 1px);background-size:56px 56px;
   -webkit-mask-image:radial-gradient(ellipse 80% 70% at 50% 30%,#000 20%,transparent 80%)}}
 .wrap{{position:absolute;inset:64px 72px;display:flex;flex-direction:column}}
-.logo{{height:58px}} .logo svg{{height:58px;width:auto}}
+.logo{{height:58px;direction:ltr}} .logo svg{{height:58px;width:auto;direction:ltr}}
 h1{{margin-top:auto;font-size:{76 if lang=='ar' else 80}px;line-height:{1.3 if lang=='ar' else 1.02};
     font-weight:900;letter-spacing:{0 if lang=='ar' else '-0.045em'};max-width:720px}}
 h1 span{{display:block;{accent}background:linear-gradient(100deg,#7C6CF6,#22D3EE 50%,#2DD4A7);
@@ -73,7 +73,7 @@ p{{margin-top:26px;font-size:26px;color:#AEB9D4;font-family:{'Segoe UI,Tahoma' i
 .r{{background:rgba(255,255,255,.09)}}
 </style></head><body><div class="bg"></div><div class="grid"></div>
 <div class="chat"><div class="m q">{c['q']}</div><div class="m r">{c['r']}</div></div>
-<div class="wrap"><div class="logo">{logo}</div><h1>{c['a']}<span>{c['b']}</span></h1><p>{c['c']}</p></div>
+<div class="wrap"><div class="logo" dir="ltr">{logo}</div><h1>{c['a']}<span>{c['b']}</span></h1><p>{c['c']}</p></div>
 </body></html>"""
 
 
@@ -103,6 +103,12 @@ def shoot(browser, html, out, w, h):
 
 
 def main():
+    # طرفية ويندوز cp1252 افتراضياً: أي حرف عربي أو سهم في print يُسقط السكربت
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     browser = next((b for b in CANDIDATES if b and Path(b).exists()), None)
     if not browser:
         sys.exit("لم أجد Edge/Chrome/Chromium — اضبط BROWSER على مسار المتصفح.")

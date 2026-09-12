@@ -92,7 +92,7 @@ class BotYallaE2ETest(unittest.TestCase):
 
     def test_01_public_pages(self):
         """التأكد أن الصفحات العامة (بما فيها القانونية الجديدة) تعمل."""
-        for path in ["/terms", "/privacy", "/pricing", "/login", "/register", "/landing"]:
+        for path in ["/", "/terms", "/privacy", "/refund", "/acceptable-use", "/pricing", "/login", "/register"]:
             r = self.client.get(path)
             self.assertEqual(r.status_code, 200, f"{path} should return 200")
 

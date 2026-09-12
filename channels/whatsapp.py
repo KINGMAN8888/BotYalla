@@ -4,7 +4,7 @@
 · كل رسالة صادرة **مدفوعة** — لذلك كل إرسال يمرّ بعدّاد الاستهلاك.
 · لا مراسلة حرّة بعد 24 ساعة من آخر رسالة للعميل — والمخالفة تُقيّد الرقم.
 · 3 أزرار كحد أقصى، وعنوان الزر 20 حرفاً."""
-import asyncio, json, logging
+import asyncio, json, logging, os
 import httpx
 from .base import Channel
 
@@ -117,6 +117,61 @@ class WhatsAppChannel(Channel):
     async def remove_keyboard(self, peer, text):
         # لا لوحة مفاتيح دائمة في واتساب — مجرد نص.
         return await self.send_text(peer, text)
+
+    # media_id لدى Meta صالح 30 يوماً — نعيد الرفع قبل ذلك بهامش.
+    MEDIA_REF_TTL = 25 * 86400
+
+    async def upload_media(self, path, mime):
+        """يرفع ملفاً إلى Meta ويرجّع media_id. الرفع ليس رسالة فلا يمرّ بالعدّاد."""
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            c = await _http()
+            r = await c.post(f"{META_API}/{self.phone_id}/media",
+                             headers={"Authorization": f"Bearer {self.token}"},
+                             data={"messaging_product": "whatsapp", "type": mime},
+                             files={"file": ("file" + os.path.splitext(path)[1], data, mime)})
+            if r.status_code >= 400:
+                log.error("WhatsApp media upload %s: %s", r.status_code, r.text[:300])
+                return None
+            return (r.json() or {}).get("id")
+        except Exception:
+            log.exception("WhatsApp media upload failed")
+            return None
+
+    async def send_media(self, peer, asset, bot_id, caption=None, options=None):
+        """حتى 3 خيارات قصيرة (≤20 حرفاً): رسالة تفاعلية بترويسة صورة/فيديو وأزرار
+        تحتها — «الفيديو التفاعلي». أكثر من ذلك: الوسائط ثم الخيارات قائمة مرقّمة
+        (نفس سلوك send_buttons الذي يقبل المحرك رقمه كإجابة)."""
+        import time as _t
+        import database as db, asset_store
+        mid = db.get_asset_ref(asset["id"], bot_id)
+        if not mid:
+            mid = await self.upload_media(asset_store.path_of(asset["fname"]), asset["mime"])
+            if not mid:
+                return None
+            db.set_asset_ref(asset["id"], bot_id, mid, expires_at=int(_t.time()) + self.MEDIA_REF_TTL)
+        kind = "video" if asset["kind"] == "video" else "image"
+        opts = [str(o) for o in (options or [])]
+        caption = (caption or "").strip()
+        if opts and len(opts) <= 3 and all(len(o) <= 20 for o in opts):
+            p = self._base(peer, "interactive")
+            p["interactive"] = {
+                "type": "button",
+                "header": {"type": kind, kind: {"id": mid}},
+                "body": {"text": (caption or "👇")[:1024]},
+                "action": {"buttons": [{"type": "reply", "reply": {"id": f"btn_{i}", "title": o}}
+                                       for i, o in enumerate(opts)]},
+            }
+            return await self._post(p)
+        p = self._base(peer, kind)
+        p[kind] = {"id": mid}
+        if caption:
+            p[kind]["caption"] = caption[:1024]
+        res = await self._post(p)
+        if opts:
+            await self.send_buttons(peer, "👇", opts)
+        return res
 
     async def send_template(self, peer, name, lang="ar", components=None):
         """القالب المعتمد هو الطريقة الوحيدة لبدء محادثة خارج نافذة الـ24 ساعة."""

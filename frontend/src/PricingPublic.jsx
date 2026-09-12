@@ -51,7 +51,7 @@ export default function PricingPublic() {
         )}
       </div>
 
-      <div className="grid items-stretch gap-5 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 items-stretch gap-5 md:grid-cols-2 xl:grid-cols-4">
         {plans.map((p, i) => {
           const price = annual ? p.annual_price : p.price;
           const list = annual ? p.annual_list_price : p.list_price;
@@ -115,7 +115,7 @@ export default function PricingPublic() {
       </div>
 
       {/* ثلاث ضمانات تجيب على «وإيه كمان؟» قبل أن تُسأل */}
-      <div className="mt-10 grid gap-4 md:grid-cols-3">
+      <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
         <Note icon="wallet" title={t("lp2_carry_t")} text={t("lp2_carry_d")} />
         <Note icon="megaphone" title={t("lp2_wallet_t")}
               text={fill(t("lp2_wallet_d"), { price: num(BY.mktPrice) })} />

@@ -3,6 +3,34 @@
 leads، orders، bookings، events (للتحليلات)."""
 import sqlite3, json, os, time, logging
 from contextlib import contextmanager
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    FERNET_KEY = os.environ.get("FERNET_KEY", "Ym90eWFsbGEtZGV2LXNlY3JldC1mZXJuZXQta2V5LTE=").encode()
+    _fernet = Fernet(FERNET_KEY)
+except ImportError:
+    _fernet = None
+    class InvalidToken(Exception): pass
+
+def _encrypt(token):
+    if not token: return token
+    if _fernet and not token.startswith("gAAAAA"):
+        return _fernet.encrypt(token.encode()).decode()
+    return token
+
+def _decrypt(token):
+    if not token: return token
+    if _fernet and token.startswith("gAAAAA"):
+        try:
+            return _fernet.decrypt(token.encode()).decode()
+        except InvalidToken:
+            pass
+    return token
+
+def _map_bot(r):
+    if not r: return r
+    b = dict(r)
+    b["token"] = _decrypt(b.get("token", ""))
+    return b
 
 # سجل الأحداث المالية (بتّ الدفعات والتفعيل وحرق الأكواد) — يصل ملف السجل عبر root.
 log = logging.getLogger("billing")
@@ -96,6 +124,15 @@ def _migrate(c):
     # الأصلية وخارج `plans.ORDER`. السبب: `pro` كانت تشمل واتساب و`merchant`
     # لا تشمله، و`business` كانت بلا حدّ للبوتات — فأي ترحيل يسحب من مشتركٍ
     # ميزةً دفع مقابلها. لا صفّ اشتراك أو دفعة يُلمس هنا إطلاقاً.
+
+    # ---- تشفير التوكن (التهجير لمرة واحدة) ----
+    bot_rows = c.execute("SELECT id, token FROM bots").fetchall()
+    for row in bot_rows:
+        tk = row["token"]
+        if tk and not tk.startswith("gAAAAA"):
+            enc = _encrypt(tk)
+            if enc != tk:
+                c.execute("UPDATE bots SET token=? WHERE id=?", (enc, row["id"]))
 
 def init_db():
     with get_conn() as c:
@@ -353,6 +390,124 @@ def init_db():
             used_at INTEGER,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+
+        -- ===================== إنشاء بوت بضغطة (Telegram Managed Bots) =====================
+        -- الرابط يُفتح في بوت المنصة بكود لمرة واحدة. الكود يربط حساب تليجرام بحساب
+        -- المنصة **قبل** الإنشاء، لأن تحديث managed_bot يحمل معرّف تليجرام لا حسابنا.
+        -- تُخزَّن تجزئة الكود لا الكود (نفس نمط password_resets).
+        CREATE TABLE IF NOT EXISTS managed_bot_requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL,
+            template TEXT NOT NULL,
+            business_name TEXT NOT NULL,
+            suggested_username TEXT,
+            tg_user_id INTEGER,                    -- يُملأ حين يفتح المستخدم الرابط
+            bot_id INTEGER,                        -- يُملأ عند الإنشاء
+            status TEXT NOT NULL DEFAULT 'pending',-- pending | linked | created | failed
+            error TEXT,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_mbr_tg ON managed_bot_requests(tg_user_id, status);
+
+        -- ===================== المحادثات (صندوق الوارد والتدخّل اليدوي) =====================
+        -- كل رسالة واردة وصادرة (بوت · ذكاء اصطناعي · صاحب النشاط). بلاها لا يرى
+        -- صاحب البوت محادثة عميله ولا يستطيع الرد عليه.
+        CREATE TABLE IF NOT EXISTS messages(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            direction TEXT NOT NULL,              -- in | out
+            sender TEXT NOT NULL,                 -- customer | bot | ai | human
+            kind TEXT NOT NULL DEFAULT 'text',    -- text | media | system
+            text TEXT,
+            media_id INTEGER,                     -- وسائط العميل (media) إن وُجدت
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_msg_conv ON messages(bot_id, peer, id);
+        -- ملخّص كل محادثة + وضعها. mode='human' يعني أن صاحب النشاط تولّاها
+        -- فلا يردّ البوت ولا الذكاء الاصطناعي حتى يُعيدها.
+        CREATE TABLE IF NOT EXISTS conversations(
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            name TEXT,
+            mode TEXT NOT NULL DEFAULT 'bot',     -- bot | human
+            unread INTEGER NOT NULL DEFAULT 0,
+            last_text TEXT,
+            last_at INTEGER NOT NULL,
+            human_at INTEGER,                     -- آخر نشاط بشري: للعودة التلقائية للبوت
+            PRIMARY KEY(bot_id, peer),
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_conv_bot ON conversations(bot_id, last_at);
+
+        -- ===================== وكيل الإعداد بالذكاء الاصطناعي =====================
+        CREATE TABLE IF NOT EXISTS ai_setup_sessions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            owner_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'asking', -- asking | proposed | applied | discarded
+            source TEXT,                           -- ai | offline
+            brief_json TEXT NOT NULL DEFAULT '{}',
+            turns_json TEXT NOT NULL DEFAULT '[]',
+            proposal_json TEXT,
+            rounds INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_ais_owner ON ai_setup_sessions(owner_id, created_at);
+        -- نسخ إعدادات البوت قبل كل تطبيق — «تراجع» بضغطة بدل خسارة ما كتبه صاحبه.
+        CREATE TABLE IF NOT EXISTS bot_config_versions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            config_json TEXT NOT NULL,
+            reason TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_cfgv_bot ON bot_config_versions(bot_id, id);
+
+        -- ===================== ردود الذكاء الاصطناعي (عقل البوت) =====================
+        -- الحصة الشهرية لكل حساب. ما فوقها يُخصم من المحفظة بالقروش (paid).
+        CREATE TABLE IF NOT EXISTS ai_usage(
+            owner_id INTEGER NOT NULL,
+            month TEXT NOT NULL,                  -- 'YYYY-MM'
+            replies INTEGER NOT NULL DEFAULT 0,
+            paid INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(owner_id, month),
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        -- ===================== مكتبة وسائط صاحب النشاط =====================
+        -- منفصلة عن `media` (وسائط العملاء الخاصة): هذه صور وفيديوهات يرسلها البوت.
+        CREATE TABLE IF NOT EXISTS assets(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,                   -- image | video
+            mime TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            fname TEXT NOT NULL,                  -- اسم مولَّد داخلياً
+            name TEXT,
+            source_url TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_assets_owner ON assets(owner_id, id);
+        -- مرجع الملف لدى كل قناة (file_id لتليجرام · media_id لواتساب) — يُرفع مرة
+        -- ويُعاد استعماله. media_id لواتساب ينتهي، فيُحفظ وقت انتهائه.
+        CREATE TABLE IF NOT EXISTS asset_refs(
+            asset_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL,
+            ref TEXT NOT NULL,
+            expires_at INTEGER,
+            PRIMARY KEY(asset_id, bot_id),
+            FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
         """)
         _migrate(c)
 
@@ -379,7 +534,7 @@ def create_bot(owner_id, name, token, template, config, channel="telegram"):
     with get_conn() as c:
         cur = c.execute("INSERT INTO bots(owner_id,name,token,template,config_json,is_active,created_at,channel)"
                         " VALUES(?,?,?,?,?,0,?,?)",
-                        (owner_id, name, token.strip(), template,
+                        (owner_id, name, _encrypt(token.strip()), template,
                          json.dumps(config, ensure_ascii=False), int(time.time()), channel))
         return cur.lastrowid
 
@@ -387,7 +542,7 @@ def list_bots(owner_id):
     with get_conn() as c:
         rows = c.execute("SELECT * FROM bots WHERE owner_id=? ORDER BY created_at DESC, id DESC",
                          (owner_id,)).fetchall()
-        return [dict(r) for r in rows]
+        return [_map_bot(r) for r in rows]
 
 def get_bot(bot_id, owner_id=None):
     with get_conn() as c:
@@ -395,11 +550,11 @@ def get_bot(bot_id, owner_id=None):
             r = c.execute("SELECT * FROM bots WHERE id=?", (bot_id,)).fetchone()
         else:
             r = c.execute("SELECT * FROM bots WHERE id=? AND owner_id=?", (bot_id, owner_id)).fetchone()
-        return dict(r) if r else None
+        return _map_bot(r) if r else None
 
 def all_active_bots():
     with get_conn() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM bots WHERE is_active=1").fetchall()]
+        return [_map_bot(r) for r in c.execute("SELECT * FROM bots WHERE is_active=1").fetchall()]
 
 def set_bot_active(bot_id, active):
     with get_conn() as c:
@@ -457,6 +612,13 @@ def log_event(bot_id, kind, value=0):
     with get_conn() as c:
         c.execute("INSERT INTO events(bot_id,kind,value,day,created_at) VALUES(?,?,?,?,?)",
                   (bot_id, kind, value, _day(), int(time.time())))
+
+def source_counts(bot_id):
+    """من أين دخل العملاء (qr · link · poster · share) — أحداث src_* في التحليلات."""
+    with get_conn() as c:
+        rows = c.execute("SELECT kind, COUNT(*) n FROM events WHERE bot_id=? "
+                         "AND substr(kind,1,4)='src_' GROUP BY kind", (bot_id,)).fetchall()
+        return {r["kind"][4:]: r["n"] for r in rows}
 
 # ---------- leads / orders / bookings ----------
 def add_lead(bot_id, tg_user_id, data: dict):
@@ -1489,9 +1651,11 @@ def media_count_this_month(owner_id):
         ).fetchone()[0]
 
 def orphan_media(max_age_seconds=7 * 24 * 3600):
-    """ملفات وصلت ولم يكتمل الفلو الذي كانت جزءاً منه — لا يشير إليها شيء."""
+    """ملفات وصلت ولم يكتمل الفلو الذي كانت جزءاً منه — لا يشير إليها شيء.
+    ملف تشير إليه رسالة في صندوق الوارد ليس يتيماً: يبقى ما بقيت المحادثة."""
     with get_conn() as c:
-        rows = c.execute("SELECT id, fname FROM media WHERE lead_id IS NULL AND created_at < ?",
+        rows = c.execute("SELECT id, fname FROM media WHERE lead_id IS NULL AND created_at < ? "
+                         "AND id NOT IN (SELECT media_id FROM messages WHERE media_id IS NOT NULL)",
                          (int(time.time()) - int(max_age_seconds),)).fetchall()
         return [dict(r) for r in rows]
 
@@ -1507,3 +1671,396 @@ def purge_seen_msgs(max_age_seconds=3 * 24 * 3600):
         cur = c.execute("DELETE FROM seen_msgs WHERE created_at < ?",
                         (int(time.time()) - int(max_age_seconds),))
         return cur.rowcount
+
+
+def update_bot_token(bot_id, token):
+    """توكن جديد لبوت قائم — تليجرام يدوّره (replaceManagedBotToken) ولا يتغيّر البوت."""
+    with get_conn() as c:
+        c.execute("UPDATE bots SET token=? WHERE id=?", (token.strip(), bot_id))
+
+
+def bot_by_tg_id(tg_bot_id):
+    """البوت الذي معرّفه على تليجرام هذا (يُحفظ في config.tg_bot_id عند الإنشاء بضغطة)."""
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM bots WHERE json_extract(config_json,'$.tg_bot_id')=? "
+                      "ORDER BY id LIMIT 1", (int(tg_bot_id),)).fetchone()
+        return dict(r) if r else None
+
+
+# ============================================================================
+#  إنشاء بوت بضغطة — Telegram Managed Bots (Bot API 9.6)
+# ============================================================================
+MANAGED_TTL = 15 * 60
+
+def create_managed_request(user_id, token_hash, template, business_name, suggested_username,
+                           ttl=MANAGED_TTL):
+    """طلب جديد لمرة واحدة. الطلبات المعلّقة السابقة لنفس المستخدم تُلغى —
+    رابط واحد صالح في كل لحظة، فلا يُستهلك رابط قديم منسيّ لإنشاء بوت لم يعد مطلوباً."""
+    now = int(time.time())
+    with get_conn() as c:
+        c.execute("UPDATE managed_bot_requests SET status='failed', error='superseded' "
+                  "WHERE user_id=? AND status IN ('pending','linked')", (user_id,))
+        cur = c.execute(
+            "INSERT INTO managed_bot_requests(token_hash,user_id,template,business_name,"
+            "suggested_username,created_at,expires_at) VALUES(?,?,?,?,?,?,?)",
+            (token_hash, user_id, template, business_name[:80], suggested_username, now, now + ttl))
+        return cur.lastrowid
+
+
+def get_managed_request(req_id, user_id=None):
+    q, args = "SELECT * FROM managed_bot_requests WHERE id=?", [req_id]
+    if user_id is not None:                   # الملكية في الاستعلام لا بعده
+        q += " AND user_id=?"
+        args.append(user_id)
+    with get_conn() as c:
+        r = c.execute(q, args).fetchone()
+        return dict(r) if r else None
+
+
+def link_managed_request(token_hash, tg_user_id):
+    """يربط الطلب بحساب تليجرام الذي فتح الرابط. ذرّي: شرط الحالة هو القفل،
+    فحساب تليجرام ثانٍ لا يستولي على طلب ربطه غيره. يرجّع الصف أو None."""
+    now = int(time.time())
+    with get_conn() as c:
+        cur = c.execute("UPDATE managed_bot_requests SET tg_user_id=?, status='linked' "
+                        "WHERE token_hash=? AND status='pending' AND expires_at>?",
+                        (int(tg_user_id), token_hash, now))
+        if cur.rowcount != 1:
+            return None
+        r = c.execute("SELECT * FROM managed_bot_requests WHERE token_hash=?",
+                      (token_hash,)).fetchone()
+        return dict(r) if r else None
+
+
+def pending_managed_for_tg(tg_user_id):
+    """أحدث طلب مربوط وصالح لهذا الحساب على تليجرام — لا غيره."""
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM managed_bot_requests WHERE tg_user_id=? AND status='linked' "
+                      "AND expires_at>? ORDER BY id DESC LIMIT 1",
+                      (int(tg_user_id), int(time.time()))).fetchone()
+        return dict(r) if r else None
+
+
+def claim_managed_request(req_id):
+    """linked ← creating، مرة واحدة. تليجرام قد يرسل `managed_bot` ورسالة
+    `managed_bot_created` معاً لنفس البوت — بلا هذا القفل يُنشأ صفّان."""
+    with get_conn() as c:
+        cur = c.execute("UPDATE managed_bot_requests SET status='creating' "
+                        "WHERE id=? AND status='linked'", (req_id,))
+        return cur.rowcount == 1
+
+
+def finish_managed_request(req_id, status, bot_id=None, error=None):
+    """creating ← created | failed. يرجّع True لو تم الانتقال."""
+    with get_conn() as c:
+        cur = c.execute("UPDATE managed_bot_requests SET status=?, bot_id=?, error=? "
+                        "WHERE id=? AND status IN ('linked','creating')",
+                        (status, bot_id, (error or None) and str(error)[:200], req_id))
+        return cur.rowcount == 1
+
+
+# ============================================================================
+#  المحادثات — سجل الرسائل وصندوق الوارد
+# ============================================================================
+MSG_TEXT_MAX = 4000
+
+def log_message(bot_id, peer, direction, sender, text="", kind="text", media_id=None, name=None):
+    """يسجّل رسالة ويحدّث ملخّص المحادثة في معاملة واحدة.
+    الوارد يزيد عدّاد غير المقروء؛ ردّ صاحب النشاط يصفّره."""
+    now = int(time.time())
+    text = (text or "")[:MSG_TEXT_MAX]
+    with get_conn() as c:
+        c.execute("INSERT INTO messages(bot_id,peer,direction,sender,kind,text,media_id,created_at)"
+                  " VALUES(?,?,?,?,?,?,?,?)",
+                  (bot_id, peer, direction, sender, kind, text, media_id, now))
+        preview = text[:140] if text else ("📎" if kind == "media" else "")
+        c.execute("INSERT INTO conversations(bot_id,peer,name,unread,last_text,last_at)"
+                  " VALUES(?,?,?,?,?,?)"
+                  " ON CONFLICT(bot_id,peer) DO UPDATE SET"
+                  " name=COALESCE(NULLIF(excluded.name,''), conversations.name),"
+                  " unread=CASE WHEN ?='in' THEN conversations.unread+1"
+                  "             WHEN ?='human' THEN 0 ELSE conversations.unread END,"
+                  " last_text=excluded.last_text, last_at=excluded.last_at",
+                  (bot_id, peer, name or "", 1 if direction == "in" else 0, preview, now,
+                   direction, sender))
+
+
+def get_conversation(bot_id, peer):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM conversations WHERE bot_id=? AND peer=?",
+                      (bot_id, peer)).fetchone()
+        return dict(r) if r else None
+
+
+def list_conversations(bot_id, limit=200):
+    with get_conn() as c:
+        rows = c.execute("SELECT * FROM conversations WHERE bot_id=? ORDER BY last_at DESC LIMIT ?",
+                         (bot_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_messages(bot_id, peer, after_id=0, limit=300):
+    """آخر الرسائل تصاعدياً. after_id يجلب الجديد فقط (الاستطلاع الدوري)."""
+    with get_conn() as c:
+        if after_id:
+            rows = c.execute("SELECT * FROM messages WHERE bot_id=? AND peer=? AND id>? "
+                             "ORDER BY id LIMIT ?", (bot_id, peer, int(after_id), limit)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM (SELECT * FROM messages WHERE bot_id=? AND peer=? "
+                             "ORDER BY id DESC LIMIT ?) ORDER BY id", (bot_id, peer, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def recent_history(bot_id, peer, limit=12):
+    """آخر N رسالة نصية للمحادثة — ذاكرة الذكاء الاصطناعي."""
+    with get_conn() as c:
+        rows = c.execute("SELECT direction, sender, text FROM messages WHERE bot_id=? AND peer=? "
+                         "AND text<>'' ORDER BY id DESC LIMIT ?", (bot_id, peer, limit)).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+
+def set_conversation_mode(bot_id, peer, mode):
+    """bot | human. التولّي يسجّل وقت النشاط البشري (أساس العودة التلقائية)."""
+    if mode not in ("bot", "human"):
+        return False
+    now = int(time.time())
+    with get_conn() as c:
+        c.execute("INSERT INTO conversations(bot_id,peer,mode,last_at,human_at) VALUES(?,?,?,?,?)"
+                  " ON CONFLICT(bot_id,peer) DO UPDATE SET mode=excluded.mode,"
+                  " human_at=CASE WHEN excluded.mode='human' THEN excluded.human_at"
+                  "               ELSE conversations.human_at END",
+                  (bot_id, peer, mode, now, now if mode == "human" else None))
+    return True
+
+
+def touch_human(bot_id, peer):
+    with get_conn() as c:
+        c.execute("UPDATE conversations SET human_at=? WHERE bot_id=? AND peer=?",
+                  (int(time.time()), bot_id, peer))
+
+
+def mark_conversation_read(bot_id, peer):
+    with get_conn() as c:
+        c.execute("UPDATE conversations SET unread=0 WHERE bot_id=? AND peer=?", (bot_id, peer))
+
+
+def unread_total(bot_id):
+    with get_conn() as c:
+        return c.execute("SELECT COALESCE(SUM(unread),0) FROM conversations WHERE bot_id=?",
+                         (bot_id,)).fetchone()[0]
+
+
+def peer_known(bot_id, peer):
+    """هل هذا العميل تواصل مع هذا البوت فعلاً؟ لا نراسل رقماً لم يراسلنا."""
+    with get_conn() as c:
+        return (c.execute("SELECT 1 FROM bot_users WHERE bot_id=? AND peer=? LIMIT 1",
+                          (bot_id, peer)).fetchone() is not None or
+                c.execute("SELECT 1 FROM conversations WHERE bot_id=? AND peer=? LIMIT 1",
+                          (bot_id, peer)).fetchone() is not None)
+
+
+def peer_last_in(bot_id, peer):
+    """آخر رسالة واردة من العميل — أساس نافذة الـ24 ساعة لرد صاحب النشاط على واتساب."""
+    with get_conn() as c:
+        r = c.execute("SELECT last_in_at FROM bot_users WHERE bot_id=? AND peer=?",
+                      (bot_id, peer)).fetchone()
+        return (r["last_in_at"] if r else None) or 0
+
+
+def purge_old_messages(max_age_seconds=365 * 24 * 3600):
+    """مدة الاحتفاظ بالمحادثات (سياسة الخصوصية §7): 12 شهراً."""
+    cutoff = int(time.time()) - int(max_age_seconds)
+    with get_conn() as c:
+        cur = c.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
+        c.execute("DELETE FROM conversations WHERE last_at < ?", (cutoff,))
+        return cur.rowcount
+
+
+# ============================================================================
+#  وكيل الإعداد — الجلسات ونسخ الإعدادات
+# ============================================================================
+def create_setup_session(bot_id, owner_id, source):
+    now = int(time.time())
+    with get_conn() as c:
+        cur = c.execute("INSERT INTO ai_setup_sessions(bot_id,owner_id,source,created_at,updated_at)"
+                        " VALUES(?,?,?,?,?)", (bot_id, owner_id, source, now, now))
+        return cur.lastrowid
+
+
+def get_setup_session(sid, bot_id):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM ai_setup_sessions WHERE id=? AND bot_id=?",
+                      (sid, bot_id)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["brief"] = json.loads(d.get("brief_json") or "{}")
+        d["turns"] = json.loads(d.get("turns_json") or "[]")
+        d["proposal"] = json.loads(d["proposal_json"]) if d.get("proposal_json") else None
+        return d
+
+
+def save_setup_session(sid, status, brief, turns, proposal=None, rounds=None, source=None):
+    with get_conn() as c:
+        c.execute("UPDATE ai_setup_sessions SET status=?, brief_json=?, turns_json=?,"
+                  " proposal_json=?, rounds=COALESCE(?,rounds), source=COALESCE(?,source),"
+                  " updated_at=? WHERE id=?",
+                  (status, json.dumps(brief or {}, ensure_ascii=False),
+                   json.dumps(turns or [], ensure_ascii=False),
+                   json.dumps(proposal, ensure_ascii=False) if proposal is not None else None,
+                   rounds, source, int(time.time()), sid))
+
+
+def close_setup_session(sid, status):
+    """applied | discarded — مرة واحدة: جلسة طُبّقت لا تُطبَّق ثانية."""
+    with get_conn() as c:
+        cur = c.execute("UPDATE ai_setup_sessions SET status=?, updated_at=? "
+                        "WHERE id=? AND status IN ('asking','proposed')",
+                        (status, int(time.time()), sid))
+        return cur.rowcount == 1
+
+
+def setup_sessions_this_month(owner_id):
+    with get_conn() as c:
+        return c.execute("SELECT COUNT(*) FROM ai_setup_sessions WHERE owner_id=? AND created_at>=?",
+                         (owner_id, _month_start())).fetchone()[0]
+
+
+CONFIG_VERSIONS_KEEP = 20
+
+def save_config_version(bot_id, config, reason):
+    """يحفظ الإعداد **الحالي** قبل استبداله، ويبقي آخر 20 نسخة فقط."""
+    with get_conn() as c:
+        c.execute("INSERT INTO bot_config_versions(bot_id,config_json,reason,created_at)"
+                  " VALUES(?,?,?,?)",
+                  (bot_id, json.dumps(config, ensure_ascii=False), reason, int(time.time())))
+        c.execute("DELETE FROM bot_config_versions WHERE bot_id=? AND id NOT IN ("
+                  "SELECT id FROM bot_config_versions WHERE bot_id=? ORDER BY id DESC LIMIT ?)",
+                  (bot_id, bot_id, CONFIG_VERSIONS_KEEP))
+
+
+def list_config_versions(bot_id, limit=CONFIG_VERSIONS_KEEP):
+    with get_conn() as c:
+        rows = c.execute("SELECT id, reason, created_at FROM bot_config_versions WHERE bot_id=? "
+                         "ORDER BY id DESC LIMIT ?", (bot_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_config_version(vid, bot_id):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM bot_config_versions WHERE id=? AND bot_id=?",
+                      (vid, bot_id)).fetchone()
+        return json.loads(r["config_json"]) if r else None
+
+
+# ============================================================================
+#  ردود الذكاء الاصطناعي — الحصة الشهرية ثم المحفظة
+# ============================================================================
+def _month_start():
+    return int(time.mktime(time.strptime(time.strftime("%Y-%m-01"), "%Y-%m-%d")))
+
+
+def ai_reply_allow(owner_id, allowance, price, ref=None):
+    """يحجز رداً واحداً للذكاء الاصطناعي. يرجّع 'included' أو 'paid' أو None.
+
+    **ذرّي في معاملة واحدة:** الحجز من الحصة شرطه `replies < allowance` في جملة
+    UPDATE نفسها (نفس قفل `try_consume_msg`)، فردّان متزامنان عند حافة الحصة
+    لا يتجاوزانها. ما فوق الحصة يُخصم من المحفظة بـ`_wallet_move` على **نفس**
+    الاتصال — لا خصم بلا ردّ محسوب ولا ردّ محسوب بلا خصم.
+    allowance=None: بلا حد (الأدمن)."""
+    m = _month()
+    with get_conn() as c:
+        c.execute("INSERT OR IGNORE INTO ai_usage(owner_id,month) VALUES(?,?)", (owner_id, m))
+        if allowance is None:
+            c.execute("UPDATE ai_usage SET replies=replies+1 WHERE owner_id=? AND month=?",
+                      (owner_id, m))
+            return "included"
+        cur = c.execute("UPDATE ai_usage SET replies=replies+1 WHERE owner_id=? AND month=? "
+                        "AND replies < ?", (owner_id, m, int(allowance)))
+        if cur.rowcount == 1:
+            return "included"
+        price = int(price or 0)
+        if price <= 0:
+            return None
+        if _wallet_move(owner_id, -price, "spend", ref=ref, note="ai reply", conn=c) is None:
+            return None
+        c.execute("UPDATE ai_usage SET replies=replies+1, paid=paid+1 WHERE owner_id=? AND month=?",
+                  (owner_id, m))
+        return "paid"
+
+
+def ai_usage_of(owner_id, month=None):
+    with get_conn() as c:
+        r = c.execute("SELECT replies, paid FROM ai_usage WHERE owner_id=? AND month=?",
+                      (owner_id, month or _month())).fetchone()
+        return {"replies": r["replies"], "paid": r["paid"]} if r else {"replies": 0, "paid": 0}
+
+
+# ============================================================================
+#  مكتبة وسائط صاحب النشاط
+# ============================================================================
+def add_asset(owner_id, kind, mime, size, fname, name="", source_url=None):
+    with get_conn() as c:
+        cur = c.execute("INSERT INTO assets(owner_id,kind,mime,size,fname,name,source_url,created_at)"
+                        " VALUES(?,?,?,?,?,?,?,?)",
+                        (owner_id, kind, mime, size, fname, (name or "")[:80], source_url,
+                         int(time.time())))
+        return cur.lastrowid
+
+
+def get_asset(asset_id, owner_id=None):
+    q, args = "SELECT * FROM assets WHERE id=?", [asset_id]
+    if owner_id is not None:                   # الملكية في الاستعلام
+        q += " AND owner_id=?"
+        args.append(owner_id)
+    with get_conn() as c:
+        r = c.execute(q, args).fetchone()
+        return dict(r) if r else None
+
+
+def list_assets(owner_id, limit=300):
+    with get_conn() as c:
+        rows = c.execute("SELECT * FROM assets WHERE owner_id=? ORDER BY id DESC LIMIT ?",
+                         (owner_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def assets_bytes(owner_id):
+    with get_conn() as c:
+        return c.execute("SELECT COALESCE(SUM(size),0) FROM assets WHERE owner_id=?",
+                         (owner_id,)).fetchone()[0]
+
+
+def delete_asset(asset_id, owner_id):
+    """يرجّع الصف المحذوف (لحذف ملفه) أو None لو ليس ملكه."""
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM assets WHERE id=? AND owner_id=?",
+                      (asset_id, owner_id)).fetchone()
+        if not r:
+            return None
+        c.execute("DELETE FROM assets WHERE id=?", (asset_id,))
+        return dict(r)
+
+
+def get_asset_ref(asset_id, bot_id):
+    """مرجع القناة إن كان صالحاً (لم ينتهِ)."""
+    with get_conn() as c:
+        r = c.execute("SELECT ref, expires_at FROM asset_refs WHERE asset_id=? AND bot_id=?",
+                      (asset_id, bot_id)).fetchone()
+        if not r:
+            return None
+        if r["expires_at"] and r["expires_at"] <= int(time.time()):
+            return None
+        return r["ref"]
+
+
+def set_asset_ref(asset_id, bot_id, ref, expires_at=None):
+    with get_conn() as c:
+        c.execute("INSERT INTO asset_refs(asset_id,bot_id,ref,expires_at) VALUES(?,?,?,?)"
+                  " ON CONFLICT(asset_id,bot_id) DO UPDATE SET ref=excluded.ref,"
+                  " expires_at=excluded.expires_at", (asset_id, bot_id, ref, expires_at))
+
+
+def drop_asset_ref(asset_id, bot_id):
+    with get_conn() as c:
+        c.execute("DELETE FROM asset_refs WHERE asset_id=? AND bot_id=?", (asset_id, bot_id))

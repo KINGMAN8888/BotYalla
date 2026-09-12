@@ -54,7 +54,7 @@ export default function LiveDemo({ channel = "telegram" }) {
             </span>
           </div>
 
-          <div className="grid gap-5 p-6 lg:grid-cols-[1.05fr_0.95fr]">
+          <div className="grid grid-cols-1 gap-5 p-4 sm:p-6 lg:grid-cols-[1.05fr_0.95fr]">
             {/* المحادثة */}
             <div className="flex min-h-[300px] flex-col gap-2.5 rounded-2xl bg-black/35 p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]">
               <div key={`${idx}-${animOk}-${channel}`} className="flex flex-1 flex-col gap-2.5">

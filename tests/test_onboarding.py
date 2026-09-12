@@ -126,7 +126,7 @@ class DashboardPayloadTests(unittest.TestCase):
         self.c.post("/login", data={"username": "ob_page", "password": PW, "csrf_token": "tk"})
 
     def test_a_fresh_account_gets_the_first_bot_stage(self):
-        html = self.c.get("/").get_data(as_text=True)
+        html = self.c.get("/dashboard").get_data(as_text=True)
         self.assertIn("first_bot", html)
 
     def test_the_onboarding_strings_ship_with_every_page(self):

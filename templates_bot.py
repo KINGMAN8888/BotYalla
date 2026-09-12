@@ -283,6 +283,25 @@ DEFAULT_MENU_ITEMS = [
     {"q": "📞 التواصل", "a": "للتواصل: أضف رقمك هنا من إعدادات البوت."},
 ]
 
+def initial_config(name, template, info=None, owner_chat_id=""):
+    """إعدادات البوت عند إنشائه — مصدر واحد للإنشاء اليدوي (توكن من BotFather)
+    والإنشاء بضغطة (Managed Bots)، فلا يختلف بوتان بحسب طريقة إنشائهما."""
+    import json as _json
+    info = info or {}
+    cfg = {"business_name": name, "owner_chat_id": (owner_chat_id or "").strip(),
+           "welcome": "", "thanks": "", "products": [],
+           "service_name": name, "days_ahead": 7, "open_hour": 10, "close_hour": 22,
+           "slot_minutes": 60, "working_days": None, "flow": None, "welcome_image": "",
+           "menu_items": [], "bot_username": info.get("username"), "bot_name": info.get("name"),
+           "pending_owner_code": None}
+    # قوالب ثابتة جاهزة حسب النوع — نسخة قابلة للتعديل لا مرجع مشترك
+    if template in PRESET_FLOWS:
+        cfg["flow"] = _json.loads(_json.dumps(PRESET_FLOWS[template]))
+    if template == "faq":
+        cfg["menu_items"] = _json.loads(_json.dumps(DEFAULT_MENU_ITEMS))
+    return cfg
+
+
 TEMPLATES = {
     "flow":             {"label": "باني محادثات (No-Code)", "build": build_flow,     "icon": "🧩"},
     "store":            {"label": "متجر صغير",              "build": build_store,    "icon": "🛍️"},

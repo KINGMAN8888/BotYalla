@@ -263,7 +263,7 @@ class ContentSecurityPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         _boot()
-        cls.pages = ("/landing", "/login", "/register")
+        cls.pages = ("/", "/login", "/register")
 
     def _csp(self, r):
         return r.headers.get("Content-Security-Policy", "")
@@ -275,7 +275,7 @@ class ContentSecurityPolicyTests(unittest.TestCase):
 
     def test_script_src_has_no_unsafe_inline(self):
         """جوهر الحماية: سكربت بلا nonce لا يعمل."""
-        csp = self._csp(_client().get("/landing"))
+        csp = self._csp(_client().get("/"))
         script_part = csp.split("style-src")[0]
         self.assertNotIn("'unsafe-inline'", script_part)
         self.assertIn("'nonce-", script_part)
@@ -293,7 +293,7 @@ class ContentSecurityPolicyTests(unittest.TestCase):
     def test_the_nonce_is_not_reused_across_requests(self):
         import re
         c = _client()
-        seen = {re.search(r"'nonce-([\w\-]+)'", self._csp(c.get("/landing"))).group(1)
+        seen = {re.search(r"'nonce-([\w\-]+)'", self._csp(c.get("/"))).group(1)
                 for _ in range(3)}
         self.assertEqual(len(seen), 3, "nonce ثابت = nonce بلا قيمة")
 
@@ -307,8 +307,8 @@ class ContentSecurityPolicyTests(unittest.TestCase):
     def test_hsts_only_on_secure_requests(self):
         """إرسالها على http يثبّت الترقية قبل جهوزية الشهادة."""
         c = _client()
-        self.assertNotIn("Strict-Transport-Security", c.get("/landing").headers)
-        r = c.get("/landing", headers={"X-Forwarded-Proto": "https"}, base_url="https://localhost")
+        self.assertNotIn("Strict-Transport-Security", c.get("/").headers)
+        r = c.get("/", headers={"X-Forwarded-Proto": "https"}, base_url="https://localhost")
         self.assertIn("Strict-Transport-Security", r.headers)
 
 

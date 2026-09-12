@@ -19,7 +19,7 @@ export default function Channels() {
         <p className="m-0 text-[clamp(14px,1.3vw,17px)] leading-[1.8] text-ink-2">{t("lp2_ch_sub")}</p>
       </Reveal>
 
-      <div className="grid gap-5 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
         {chans.map((c, i) => {
           const s = SKIN[c.id] || SKIN.telegram;
           return (
@@ -30,7 +30,13 @@ export default function Channels() {
                 <div className="relative flex items-center gap-4">
                   <span className="grid size-14 shrink-0 place-items-center rounded-2xl"
                         style={{ background: s.bg, color: s.dot, boxShadow: `inset 0 0 0 1px ${s.ring}` }}>
-                    <Icon name={c.icon} size={26} />
+                    {c.id === "telegram" ? (
+                      <img src="/static/Telegram.svg.png" alt="Telegram" className="size-8 object-contain" />
+                    ) : c.id === "whatsapp" ? (
+                      <img src="/static/whatsapp.png" alt="WhatsApp" className="size-8 object-contain" />
+                    ) : (
+                      <Icon name={c.icon} size={26} />
+                    )}
                   </span>
                   <div>
                     <h3 className="m-0 text-[22px] font-extrabold text-ink">{c.t}</h3>

@@ -12,9 +12,9 @@
 <meta name="theme-color" content="#05070D">
 <meta name="color-scheme" content="dark">
 <meta name="author" content="Youssef Alsherief">
-<link rel="icon" href="{{ url_for('static', filename='mark.svg') }}" type="image/svg+xml">
-<link rel="icon" href="{{ url_for('static', filename='brand/favicon-32.png') }}" type="image/png" sizes="32x32">
-<link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/apple-touch-icon.png') }}">
+<link rel="icon" href="{{ static_v('mark.svg') }}" type="image/svg+xml">
+<link rel="icon" href="{{ static_v('brand/favicon-32.png') }}" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="{{ static_v('brand/apple-touch-icon.png') }}">
 <link rel="manifest" href="{{ url_for('webmanifest') }}">
 
 <meta property="og:type" content="website">
@@ -37,7 +37,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;600;700;800&family=Noto+Kufi+Arabic:wght@700;800;900&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{{ url_for('static', filename='dist/style.css') }}">
+<link rel="stylesheet" href="{{ static_v('dist/style.css') }}">
 <style nonce="{{ csp_nonce }}">
   html{background:#05070D;}
   body{font-family:{% if P.lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}
@@ -154,6 +154,6 @@
   </div>
 </div>
 
-<script nonce="{{ csp_nonce }}" type="module" src="{{ url_for('static', filename='dist/landing.js') }}"></script>
+<script nonce="{{ csp_nonce }}" type="module" src="{{ static_v('dist/landing.js') }}"></script>
 </body>
 </html>

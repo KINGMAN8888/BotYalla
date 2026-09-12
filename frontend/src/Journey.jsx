@@ -42,9 +42,11 @@ export default function Journey() {
 
   return (
     <section id="story" ref={ref} aria-labelledby="story-t"
-             className={"relative " + (scrolly ? "h-[300vh]" : "")}>
+             // overflow-x-clip لا hidden: يقصّ وهج الهاتف دون أن ينشئ حاوية تمرير
+             // (hidden كان سيكسر position:sticky للمحتوى اللاصق)
+             className={"relative overflow-x-clip " + (scrolly ? "h-[300vh]" : "")}>
       <div className={scrolly ? "sticky top-0 flex h-screen items-center" : ""}>
-        <div className="mx-auto grid w-full max-w-[1240px] items-center gap-12 px-6
+        <div className="mx-auto grid w-full max-w-[1240px] grid-cols-1 items-center gap-12 px-5 sm:px-6
                         py-[clamp(64px,10vw,120px)] lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)] lg:py-0">
           <div>
             <h2 id="story-t"
@@ -92,14 +94,14 @@ function Phone({ J, stage, reduce }) {
   const showNote = J.notify && stage >= J.notify.at;
   return (
     <div className="relative mx-auto w-full max-w-[380px]" aria-hidden="true">
-      <div className="absolute -inset-10 -z-10 rounded-full
+      <div className="absolute -inset-6 -z-10 rounded-full lg:-inset-10
                       bg-[radial-gradient(closest-side,rgb(124_108_246/0.35),transparent)] blur-2xl" />
       <div className="glass rounded-[44px] p-2.5 shadow-[0_40px_120px_-40px_rgb(124_108_246/0.7)]">
         <div className="relative flex h-[min(560px,72vh)] flex-col overflow-hidden rounded-[36px] bg-[#070A12]">
           <div className="flex items-center gap-3 px-5 pt-6 pb-3.5 shadow-[0_1px_0_rgb(255_255_255/0.06)]">
             <span className="grid size-10 place-items-center rounded-full text-au-cyan
                              bg-[linear-gradient(150deg,rgb(124_108_246/0.35),rgb(34_211_238/0.15))]">
-              <Icon name="bot" size={19} />
+              <img src="/static/Telegram.svg.png" alt="Telegram" className="size-[19px] object-contain" />
             </span>
             <div className="min-w-0">
               <div className="truncate text-[14px] font-extrabold text-ink">{t("lp_preview_bot")}</div>

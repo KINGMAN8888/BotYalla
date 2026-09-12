@@ -5,6 +5,7 @@ import {
   Grid, Stat, Pill, Empty, PageHead, SectionTitle, num,
 } from "../kit.jsx";
 import { Flashes } from "../AppShell.jsx";
+import { AssetPicker } from "../media.jsx";
 
 /* ---------------------------------------------------------- باني الفلو */
 export function FlowBuilder() {
@@ -15,11 +16,12 @@ export function FlowBuilder() {
     (initial.steps || []).map((s) => ({
       type: s.type || "question", prompt: s.prompt || "",
       var: s.var || "", options: (s.options || []).join(", "),
+      asset: s.asset ? String(s.asset) : "", optional: !!s.optional,
     }))
   );
 
   const set = (i, k, v) => setSteps(steps.map((s, j) => (j === i ? { ...s, [k]: v } : s)));
-  const add = () => setSteps([...steps, { type: "question", prompt: "", var: "", options: "" }]);
+  const add = () => setSteps([...steps, { type: "question", prompt: "", var: "", options: "", asset: "", optional: false }]);
   const del = (i) => setSteps(steps.filter((_, j) => j !== i));
   const move = (i, d) => {
     const j = i + d;
@@ -31,6 +33,7 @@ export function FlowBuilder() {
     { v: "question", l: t("step_q") },
     { v: "buttons",  l: t("step_b") },
     { v: "media",    l: t("step_f") },
+    { v: "show",     l: t("step_show") },
     { v: "message",  l: t("step_m") },
   ];
 
@@ -95,14 +98,29 @@ export function FlowBuilder() {
                   </Field>
                   <Field label={t("btn_options")}>
                     <Input name="s_options" value={s.options} onChange={(e) => set(i, "options", e.target.value)}
-                           disabled={s.type !== "buttons"} placeholder="A, B, C" />
+                           disabled={s.type !== "buttons" && s.type !== "show"} placeholder="A, B, C" />
                   </Field>
                 </div>
+                {/* حقلان لكل خطوة دائماً (ولو فارغين) — القوائم تُقرأ بالترتيب في الخادم */}
+                <input type="hidden" name="s_asset" value={s.type === "show" ? s.asset : ""} />
+                <input type="hidden" name="s_optional" value={s.type === "media" && s.optional ? "1" : ""} />
                 {s.type === "media" && (
-                  <p className="mt-3 mb-0 text-[12.5px] leading-relaxed text-ink-3">
-                    <Icon name="image" size={13} className="me-1 inline align-[-2px] text-au-cyan" />
-                    {t("step_f_hint")}
-                  </p>
+                  <>
+                    <p className="mt-3 mb-0 text-[12.5px] leading-relaxed text-ink-3">
+                      <Icon name="image" size={13} className="me-1 inline align-[-2px] text-au-cyan" />
+                      {t("step_f_hint")}
+                    </p>
+                    <label className="mt-3 flex cursor-pointer items-center gap-2 text-[13px] text-ink-2">
+                      <input type="checkbox" checked={s.optional} onChange={(e) => set(i, "optional", e.target.checked)} />
+                      {t("step_optional")}
+                    </label>
+                  </>
+                )}
+                {s.type === "show" && (
+                  <div className="mt-4 rounded-xl bg-white/[0.03] p-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+                    <AssetPicker value={s.asset} onChange={(v) => set(i, "asset", v)} />
+                    <p className="mt-2.5 mb-0 text-[12px] leading-relaxed text-ink-3">{t("step_show_hint")}</p>
+                  </div>
                 )}
               </motion.div>
             ))}
@@ -124,6 +142,7 @@ export function Broadcast() {
   const { bot, subs, isWa = false, reachable = subs, audience = reachable, waba = "",
           wallet = { balance: 0, price: 0 } } = P;
   const [text, setText] = useState("");
+  const [asset, setAsset] = useState("");
   const [mode, setMode] = useState("text");
   const [tpls, setTpls] = useState(null);      // null = لم يُجلب بعد
   const [pick, setPick] = useState("");
@@ -273,12 +292,16 @@ export function Broadcast() {
                 confirm={bi("إرسال الحملة لكل المشتركين؟", "Send to all subscribers?")}>
             <input type="hidden" name="mode" value="text" />
             <Field label={t("msg_text")}>
-              <Textarea name="text" required value={text} onChange={(e) => setText(e.target.value)}
+              <Textarea name="text" required={!asset} value={text} onChange={(e) => setText(e.target.value)}
                         className="min-h-[140px]" />
             </Field>
             <div className="mt-3 text-[12.5px] text-ink-3">{text.length} / 4096</div>
+            <div className="mt-4 rounded-xl bg-white/[0.03] p-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+              <span className="mb-2.5 block text-[12.5px] text-ink-3">{t("bc_media")}</span>
+              <AssetPicker name="asset_id" value={asset} onChange={(v) => setAsset(v)} />
+            </div>
             <div className="mt-5">
-              <Btn icon="rocket" type="submit" disabled={!text.trim()}>{t("send_campaign")}</Btn>
+              <Btn icon="rocket" type="submit" disabled={!text.trim() && !asset}>{t("send_campaign")}</Btn>
             </div>
           </Form>
         )}
@@ -343,6 +366,22 @@ export function Analytics() {
         <Card><SectionTitle icon="wallet">{t("daily_revenue")}</SectionTitle>
           <canvas ref={revRef} height="220" /></Card>
       </div>
+
+      {/* من أين دخل العملاء — روابط البوت تحمل مصدرها (QR · رابط · ملصق · مشاركة) */}
+      <Card className="mt-4">
+        <SectionTitle icon="link">{t("src_title")}</SectionTitle>
+        {d && Object.values(d.sources || {}).some(Boolean) ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[["qr", "grid"], ["link", "link"], ["poster", "image"], ["share", "users"]].map(([k, ic]) => (
+              <div key={k} className="rounded-2xl bg-white/[0.03] p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+                <Icon name={ic} size={18} className="text-au-cyan" />
+                <div className="mt-2 text-[24px] font-extrabold text-ink tnum">{num((d.sources || {})[k] || 0)}</div>
+                <div className="text-[12.5px] text-ink-3">{t(`src_${k}`)}</div>
+              </div>
+            ))}
+          </div>
+        ) : <p className="m-0 text-[13px] text-ink-3">{t("src_none")}</p>}
+      </Card>
     </>
   );
 }

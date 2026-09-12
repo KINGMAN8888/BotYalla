@@ -76,6 +76,34 @@ def _wa_channel(row):
 
     return WhatsAppChannel(phone_id, cfg.get("wa_token", ""), on_send=guard)
 
+def _register_inbox_guard(app, bot_id):
+    """لقوالب تليجرام التي لا تمرّ بمحرك الفلو (متجر · حجز · قائمة): يسجّل كل
+    رسالة واردة في صندوق الوارد، وحين يتولّى صاحب النشاط المحادثة يوقف القالب
+    عن الرد (ApplicationHandlerStop في المجموعة -1 يمنع وصولها لما بعدها)."""
+    from telegram.ext import MessageHandler, filters, ApplicationHandlerStop
+    import flow_engine
+
+    async def guard(update, ctx):
+        msg, user = update.message, update.effective_user
+        if not msg or not user:
+            return
+        peer = f"tg:{user.id}"
+        text = (msg.text or msg.caption or "").strip()
+        db.log_message(bot_id, peer, "in", "customer", text,
+                       kind="text" if msg.text else "media", name=user.first_name or "")
+        conv = db.get_conversation(bot_id, peer)
+        if flow_engine.human_active(bot_id, peer, conv):
+            db.add_bot_user(bot_id, user.id, user.first_name or "", peer=peer)
+            row = db.get_bot(bot_id)
+            if row:
+                from channels.telegram import TelegramChannel
+                await flow_engine.notify_human_inbound(row, TelegramChannel(ctx.bot), peer,
+                                                       text or "📎")
+            raise ApplicationHandlerStop
+
+    app.add_handler(MessageHandler(filters.ALL, guard), group=-1)
+
+
 # سقف عدد البوتات العاملة في هذه العملية (L-11).
 # `workers=1` وكل بوتات تليجرام تعمل داخل عملية الويب نفسها، فالسقف حقيقي لا
 # نظري: تجاوزه لا يعطي خطأً واضحاً بل بطئاً يزحف على **كل** المستخدمين.
@@ -89,6 +117,8 @@ class BotManager:
     def __init__(self):
         self._loop = None; self._thread = None
         self._apps = {}; self._ready = threading.Event(); self._platform = None
+        # يوزر بوت المنصة و«وضع إدارة البوتات» (can_manage_bots) — من getMe عند التشغيل
+        self._platform_info = {}
 
     def start(self):
         if self._thread and self._thread.is_alive(): return
@@ -127,22 +157,48 @@ class BotManager:
                 "pct": int(round(n * 100.0 / cap)) if cap else 0,
                 "warn": n >= cap * CAPACITY_WARN_AT, "full": n >= cap}
 
+    def _capacity_refusal(self, row):
+        """رسالة الرفض لو بلغ الخادم السقف، وإلا None.
+        الرفض عند السقف مقصود: بوت إضافي يعمل ببطء أسوأ من بوت لا يعمل،
+        لأن بطأه يصيب كل من يشاركه العملية لا صاحبه وحده."""
+        st = self.capacity_status()
+        if st["full"] and (row.get("channel") or "telegram") != "whatsapp":
+            log.error("bot start refused — at capacity: %s/%s", st["running"], st["capacity"])
+            return (f"بلغ الخادم سقف البوتات العاملة ({st['capacity']}). "
+                    f"أوقف بوتاً غير مستخدم أو راسل الدعم.")
+        return None
+
     def start_bot(self, bot_id):
         if self.is_running(bot_id): return True, "يعمل بالفعل"
         row = db.get_bot(bot_id)
         if not row: return False, "البوت غير موجود"
-        # الرفض عند السقف مقصود: بوت إضافي يعمل ببطء أسوأ من بوت لا يعمل،
-        # لأن بطأه يصيب كل من يشاركه العملية لا صاحبه وحده.
-        st = self.capacity_status()
-        if st["full"] and (row.get("channel") or "telegram") != "whatsapp":
-            log.error("bot start refused — at capacity: %s/%s", st["running"], st["capacity"])
-            return False, (f"بلغ الخادم سقف البوتات العاملة ({st['capacity']}). "
-                           f"أوقف بوتاً غير مستخدم أو راسل الدعم.")
+        refusal = self._capacity_refusal(row)
+        if refusal:
+            return False, refusal
         try:
             self._submit(self._start(row)); db.set_bot_active(bot_id, True)
             return True, "تم التشغيل ✅"
         except Exception as e:
             log.exception("start"); return False, f"فشل التشغيل: {e}"
+
+    async def start_bot_async(self, bot_id):
+        """نفس start_bot لكن من **داخل** حلقة المدير (بوت المنصة ينشئ بوتاً بضغطة).
+        `_submit` من داخل الحلقة ينتظر نفسه فيتجمّد إلى الأبد — لذلك await مباشرة."""
+        if self.is_running(bot_id): return True, "يعمل بالفعل"
+        row = db.get_bot(bot_id)
+        if not row: return False, "البوت غير موجود"
+        refusal = self._capacity_refusal(row)
+        if refusal:
+            return False, refusal
+        try:
+            await self._start(row); db.set_bot_active(bot_id, True)
+            return True, "تم التشغيل ✅"
+        except Exception as e:
+            log.exception("start (async)"); return False, f"فشل التشغيل: {e}"
+
+    async def restart_bot_async(self, bot_id):
+        await self._stop(bot_id)
+        return await self.start_bot_async(bot_id)
 
     async def _start(self, row):
         if row.get("channel") == "whatsapp":
@@ -156,6 +212,10 @@ class BotManager:
         if not tmpl: raise ValueError("قالب غير معروف")
         tmpl["build"](app)
         tg.register_common(app)
+        if tmpl["build"] is not T.build_flow:
+            # المتجر والحجز والقائمة لا تمرّ بمحرك الفلو — حارس الوارد يسجّل رسائلها
+            # ويحترم «تولّي المحادثة» قبل أن يصلها القالب.
+            _register_inbox_guard(app, row["id"])
         await app.initialize(); await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
         self._apps[row["id"]] = app
@@ -180,8 +240,9 @@ class BotManager:
     def restart_bot(self, bot_id):
         self.stop_bot(bot_id); return self.start_bot(bot_id)
 
-    def broadcast(self, bot_id, text):
-        """إرسال رسالة لكل مشتركي البوت. يرجّع (تم, فشل)."""
+    def broadcast(self, bot_id, text, asset=None):
+        """إرسال رسالة لكل مشتركي البوت — مع صورة/فيديو من المكتبة اختيارياً
+        (والنص يصير تعليقه). يرجّع (تم, فشل)."""
         row = db.get_bot(bot_id)
         if not row: return 0, 0
         if (row.get("channel") or "telegram") == "whatsapp":
@@ -195,34 +256,44 @@ class BotManager:
             ids = db.list_bot_user_ids(bot_id)
         if not ids: return 0, 0
         try:
-            return self._submit(self._broadcast(row, ids, text), timeout=max(30, len(ids)*0.5))
+            per = 1.0 if asset else 0.5                # الوسائط أبطأ (أول رفع خصوصاً)
+            return self._submit(self._broadcast(row, ids, text, asset),
+                                timeout=max(30, len(ids) * per))
         except Exception as e:
             log.exception("broadcast"); return 0, len(ids)
 
-    async def _broadcast(self, row, ids, text):
+    async def _broadcast(self, row, ids, text, asset=None):
         if (row.get("channel") or "telegram") == "whatsapp":
-            return await self._broadcast_wa(row, ids, text)
+            return await self._broadcast_wa(row, ids, text, asset)
 
+        from channels.telegram import TelegramChannel
         app = self._apps.get(row["id"])
         bot = app.bot if app else Bot(row["token"])
         own = app is None
         if own: await bot.initialize()
+        ch = TelegramChannel(bot) if asset else None
         sent = failed = 0
         for uid in ids:
             try:
-                await bot.send_message(uid, text); sent += 1
+                if ch:
+                    # أول إرسال يرفع الملف ويحفظ file_id — الباقي يعيد استعماله
+                    await ch.send_media(f"tg:{uid}", asset, row["id"], caption=text or None)
+                else:
+                    await bot.send_message(uid, text)
+                sent += 1
                 await asyncio.sleep(0.05)   # احترام حدود المعدل
             except Exception:
                 failed += 1
         if own: await bot.shutdown()
         return sent, failed
 
-    async def _broadcast_wa(self, row, peers, text):
+    async def _broadcast_wa(self, row, peers, text, asset=None):
         channel = _wa_channel(row)
         sent = failed = 0
         for peer in peers:
             try:
-                ok = await channel.send_text(peer, text)
+                ok = await (channel.send_media(peer, asset, row["id"], caption=text or None)
+                            if asset else channel.send_text(peer, text))
                 sent += 1 if ok else 0
                 failed += 0 if ok else 1
                 await asyncio.sleep(0.1)
@@ -277,20 +348,78 @@ class BotManager:
             log.exception("platform start"); return False, f"فشل تشغيل بوت المنصة: {e}"
 
     async def _start_platform(self, token):
+        import managed_bots
         app = Application.builder().token(token).build()
         PB.register(app)
         await app.initialize(); await app.start()
-        await app.updater.start_polling(drop_pending_updates=True)
+        me = app.bot.bot
+        # can_manage_bots يصل من getMe فقط، وPTB 21.6 يضعه في api_kwargs
+        self._platform_info = {
+            "username": me.username,
+            "can_manage": bool(getattr(me, "can_manage_bots", False)
+                               or (me.api_kwargs or {}).get("can_manage_bots")),
+        }
+        # managed_bot لا يصل إلا لو طُلب صراحةً في allowed_updates
+        await app.updater.start_polling(drop_pending_updates=True,
+                                        allowed_updates=managed_bots.PLATFORM_UPDATES)
         self._platform = app
 
     async def _stop_platform(self):
-        app = self._platform; self._platform = None
+        app = self._platform; self._platform = None; self._platform_info = {}
         if app:
             if app.updater and app.updater.running: await app.updater.stop()
             await app.stop(); await app.shutdown()
 
     def platform_running(self):
         return self._platform is not None
+
+    def platform_info(self):
+        """{'username','can_manage'} لبوت المنصة العامل، أو {} لو متوقف."""
+        return dict(self._platform_info) if self._platform is not None else {}
+
+    # ---- رد صاحب النشاط من صندوق الوارد ----
+    def send_to_peer(self, bot_id, peer, text=None, asset=None):
+        """يرسل رسالة من صاحب النشاط لعميل بعينه. يرجّع (ok, error_code).
+        واتساب يمرّ بعدّاد الاستهلاك عبر `_wa_channel` كأي إرسال آخر."""
+        row = db.get_bot(bot_id)
+        if not row:
+            return False, "bot"
+        try:
+            return self._submit(self._send_to_peer(row, peer, text, asset), timeout=45)
+        except Exception:
+            log.exception("send_to_peer"); return False, "send"
+
+    async def _send_to_peer(self, row, peer, text=None, asset=None):
+        from telegram.error import Forbidden
+        from channels.telegram import TelegramChannel
+        is_wa = (row.get("channel") or "telegram") == "whatsapp"
+        own = None
+        if is_wa:
+            ch = _wa_channel(row)
+        else:
+            app = self._apps.get(row["id"])
+            if app is not None and not isinstance(app, dict):
+                ch = TelegramChannel(app.bot)
+            else:
+                own = Bot(row["token"]); await own.initialize()
+                ch = TelegramChannel(own)
+        try:
+            if asset:
+                res = await ch.send_media(peer, asset, row["id"], caption=text or None)
+            else:
+                res = await ch.send_text(peer, text)
+            # واتساب يرجّع None عند الرفض (حدّ الباقة · توكن · نافذة)؛ تليجرام يرمي
+            if is_wa and not res:
+                return False, "send"
+            return True, None
+        except Forbidden:
+            return False, "blocked"                     # العميل حظر البوت
+        except Exception:
+            log.exception("owner reply failed for bot #%s", row["id"])
+            return False, "send"
+        finally:
+            if own is not None:
+                await own.shutdown()
 
     def notify_text(self, chat_id, text):
         """إرسال رسالة نصية للأدمن عبر بوت المنصة (best-effort).
@@ -340,6 +469,10 @@ class BotManager:
                 n = db.purge_seen_msgs()
                 if n:
                     log.info("purged %s seen message ids", n)
+                # مدة الاحتفاظ بالمحادثات المعلنة في سياسة الخصوصية: 12 شهراً
+                n = db.purge_old_messages()
+                if n:
+                    log.info("purged %s messages older than the retention period", n)
                 # ملفات محادثات لم تكتمل: لا lead يشير إليها، وتبقى على القرص للأبد
                 import media_store
                 orphans = db.orphan_media()

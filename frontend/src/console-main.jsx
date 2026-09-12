@@ -13,6 +13,8 @@ import { AdminPricing, AdminPromos, AdminAffiliates, Affiliate } from "./app/vie
 import { Terms, Privacy } from "./app/views/Legal.jsx";
 import WaTemplates from "./app/views/WaTemplates.jsx";
 import Wallet from "./app/views/Wallet.jsx";
+import Inbox from "./app/views/Inbox.jsx";
+import { MediaLibrary } from "./app/media.jsx";
 
 /* خريطة العرض ← المكوّن. Flask يحدّد العرض عبر data-view. */
 const VIEWS = {
@@ -40,6 +42,8 @@ const VIEWS = {
   privacy:          Privacy,
   wa_templates:     WaTemplates,
   wallet:           Wallet,
+  inbox:            Inbox,
+  media:            MediaLibrary,
 };
 
 /* صفحات المصادقة بلا قشرة لوحة */

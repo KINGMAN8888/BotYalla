@@ -1,9 +1,134 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { motion } from "motion/react";
 import {
   BY, P, t, bi, Icon, Card, Btn, Field, Input, Select, Form, Grid, Stat,
   Pill, Empty, PageHead, SectionTitle, Reveal, num,
 } from "../kit.jsx";
+import { postJSON } from "../media.jsx";
+
+/* ============================================================================
+   إنشاء بوت تليجرام بضغطة (Telegram Managed Bots) — بلا BotFather ولا توكن.
+   الزر/QR يفتح بوت المنصة، وتليجرام يطلب تأكيداً واحداً، والصفحة تتابع
+   الحالة وتفتح البوت الجديد وحدها. الإنشاء الفعلي في الخادم (managed_bots.py).
+   ========================================================================== */
+function OneTapCreate() {
+  const [name, setName] = useState("");
+  const [tpl, setTpl] = useState("customer_service");
+  const [req, setReq] = useState(null);      // {id, link, qr, suggested}
+  const [st, setSt] = useState(null);        // pending · linked · creating · created · failed · expired
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!req) return;
+    let alive = true, timer;
+    const tick = async () => {
+      try {
+        const d = await (await fetch(`/bot/create/managed/${req.id}`)).json();
+        if (!alive) return;
+        setSt(d.status);
+        if (d.status === "created" && d.url) { setTimeout(() => location.assign(d.url), 1100); return; }
+        if (d.status === "failed" || d.status === "expired") {
+          if (d.status === "failed") setErr({ error: d.error === "limit" ? t("mb_tg_limit") : t("onetap_failed") });
+          return;
+        }
+      } catch { /* الشبكة — نعيد المحاولة */ }
+      timer = setTimeout(tick, 2000);
+    };
+    tick();
+    return () => { alive = false; clearTimeout(timer); };
+  }, [req]);
+
+  async function start(e) {
+    e.preventDefault();
+    setBusy(true); setErr(null);
+    const d = await postJSON(BY.urls.botCreateManaged, { name: name.trim(), template: tpl });
+    setBusy(false);
+    if (d.ok) { setReq(d); setSt("pending"); } else setErr(d);
+  }
+  const reset = () => { setReq(null); setSt(null); setErr(null); };
+
+  const STEPS = ["onetap_s1", "onetap_s2", "onetap_s3"];
+  const stepIdx = st === "created" ? 3 : st === "creating" ? 2 : st === "linked" ? 1 : 0;
+  const statusText = { pending: t("onetap_wait"), linked: t("onetap_linked"), creating: t("onetap_creating"),
+                       created: t("onetap_done"), expired: t("onetap_expired"), failed: t("onetap_failed") }[st];
+
+  return (
+    <Card id="onetap" className="mb-6 bg-[linear-gradient(125deg,rgb(34_211_238/0.16),rgb(124_108_246/0.18))]
+                                  shadow-[inset_0_0_0_1px_rgb(143_233_255/0.25)]">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="m-0 flex items-center gap-2.5 text-[19px] font-extrabold text-ink">
+            <img src="/static/Telegram.svg.png" alt="" className="size-6 object-contain" />{t("onetap_title")}
+          </h2>
+          <p className="mt-1.5 mb-0 max-w-[560px] text-[13.5px] leading-relaxed text-ink-3">{t("onetap_sub")}</p>
+        </div>
+      </div>
+
+      {!req ? (
+        <form onSubmit={start} className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_220px_auto] sm:items-end">
+          <Field label={t("biz_name")}>
+            <Input value={name} onChange={(e) => setName(e.target.value)} required maxLength={60}
+                   placeholder={t("eg_cafe")} />
+          </Field>
+          <Field label={t("bot_type")}>
+            <select value={tpl} onChange={(e) => setTpl(e.target.value)}
+                    className="w-full cursor-pointer appearance-none rounded-xl bg-black/25 px-3.5 py-2.5 text-[14px] text-ink
+                               shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] outline-none">
+              {BY.templates.map((x) => <option key={x.k} value={x.k}>{x.label}</option>)}
+            </select>
+          </Field>
+          <Btn icon="rocket" type="submit" disabled={busy || !name.trim()}>{busy ? "…" : t("onetap_btn")}</Btn>
+        </form>
+      ) : (
+        <div className="mt-5 grid grid-cols-1 items-center gap-6 md:grid-cols-[200px_minmax(0,1fr)]">
+          <div className="mx-auto hidden w-[200px] rounded-2xl bg-white p-3 md:block">
+            <img src={req.qr} alt="QR" width="176" height="176" className="block size-full" />
+            <div className="mt-1.5 text-center text-[11.5px] font-bold text-[#07090F]">{t("onetap_scan")}</div>
+          </div>
+          <div className="min-w-0">
+            <ol className="m-0 mb-4 flex list-none flex-col gap-2.5 p-0">
+              {STEPS.map((k, i) => (
+                <li key={k} className="flex items-center gap-3 text-[14px]">
+                  <span className={"grid size-7 shrink-0 place-items-center rounded-full text-[12.5px] font-extrabold " +
+                                   (i < stepIdx ? "bg-au-teal text-[#04140E]"
+                                     : i === stepIdx ? "bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] text-[#07090F]"
+                                     : "bg-white/[0.07] text-ink-3")}>
+                    {i < stepIdx ? "✓" : i + 1}
+                  </span>
+                  <span className={i <= stepIdx ? "font-bold text-ink" : "text-ink-3"}>{t(k)}</span>
+                </li>
+              ))}
+            </ol>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-[12.5px] text-ink-3 md:hidden">{t("onetap_or_tap")}</span>
+              <Btn variant="green" icon="play" href={req.link} target="_blank" rel="noopener">{t("onetap_open")}</Btn>
+              <Btn variant="ghost" sm type="button" onClick={reset}>{t("cancel")}</Btn>
+            </div>
+            {statusText && (
+              <p role="status" aria-live="polite"
+                 className={"mt-4 mb-0 flex items-center gap-2 text-[13.5px] font-bold " +
+                            (st === "created" ? "text-au-teal" : st === "failed" || st === "expired" ? "text-red-300" : "text-ink-2")}>
+                {(st === "pending" || st === "linked" || st === "creating") &&
+                  <span className="size-4 animate-spin rounded-full border-2 border-white/15 border-t-au-cyan" />}
+                {statusText}
+                {(st === "failed" || st === "expired") &&
+                  <Btn sm variant="ghost" type="button" onClick={reset}>{t("onetap_retry")}</Btn>}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {err && (
+        <p role="alert" className="mt-4 mb-0 text-[13px] font-bold text-red-300">
+          {err.error}{" "}
+          {err.upgrade && <a href={BY.urls.pricing} className="text-au-cyan underline">{t("brain_upgrade")}</a>}
+        </p>
+      )}
+    </Card>
+  );
+}
 
 /* بطاقة بوت */
 function BotCard({ b, i }) {
@@ -29,7 +154,7 @@ function BotCard({ b, i }) {
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {(b.channel || "telegram") === "whatsapp" && (
-              <Pill tone="mute"><Icon name="phone" size={11} />WA</Pill>
+              <Pill tone="mute"><img src="/static/whatsapp.png" alt="WhatsApp" className="size-[11px] object-contain inline-block" />WA</Pill>
             )}
             {b.running ? <Pill tone="on" dot>{t("running")}</Pill> : <Pill tone="off">{t("stopped")}</Pill>}
           </div>
@@ -50,7 +175,7 @@ function BotCard({ b, i }) {
 }
 
 /* معالج إنشاء البوت — التوكن أولاً لأنه أصعب خطوة على غير التقنيين */
-function CreateWizard() {
+function CreateWizard({ collapsed = false }) {
   const waAllowed = P.waAllowed !== false;
   const [channel, setChannel] = useState("telegram");
   const [status, setStatus] = useState(null);   // {ok, text}
@@ -86,13 +211,13 @@ function CreateWizard() {
             <label className="flex cursor-pointer items-center gap-2 text-[14px]">
               <input type="radio" name="channel" value="telegram" checked={channel === "telegram"}
                      onChange={(e) => setChannel(e.target.value)} />
-              <Icon name="bot" size={16} className="text-au-cyan" /> Telegram
+              <img src="/static/Telegram.svg.png" alt="Telegram" className="size-4 object-contain inline-block" /> Telegram
             </label>
             <label className={"flex items-center gap-2 text-[14px] " +
                               (waAllowed ? "cursor-pointer" : "cursor-not-allowed opacity-50")}>
               <input type="radio" name="channel" value="whatsapp" disabled={!waAllowed}
                      checked={channel === "whatsapp"} onChange={(e) => setChannel(e.target.value)} />
-              <Icon name="phone" size={16} className="text-au-teal" /> WhatsApp
+              <img src="/static/whatsapp.png" alt="WhatsApp" className="size-4 object-contain inline-block" /> WhatsApp
             </label>
           </div>
           {!waAllowed && (
@@ -185,9 +310,7 @@ function CreateWizard() {
     },
   ];
 
-  return (
-    <Card id="create">
-      <SectionTitle icon="plus">{t("create_bot")}</SectionTitle>
+  const form = (
       <Form action={BY.urls.botCreate}>
         {steps.map((s, i) => (
           <div key={s.n}
@@ -209,6 +332,28 @@ function CreateWizard() {
           <Btn icon="sparkles" type="submit">{t("create_btn")}</Btn>
         </div>
       </Form>
+  );
+
+  /* مع الإنشاء بضغطة يصير النموذج اليدوي (توكن BotFather) خياراً ثانياً مطويّاً —
+     ويبقى الطريق الوحيد لواتساب وللحالات التي لا يعمل فيها الإنشاء بضغطة. */
+  if (collapsed) {
+    return (
+      <Card id="create">
+        <details>
+          <summary className="flex cursor-pointer list-none items-center gap-2 text-[15px] font-extrabold text-ink
+                              [&::-webkit-details-marker]:hidden">
+            <Icon name="plus" size={17} className="text-au-cyan" />{t("onetap_manual")}
+            <span className="ms-auto text-[12px] font-bold text-ink-3">WhatsApp · BotFather</span>
+          </summary>
+          <div className="mt-5">{form}</div>
+        </details>
+      </Card>
+    );
+  }
+  return (
+    <Card id="create">
+      <SectionTitle icon="plus">{t("create_bot")}</SectionTitle>
+      {form}
     </Card>
   );
 }
@@ -307,6 +452,11 @@ function FirstRunChecklist({ ob }) {
                 <div className={"text-[14px] font-extrabold " +
                                 (s.done ? "text-ink-3 line-through" : "text-ink")}>{t(title)}</div>
                 {!s.done && <div className="mt-0.5 text-[12.5px] text-ink-3">{t(desc)}</div>}
+                {/* «جرّبه بنفسك» يفتح البوت مباشرة بدل البحث عنه في تليجرام */}
+                {!s.done && s.k === "try" && ob.botUsername && ob.channel !== "whatsapp" && (
+                  <Btn className="mt-2" variant="green" sm icon="play" target="_blank" rel="noopener"
+                       href={`https://t.me/${ob.botUsername}?start=src-link`}>{t("live_open")}</Btn>
+                )}
               </div>
               {s.done && <span className="text-[12px] font-bold text-au-teal">{t("ob_step_done")}</span>}
             </li>
@@ -322,16 +472,26 @@ function FirstRunChecklist({ ob }) {
 }
 
 export default function Dashboard() {
-  const { bots = [], total = {}, onboarding = {} } = P;
+  const { bots = [], total = {}, onboarding = {}, oneTap = {} } = P;
   const stage = onboarding.stage;
   const fresh = stage === "first_bot";
+  const quick = !!oneTap.available;
   return (
     <>
       <PageHead
         title={`${t("welcome_user")} ${BY.user.name}`}
         sub={t("dash_sub")}
-        actions={<Btn icon="plus" href="#create">{t("create_bot")}</Btn>}
+        actions={<Btn icon="plus" href={quick ? "#onetap" : "#create"}>{t("create_bot")}</Btn>}
       />
+
+      {/* الإنشاء بضغطة أولاً — أسهل طريق لغير التقنيين */}
+      {quick && <OneTapCreate />}
+      {!quick && BY.user.role === "admin" && (
+        <Card className="mb-6 flex items-start gap-3 bg-yellow-400/[0.06] shadow-[inset_0_0_0_1px_rgb(250_204_21/0.25)]">
+          <Icon name="bolt" size={18} className="mt-0.5 text-yellow-300" />
+          <p className="m-0 text-[13px] leading-relaxed text-ink-2">{t("onetap_admin_hint")}</p>
+        </Card>
+      )}
 
       {/* بلا إيميل لا استرجاع للحساب ولا إيصالات — مطالبة لطيفة لا إجبار */}
       {BY.user.hasEmail === false && (
@@ -343,7 +503,7 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {fresh && <FirstBotGuide />}
+      {fresh && !quick && <FirstBotGuide />}
       {stage === "first_run" && <FirstRunChecklist ob={onboarding} />}
 
       {/* أربعة أصفار في وجه من لم ينشئ بوتاً بعد ليست معلومة — هي إحباط. */}
@@ -372,7 +532,7 @@ export default function Dashboard() {
         </Card>
       )}
 
-      <div className="mb-6"><CreateWizard /></div>
+      <div className="mb-6"><CreateWizard collapsed={quick} /></div>
 
       <Card className="flex flex-wrap items-center justify-between gap-4
                        bg-[linear-gradient(120deg,rgb(124_108_246/0.16),rgb(34_211_238/0.06))]">

@@ -1,9 +1,11 @@
 """بوت المنصة — يرسل تنبيه الدفع للأدمن بزرّي موافقة/رفض ويعالج القرار.
 منفصل عن بوتات المستخدمين. يعمل داخل حلقة bot_manager."""
 import json, logging
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
+                          TypeHandler)
 import database as db
+import managed_bots
 import plans
 import i18n
 import mailer
@@ -75,6 +77,10 @@ def register_admin_commands(app: Application):
     async def cmd_start(update, ctx):
         # ربط حساب العميل: /start link-CODE  → نحفظ chat_id لإرسال التذكيرات
         args = getattr(ctx, "args", None) or []
+        if args and args[0].startswith(managed_bots.CODE_PREFIX):
+            # إنشاء بوت بضغطة: الكود يربط هذا الحساب بطلب المنصة ثم يعرض زر الإنشاء
+            await managed_bots.on_start_code(update, ctx, args[0][len(managed_bots.CODE_PREFIX):])
+            return
         if args and args[0].startswith("link-"):
             uid_ = db.claim_tg_link(args[0][5:], update.effective_user.id)
             if uid_:
@@ -162,3 +168,6 @@ def register(app: Application):
         # إشعار المستخدم عبر بوتاته غير متاح هنا؛ الحالة تظهر في لوحته.
     app.add_handler(CallbackQueryHandler(on_decision, pattern=r"^pay_(approve|reject):"))
     register_admin_commands(app)
+    # تحديثات managed_bot (ورسالة managed_bot_created) — مجموعة -1 مستقلة: المعالج
+    # يطابق كل تحديث ويتجاهل ما ليس إنشاء بوت، فلا يحجب الأوامر في المجموعة 0.
+    app.add_handler(TypeHandler(Update, managed_bots.on_update), group=-1)

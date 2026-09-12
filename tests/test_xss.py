@@ -86,7 +86,7 @@ class ScriptInjectionTests(unittest.TestCase):
     def test_platform_settings_cannot_inject_into_the_public_landing_page(self):
         """صفحة الهبوط عامة — ما يضبطه الأدمن فيها يصل لكل زائر."""
         db.set_platform("support_email", PAYLOAD)
-        html = web.app.test_client().get("/landing").get_data(as_text=True)
+        html = web.app.test_client().get("/").get_data(as_text=True)
         self.assertNotIn("</script><img", html)
         db.set_platform("support_email", "info@youssefalsherief.tech")
 
@@ -94,7 +94,7 @@ class ScriptInjectionTests(unittest.TestCase):
         """الهروب داخل السلاسل فقط: JSON يفكّ لنفس القيم، والأيقونات تبقى SVG."""
         c = _client()
         _login(c, "shopowner", TEST_PW)
-        obj = json.loads(self._by_payload(c.get("/").get_data(as_text=True)))
+        obj = json.loads(self._by_payload(c.get("/dashboard").get_data(as_text=True)))
         self.assertTrue(obj["icons"]["grid"].startswith("<svg"))
         self.assertEqual(obj["user"]["name"], "shopowner")
         self.assertTrue(obj["t"]["nav_bots"])

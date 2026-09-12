@@ -12,7 +12,7 @@ export default function Trust() {
         </h2>
         <p className="m-0 text-[clamp(14px,1.3vw,17px)] leading-[1.8] text-ink-2">{t("lp2_trust_sub")}</p>
       </Reveal>
-      <div className="grid gap-px overflow-hidden rounded-[28px] bg-white/[0.07] sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-[28px] bg-white/[0.07] sm:grid-cols-2 lg:grid-cols-3">
         {items.map((x, i) => (
           <Reveal key={i} delay={(i % 3) * 0.07} className="h-full">
             <div className="group h-full bg-ob-0/85 p-7 transition-colors duration-500 hover:bg-ob-1/90">

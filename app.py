@@ -38,6 +38,11 @@ import channels.wa_templates as WT
 import media_store
 from bot_manager import WA_WINDOW
 import ai_agent as ai
+import managed_bots as MB
+import asset_store
+import flow_engine as FE
+import base64
+import urllib.parse as _up
 import i18n
 import plans
 import payments as pay
@@ -73,7 +78,9 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "0") == "1",  # فعّلها على HTTPS
-    MAX_CONTENT_LENGTH=10 * 1024 * 1024,   # حد أقصى 10MB للطلب (حماية رفع الملفات)
+    # حد أقصى للطلب كله: فيديو مكتبة الوسائط حتى 16MB (حدّ واتساب) + هامش النموذج.
+    # كل نوع رفع يفرض حدّه الأضيق بنفسه — الإيصالات 8MB في payments.MAX_BYTES.
+    MAX_CONTENT_LENGTH=18 * 1024 * 1024,
 )
 
 # BOTYALLA_UPLOADS يسمح للاختبارات بالكتابة في مجلد مؤقت — بدونه تتراكم
@@ -219,6 +226,20 @@ def _security_headers(resp):
 @app.context_processor
 def _nonce_ctx():
     return {"csp_nonce": getattr(g, "nonce", "")}
+
+def _static_v(filename):
+    """رابط ملف ثابت بإصدار من تاريخ تعديله (`?v=`). nginx يقدّم /static/ بـ
+    `immutable` لثلاثين يوماً، فبلا إصدار يبقى الزائر العائد — ومعاينات الشبكات
+    الاجتماعية — على صورة أو أيقونة قديمة بعد إعادة توليدها ونشرها."""
+    try:
+        v = str(int(os.path.getmtime(os.path.join(app.static_folder, filename))))
+    except OSError:
+        v = "0"
+    return url_for("static", filename=filename, v=v)
+
+@app.context_processor
+def _static_ctx():
+    return {"static_v": _static_v}
 
 def _csrf_token():
     """توكن CSRF للجلسة، يُنشأ عند أول حاجة. `react_page` تحتاجه **قبل** أن تعمل
@@ -539,9 +560,13 @@ def dashboard():
     sub = db.get_subscription(uid())
     plan_id = sub["plan"] if sub["status"] == "active" else "free"
     wa_ok = current_role() in ("admin", "support") or bool(plans.plan(plan_id).get("whatsapp"))
+    info = manager.platform_info()
     return react_page("dashboard", "nav_bots",
                       {"bots": bots, "total": total, "waAllowed": wa_ok,
-                       "onboarding": _onboarding(bots)})
+                       "onboarding": _onboarding(bots),
+                       # الإنشاء بضغطة متاح فقط لو بوت المنصة يعمل وفيه «وضع إدارة البوتات»
+                       "oneTap": {"available": bool(info.get("username") and info.get("can_manage")),
+                                  "platformRunning": manager.platform_running()}})
 
 
 def _onboarding(bots):
@@ -569,6 +594,8 @@ def _onboarding(bots):
         return {"stage": "done"}
     return {"stage": "first_run", "botId": b["id"], "botName": b.get("name"),
             "channel": b.get("channel") or "telegram", "steps": steps,
+            # «جرّبه بنفسك» يفتح البوت مباشرة بدل أن يبحث عنه صاحبه في تليجرام
+            "botUsername": cfg.get("bot_username") or "",
             # لتقول الواجهة أين تُضبط التحية: «باني المحادثة» لا صفحة الإعدادات
             "flowBot": _is_flow_bot(b, cfg)}
 
@@ -645,29 +672,19 @@ def bot_create():
                    if session.get("lang")!="en" else
                    "You reached your plan limit ({} bots). Upgrade to create more.").format(maxb), "error")
             return redirect(url_for("pricing"))
-    cfg = {"business_name": name, "owner_chat_id": request.form.get("owner_chat_id", "").strip(),
-           "welcome": "", "thanks": "", "products": [],
-           "service_name": name, "days_ahead": 7, "open_hour": 10, "close_hour": 22,
-           "slot_minutes": 60, "working_days": None, "flow": None, "welcome_image": "",
-           "menu_items": [], "bot_username": info.get("username"), "bot_name": info.get("name"),
-           "pending_owner_code": None}
-    # قوالب ثابتة جاهزة حسب النوع
-    if template in T.PRESET_FLOWS:
-        cfg["flow"] = json.loads(json.dumps(T.PRESET_FLOWS[template]))  # نسخة قابلة للتعديل
-    if template == "faq":
-        cfg["menu_items"] = json.loads(json.dumps(T.DEFAULT_MENU_ITEMS))
+    # مصدر واحد لإعدادات البوت الأولى — نفسه في الإنشاء بضغطة (managed_bots)
+    cfg = T.initial_config(name, template, info, request.form.get("owner_chat_id", ""))
         
     if channel == "whatsapp":
         cfg["wa_token"] = request.form.get("wa_token", "").strip()
         
     try:
-        db.create_bot(uid(), name, token, template, cfg, channel)
+        new_id = db.create_bot(uid(), name, token, template, cfg, channel)
         notify_admins(f"🤖 بوت جديد / New bot: «{name}» (@{info.get('username')}) — {session.get('uname')}")
         # تهيئة رسمية للبوت على تليجرام (إذا كان تليجرام)
         if channel == "telegram":
             try:
-                _row = [b for b in db.list_bots(uid()) if b["token"] == token]
-                if _row: sync_bot_telegram(_row[0])
+                sync_bot_telegram(db.get_bot(new_id))
             except Exception:
                 pass
         _uname = info.get('username')
@@ -679,6 +696,8 @@ def bot_create():
             flash((f"تم إنشاء بوت واتساب «{name}» 🎉 — تأكد أن Webhook في Meta يشير إلى /wh/whatsapp ثم شغّله."
                    if session.get("lang") != "en" else
                    f"WhatsApp bot «{name}» created 🎉 — point the Meta webhook to /wh/whatsapp, then start it."), "ok")
+        # صفحة البوت نفسها لا اللوحة: فيها رابطه ورمز QR — أول ما يحتاجه صاحبه
+        return redirect(url_for("bot_detail", bot_id=new_id, new=1))
     except Exception as e:
         flash((f"خطأ: {e} (قد يكون التوكن مستخدماً بالفعل)."
                if session.get("lang") != "en" else
@@ -695,7 +714,11 @@ def bot_detail(bot_id):
     leads = db.list_leads(bot_id) if b["template"] in ("flow", "customer_service", "feedback", "support") else []
     orders = db.list_orders(bot_id) if b["template"] == "store" else []
     bookings = db.list_bookings(bot_id) if b["template"] == "booking" else []
-    
+    # معرّف المحادثة لكل صف — زرّ «محادثة» بجانب العميل يفتح صندوق الوارد عليه
+    pfx = "wa:" if (b.get("channel") or "telegram") == "whatsapp" else "tg:"
+    for row in leads + orders + bookings:
+        row["peer"] = f"{pfx}{row['tg_user_id']}" if row.get("tg_user_id") else ""
+
     sub = db.get_subscription(uid())
     plan_id = sub["plan"] if sub["status"] == "active" else "free"
     p = plans.plan(plan_id)
@@ -710,9 +733,24 @@ def bot_detail(bot_id):
         usage = dict(db.owner_usage(uid()), limit=limit,
                      bot=db.bot_usage(bot_id), webhook=url_for("whatsapp_webhook", _external=True))
 
+    staff = current_role() in ("admin", "support")
+    replies_limit = None if staff else plans.ai_replies_limit(plan_id)
     return react_page("bot_detail", "nav_bots",
                       {"bot": b, "leads": leads, "orders": orders, "bookings": bookings,
-                       "plan": p, "usage": usage},
+                       "plan": p, "usage": usage,
+                       "links": _bot_links(b),
+                       "isNew": bool(request.args.get("new")),
+                       "unread": db.unread_total(bot_id),
+                       "versions": db.list_config_versions(bot_id),
+                       "canReply": staff or plans.inbox_reply(plan_id),
+                       "ai": {
+                           "setups": {"used": db.setup_sessions_this_month(uid()),
+                                      "limit": None if staff else plans.ai_setups_limit(plan_id)},
+                           "replies": {"used": db.ai_usage_of(uid())["replies"], "limit": replies_limit},
+                           "price": FE.ai_reply_price(), "wallet": db.wallet_balance(uid()),
+                           "hasKey": bool(db.get_platform("ai_key", "")),
+                           "modeAllowed": staff or bool(replies_limit),
+                           "engine": _uses_engine(b)}},
                       title=b["name"])
 
 @app.route("/bot/<int:bot_id>/config", methods=["POST"])
@@ -721,6 +759,9 @@ def bot_config(bot_id):
     b = _owned(bot_id); cfg = json.loads(b["config_json"] or "{}")
     for k in ("business_name", "owner_chat_id", "welcome", "thanks", "welcome_image"):
         cfg[k] = request.form.get(k, cfg.get(k, "")).strip()
+    # صورة/فيديو الترحيب من مكتبة الوسائط — ملف يملكه صاحب البوت فقط
+    if "welcome_asset" in request.form:
+        cfg["welcome_asset"] = _own_asset_id(request.form.get("welcome_asset"))
     if b["template"] == "faq":
         items = []
         for q, a in zip(request.form.getlist("m_q"), request.form.getlist("m_a")):
@@ -730,6 +771,7 @@ def bot_config(bot_id):
     if b["template"] == "store":
         prods = []
         imgs = request.form.getlist("p_image")
+        assets = request.form.getlist("p_asset")
         for i, (n, p) in enumerate(zip(request.form.getlist("p_name"), request.form.getlist("p_price"))):
             n = n.strip()
             if not n: continue
@@ -738,6 +780,8 @@ def bot_config(bot_id):
             item = {"name": n, "price": price}
             img = (imgs[i].strip() if i < len(imgs) else "")
             if img.startswith("http"): item["image"] = img
+            aid = _own_asset_id(assets[i] if i < len(assets) else "")
+            if aid: item["asset"] = aid
             prods.append(item)
         cfg["products"] = prods
     if b["template"] == "booking":
@@ -784,7 +828,9 @@ def flow_builder(bot_id):
         prompts = request.form.getlist("s_prompt")
         vars_ = request.form.getlist("s_var")
         opts = request.form.getlist("s_options")
-        STEP_TYPES = ("question", "buttons", "message", "media")
+        assets = request.form.getlist("s_asset")
+        optional = request.form.getlist("s_optional")
+        STEP_TYPES = ("question", "buttons", "message", "media", "show")
         for i, t in enumerate(types):
             if t not in STEP_TYPES:      # نوع غير معروف يجعل المحرك يعامله كسؤال نصي
                 t = "question"
@@ -792,9 +838,17 @@ def flow_builder(bot_id):
             if not prompt: continue
             step = {"id": f"s{i}", "type": t, "prompt": prompt,
                     "var": (vars_[i] if i < len(vars_) else "").strip() or f"حقل{i+1}"}
+            o = [x.strip() for x in (opts[i] if i < len(opts) else "").split(",") if x.strip()]
             if t == "buttons":
-                o = [x.strip() for x in (opts[i] if i < len(opts) else "").split(",") if x.strip()]
                 step["options"] = o
+            elif t == "show":
+                # صورة/فيديو من المكتبة؛ بأزرار تحته = «فيديو تفاعلي» ينتظر اختياراً
+                aid = _own_asset_id(assets[i] if i < len(assets) else "")
+                if aid: step["asset"] = aid
+                if o: step["options"] = o
+                else: step.pop("var", None)      # بلا أزرار: عرض فقط لا ينتظر إجابة
+            elif t == "media" and i < len(optional) and optional[i] == "1":
+                step["optional"] = True          # «ابعت صورة — أو اكتب لا»
             step.pop("var", None) if t == "message" else None
             flow["steps"].append(step)
         cfg["flow"] = flow
@@ -862,7 +916,8 @@ def analytics(bot_id):
 @login_required
 def api_stats(bot_id):
     _owned(bot_id)
-    return jsonify({"summary": db.stats_summary(bot_id), "daily": db.stats_daily(bot_id, 14)})
+    return jsonify({"summary": db.stats_summary(bot_id), "daily": db.stats_daily(bot_id, 14),
+                    "sources": db.source_counts(bot_id)})
 
 # ---------- البث الجماعي ----------
 @app.route("/bot/<int:bot_id>/broadcast", methods=["GET", "POST"])
@@ -949,10 +1004,13 @@ def broadcast(bot_id):
                            f"📢 Template «{name}» sent to {sent} subscribers ({failed} failed)."), "ok")
         else:
             text = request.form.get("text", "").strip()
-            if not text:
+            # صورة/فيديو اختياري من مكتبة المستخدم نفسه (والنص يصير تعليقه)
+            aid = _own_asset_id(request.form.get("asset_id"))
+            asset = db.get_asset(aid, owner_id=uid()) if aid else None
+            if not text and not asset:
                 flash("اكتب نص الرسالة." if ar else "Write the message.", "error")
             else:
-                sent, failed = manager.broadcast(bot_id, text)
+                sent, failed = manager.broadcast(bot_id, text, asset=asset)
                 flash((f"📢 تم الإرسال إلى {sent} مشترك (فشل {failed})." if ar else
                        f"📢 Sent to {sent} subscribers ({failed} failed)."), "ok")
         return redirect(url_for("broadcast", bot_id=bot_id))
@@ -1104,27 +1162,151 @@ def settings():
 @app.route("/bot/<int:bot_id>/ai-setup", methods=["POST"])
 @login_required
 def ai_setup(bot_id):
+    """المسار القديم (توليد بضغطة واحدة) — باقٍ للتوافق. يمرّ الآن بنفس المصمّم
+    الذي لا ينسخ الوصف، ويحفظ نسخة قبل الاستبدال فيمكن التراجع عنه."""
     b = _owned(bot_id); cfg = json.loads(b["config_json"] or "{}")
     desc = (request.get_json(silent=True) or {}).get("description", "").strip()
     if not desc:
         return jsonify({"ok": False, "error": "اكتب وصف نشاطك أولاً."})
-        
-    sub = db.get_subscription(uid())
-    plan_id = sub["plan"] if sub["status"] == "active" else "free"
-    p = plans.plan(plan_id)
-    
-    key = db.get_platform("ai_key", "")
-    provider = db.get_platform("ai_provider", "gemini")
-    
-    if current_role() not in ("admin", "support") and not p.get("ai"):
-        key = None  # Force fallback offline generator
-    patch, source = ai.generate_bot_config(desc, b["template"], api_key=key or None, provider=provider)
+    key, provider = _setup_provider()
+    patch, source = ai.generate_bot_config(desc, b["template"], api_key=key, provider=provider,
+                                           current_name=cfg.get("business_name") or b["name"],
+                                           channel=b.get("channel") or "telegram")
     if not patch:
         return jsonify({"ok": False, "error": "تعذّر توليد الإعدادات."})
+    db.save_config_version(bot_id, cfg, "ai_apply")
     cfg.update(patch)
     db.update_bot_config(bot_id, cfg)
     if manager.is_running(bot_id): manager.restart_bot(bot_id)
     return jsonify({"ok": True, "source": source, "applied": list(patch.keys())})
+
+
+# ---------- وكيل الإعداد (محادثة ← أسئلة ← تصميم ← معاينة ← تطبيق) ----------
+def _plan_id():
+    sub = db.get_subscription(uid())
+    return sub["plan"] if sub["status"] == "active" else "free"
+
+
+def _setup_provider():
+    """مفتاح المنصة ومزوّدها. الباقة المجانية تحصل على الوكيل الحقيقي نفسه
+    بحصة صغيرة (plans.FEATURES) — لا مولّد نصوص ثابت يُقدَّم على أنه ذكاء."""
+    return (db.get_platform("ai_key", "") or None), db.get_platform("ai_provider", "gemini")
+
+
+def _setup_quota():
+    """(المستخدَم، الحد) لجلسات الوكيل هذا الشهر. الحد None = بلا حد."""
+    used = db.setup_sessions_this_month(uid())
+    if current_role() in ("admin", "support"):
+        return used, None
+    return used, plans.ai_setups_limit(_plan_id())
+
+
+def _run_setup_turn(b, sid, turns, rounds):
+    key, provider = _setup_provider()
+    cfg = json.loads(b["config_json"] or "{}")
+    res = ai.setup_step(turns, template=b["template"], channel=b.get("channel") or "telegram",
+                        current_name=cfg.get("business_name") or b["name"],
+                        api_key=key, provider=provider)
+    if res["status"] == "questions":
+        turns = turns + [{"role": "agent", "questions": res["questions"]}]
+        db.save_setup_session(sid, "asking", res.get("brief"), turns, None, rounds + 1, res["source"])
+        return {"ok": True, "sid": sid, "status": "questions", "questions": res["questions"],
+                "source": res["source"]}
+    prop = res["proposal"]
+    db.save_setup_session(sid, "proposed", res.get("brief"), turns,
+                          {"patch": prop, "summary": res.get("summary"), "notes": res.get("notes")},
+                          rounds, res["source"])
+    # «قبل» لكل حقل سيتغيّر — الواجهة تعرض الفرق ولا يُحفظ شيء قبل الموافقة
+    return {"ok": True, "sid": sid, "status": "proposal", "proposal": prop,
+            "before": {k: cfg.get(k) for k in prop}, "summary": res.get("summary") or "",
+            "notes": res.get("notes") or [], "source": res["source"]}
+
+
+def _setup_session_or_404(bot_id, sid, status):
+    s = db.get_setup_session(sid, bot_id)
+    if not s or s["owner_id"] != uid() or s["status"] != status:
+        abort(404)
+    return s
+
+
+@app.route("/bot/<int:bot_id>/ai/session", methods=["POST"])
+@login_required
+def ai_session_start(bot_id):
+    b = _owned(bot_id)
+    lang = session.get("lang", i18n.DEFAULT)
+    desc = ((request.get_json(silent=True) or {}).get("description") or "").strip()[:2000]
+    if len(desc) < 3:
+        return jsonify({"ok": False, "error": i18n.t("ai_need_desc", lang)})
+    if _rate_limited(f"u{uid()}", limit=20, window=3600, bucket="ai_setup"):
+        return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)})
+    used, limit = _setup_quota()
+    if limit is not None and used >= limit:
+        return jsonify({"ok": False, "upgrade": True,
+                        "error": i18n.t("ai_quota_out", lang).format(n=limit)})
+    key, _ = _setup_provider()
+    sid = db.create_setup_session(bot_id, uid(), "ai" if key else "offline")
+    return jsonify(_run_setup_turn(b, sid, [{"role": "owner", "text": desc}], 0))
+
+
+@app.route("/bot/<int:bot_id>/ai/session/<int:sid>/reply", methods=["POST"])
+@login_required
+def ai_session_reply(bot_id, sid):
+    b = _owned(bot_id)
+    s = _setup_session_or_404(bot_id, sid, "asking")
+    data = request.get_json(silent=True) or {}
+    answers = [str(a or "").strip()[:300] for a in (data.get("answers") or [])][:ai.MAX_QUESTIONS]
+    turns = s["turns"] + [{"role": "owner", "answers": answers}]
+    extra = str(data.get("text") or "").strip()[:1000]
+    if extra:
+        turns.append({"role": "owner", "text": extra})
+    return jsonify(_run_setup_turn(b, sid, turns, s["rounds"]))
+
+
+@app.route("/bot/<int:bot_id>/ai/session/<int:sid>/<any(apply,discard):action>", methods=["POST"])
+@login_required
+def ai_session_close(bot_id, sid, action):
+    b = _owned(bot_id)
+    s = db.get_setup_session(sid, bot_id)
+    if not s or s["owner_id"] != uid() or s["status"] not in ("asking", "proposed"):
+        abort(404)
+    if action == "discard":
+        db.close_setup_session(sid, "discarded")
+        return jsonify({"ok": True})
+    # ذرّي: جلسة طُبّقت لا تُطبَّق ثانية (نقرتان متتاليتان · تبويبان)
+    if s["status"] != "proposed" or not s.get("proposal") or not db.close_setup_session(sid, "applied"):
+        abort(404)
+    cfg = json.loads(b["config_json"] or "{}")
+    db.save_config_version(bot_id, cfg, "ai_apply")          # «تراجع» بضغطة
+    cfg.update(s["proposal"]["patch"])
+    db.update_bot_config(bot_id, cfg)
+    if manager.is_running(bot_id): manager.restart_bot(bot_id)
+    if (b.get("channel") or "telegram") == "telegram":
+        try: sync_bot_telegram(db.get_bot(bot_id, uid()))
+        except Exception: pass
+    return jsonify({"ok": True})
+
+
+@app.route("/bot/<int:bot_id>/config/restore/<int:vid>", methods=["POST"])
+@login_required
+def config_restore(bot_id, vid):
+    b = _owned(bot_id)
+    old = db.get_config_version(vid, bot_id)          # الملكية: bot_id شرط في الاستعلام
+    if old is None:
+        abort(404)
+    cur = json.loads(b["config_json"] or "{}")
+    db.save_config_version(bot_id, cur, "restore")
+    # الحقول التشغيلية لا تُستعاد من نسخة قديمة: ربط المالك والتوكنات وهوية البوت
+    for k in ("owner_chat_id", "wa_token", "tg_bot_id", "bot_username", "bot_name",
+              "pending_owner_code", "wa_waba_id", "wa_waba_hint", "created_via",
+              "ai_consent_at", "tg_synced_at", "tg_sync_ok", "tg_sync_errors"):
+        if k in cur:
+            old[k] = cur[k]
+        else:
+            old.pop(k, None)
+    db.update_bot_config(bot_id, old)
+    if manager.is_running(bot_id): manager.restart_bot(bot_id)
+    flash(i18n.t("restore_done", session.get("lang", i18n.DEFAULT)), "ok")
+    return redirect(url_for("bot_detail", bot_id=bot_id))
 
 
 # ---------- تكامل تليجرام ----------
@@ -1300,8 +1482,11 @@ def admin_platform():
             flash("تم الحفظ." if session.get("lang")!="en" else "Saved.", "ok")
         return redirect(url_for("admin_platform"))
     return react_page("admin_platform", "platform_title",
-                      {"plat": dict(db.all_platform(), mkt_msg_price_egp=f"{mkt_price() / 100:g}"),
+                      {"plat": dict(db.all_platform(), mkt_msg_price_egp=f"{mkt_price() / 100:g}",
+                                    ai_reply_price_egp=f"{FE.ai_reply_price() / 100:g}"),
                        "running": manager.platform_running(),
+                       # هل يستطيع بوت المنصة إنشاء بوتات بضغطة (Bot Management Mode)؟
+                       "managed": manager.platform_info(),
                        "capacity": manager.capacity_status()})
 
 # ---------- لوحة تحكم الأدمن ----------
@@ -1568,6 +1753,392 @@ def sync_telegram(bot_id):
               + "، ".join(res.get("errors", []))[:200], "error")
     return redirect(url_for("bot_detail", bot_id=bot_id))
 
+# ============================================================================
+#  الوصول للبوت: رابط مباشر · QR · ملصق للطباعة  (TESTER_FEEDBACK_PLAN §2)
+# ============================================================================
+_QR_SOURCES = ("qr", "poster", "share")
+_PEER_RE = _re.compile(r"^(tg|wa):\d{1,20}\Z")
+
+
+def _uses_engine(b):
+    """هل يمرّ البوت بمحرك الفلو (فتعمل عليه أوضاع الذكاء الاصطناعي والوسائط)؟
+    واتساب كله يمرّ به؛ وعلى تليجرام قوالب المحادثة وحدها."""
+    return (b.get("channel") or "telegram") == "whatsapp" or b.get("template") in ai.FLOW_TEMPLATES
+
+
+def _own_asset_id(v):
+    """معرّف ملف من مكتبة المستخدم الحالي أو None — لا يُحفظ مرجع لملف غيره."""
+    try:
+        aid = int(str(v or "").strip())
+    except ValueError:
+        return None
+    return aid if aid > 0 and db.get_asset(aid, owner_id=uid()) else None
+
+
+def _bot_links(b):
+    """روابط الوصول للبوت. لكل مصدر معامل start مختلف (src-link · src-qr ·
+    src-poster · src-share) فتقول التحليلات من أين جاء العميل."""
+    cfg = json.loads(b.get("config_json") or "{}")
+    if (b.get("channel") or "telegram") == "whatsapp":
+        digits = _re.sub(r"\D", "", cfg.get("bot_username") or "")
+        if len(digits) < 8:
+            return None
+        base = f"https://wa.me/{digits}"
+        # «start» من كلمات بدء الفلو في واتساب — الرابط يفتح المحادثة ويبدأها
+        return {"kind": "whatsapp", "handle": f"+{digits}", "plain": base,
+                "open": base + "?text=" + _up.quote("start"), "share": base + "?text=" + _up.quote("start"),
+                "qr": url_for("bot_qr", bot_id=b["id"]), "poster": url_for("bot_poster", bot_id=b["id"])}
+    uname = (cfg.get("bot_username") or "").strip().lstrip("@")
+    if not _re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", uname):
+        return None
+    base = f"https://t.me/{uname}"
+    return {"kind": "telegram", "handle": f"@{uname}", "plain": base,
+            "open": base + "?start=src-link", "share": base + "?start=src-share",
+            "qr": url_for("bot_qr", bot_id=b["id"]), "poster": url_for("bot_poster", bot_id=b["id"])}
+
+
+def _qr_target(links, src):
+    return f"{links['plain']}?start=src-{src}" if links["kind"] == "telegram" else links["open"]
+
+
+def _qr_svg(data, scale=8, dark="#07090F"):
+    """رمز QR كـ SVG من الخادم — حادّ بأي حجم، بلا صورة خارجية ولا سكربت."""
+    import segno
+    buf = io.BytesIO()
+    segno.make(data, error="m").save(buf, kind="svg", scale=scale, border=2, dark=dark,
+                                     light="#ffffff", xmldecl=False, svgns=True)
+    return buf.getvalue().decode("utf-8")
+
+
+@app.route("/bot/<int:bot_id>/qr.svg")
+@login_required
+def bot_qr(bot_id):
+    b = _owned(bot_id)
+    links = _bot_links(b)
+    if not links:
+        abort(404)
+    src = request.args.get("src", "qr")
+    resp = Response(_qr_svg(_qr_target(links, src if src in _QR_SOURCES else "qr")),
+                    mimetype="image/svg+xml")
+    resp.headers["Cache-Control"] = "private, max-age=300"
+    if request.args.get("dl"):
+        resp.headers["Content-Disposition"] = f'attachment; filename="bot-{bot_id}-qr.svg"'
+    return resp
+
+
+@app.route("/bot/<int:bot_id>/poster")
+@login_required
+def bot_poster(bot_id):
+    """ملصق A4 للطباعة: اسم النشاط ورمز QR كبير ورابط البوت — على الكاونتر وفي
+    العبوات والمنشورات. بلا تذييل BotYalla لأصحاب العلامة البيضاء."""
+    b = _owned(bot_id)
+    links = _bot_links(b)
+    if not links:
+        abort(404)
+    cfg = json.loads(b["config_json"] or "{}")
+    lang = session.get("lang", i18n.DEFAULT)
+    white = current_role() in ("admin", "support") or bool(plans.plan(_plan_id()).get("white_label"))
+    return render_template("poster.html", lang=lang, dir=i18n.dir_for(lang),
+                           name=cfg.get("business_name") or b["name"], handle=links["handle"],
+                           link=links["plain"], channel=links["kind"],
+                           qr=Markup(_qr_svg(_qr_target(links, "poster"), scale=10)),
+                           back=url_for("bot_detail", bot_id=bot_id), branded=not white)
+
+
+# ============================================================================
+#  إنشاء بوت بضغطة — Telegram Managed Bots  (TESTER_FEEDBACK_PLAN §1)
+# ============================================================================
+@app.route("/bot/create/managed", methods=["POST"])
+@login_required
+def bot_create_managed():
+    """يولّد رابطاً لمرة واحدة إلى بوت المنصة (زر + QR). الإنشاء نفسه يحدث حين
+    يؤكّد المستخدم داخل تليجرام — راجع managed_bots.py."""
+    lang = session.get("lang", i18n.DEFAULT)
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name") or "").strip()[:60]
+    template = str(data.get("template") or "")
+    if not name or template not in T.TEMPLATES:
+        return jsonify({"ok": False, "error": i18n.t("mb_err_fields", lang)})
+    info = manager.platform_info()
+    if not (info.get("username") and info.get("can_manage")):
+        return jsonify({"ok": False, "unavailable": True, "error": i18n.t("mb_err_unavailable", lang)})
+    # حدّ الباقة قبل إصدار الرابط — ويُفحص ثانيةً لحظة الإنشاء
+    if current_role() not in ("admin", "support"):
+        maxb = plans.plan(_plan_id())["max_bots"]
+        if db.count_user_bots(uid()) >= maxb:
+            return jsonify({"ok": False, "upgrade": True,
+                            "error": i18n.t("mb_err_limit", lang).format(n=maxb)})
+    if _rate_limited(f"u{uid()}", limit=10, window=600, bucket="managed"):
+        return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)})
+    code = MB.new_code()
+    suggested = MB.suggest_username(name)
+    rid = db.create_managed_request(uid(), MB.token_hash(code), template, name, suggested)
+    link = MB.start_link(info["username"], code)
+    # QR داخل الرد لا مسار مستقل: الرابط يحمل الكود السرّي، ولا يُخزَّن إلا تجزئته
+    qr = "data:image/svg+xml;base64," + base64.b64encode(_qr_svg(link).encode("utf-8")).decode("ascii")
+    return jsonify({"ok": True, "id": rid, "link": link, "qr": qr, "ttl": db.MANAGED_TTL,
+                    "suggested": suggested})
+
+
+@app.route("/bot/create/managed/<int:rid>")
+@login_required
+def bot_create_managed_status(rid):
+    r = db.get_managed_request(rid, user_id=uid())      # الملكية في الاستعلام
+    if not r:
+        abort(404)
+    st = r["status"]
+    if st in ("pending", "linked") and r["expires_at"] <= int(_time.time()):
+        st = "expired"
+    out = {"status": st}
+    if st == "created" and r.get("bot_id"):
+        bot = db.get_bot(r["bot_id"], uid())
+        if bot:
+            cfg = json.loads(bot["config_json"] or "{}")
+            out.update(bot_id=bot["id"], username=cfg.get("bot_username") or "",
+                       url=url_for("bot_detail", bot_id=bot["id"], new=1))
+    if st == "failed":
+        out["error"] = r.get("error") or ""
+    return jsonify(out)
+
+
+# ============================================================================
+#  طريقة الرد: فلو · هجين · عقل البوت  (TESTER_FEEDBACK_PLAN §4)
+# ============================================================================
+@app.route("/bot/<int:bot_id>/brain", methods=["POST"])
+@login_required
+def bot_brain(bot_id):
+    b = _owned(bot_id)
+    cfg = json.loads(b["config_json"] or "{}")
+    lang = session.get("lang", i18n.DEFAULT)
+    back = url_for("bot_detail", bot_id=bot_id) + "#brain"
+    mode = request.form.get("response_mode", "flow")
+    if mode not in FE.RESPONSE_MODES:
+        mode = "flow"
+    if mode != "flow":
+        if not _uses_engine(b):
+            flash(i18n.t("brain_not_engine", lang), "error"); return redirect(back)
+        if current_role() not in ("admin", "support") and not plans.ai_replies_limit(_plan_id()):
+            flash(i18n.t("brain_locked", lang), "error"); return redirect(url_for("pricing"))
+        # موافقة صريحة مرة واحدة: رسائل العملاء ستصل لمزوّد الذكاء الاصطناعي
+        if not cfg.get("ai_consent_at"):
+            if request.form.get("ai_consent") != "1":
+                flash(i18n.t("brain_consent_req", lang), "error"); return redirect(back)
+            cfg["ai_consent_at"] = int(_time.time())
+    cfg["response_mode"] = mode
+    cfg["ai_persona"] = request.form.get("ai_persona", "").strip()[:600]
+    kb = {k: request.form.get(f"kb_{k}", "") for k in
+          ("about", "hours", "location", "delivery", "payment", "policies")}
+    kb["faqs"] = [{"q": q, "a": a} for q, a in zip(request.form.getlist("kb_q"),
+                                                    request.form.getlist("kb_a"))]
+    cfg["kb"] = ai._coerce_kb(kb)
+    db.update_bot_config(bot_id, cfg)
+    if manager.is_running(bot_id): manager.restart_bot(bot_id)
+    flash(i18n.t("brain_saved", lang), "ok")
+    return redirect(back)
+
+
+# ============================================================================
+#  صندوق الوارد والتدخّل اليدوي  (TESTER_FEEDBACK_PLAN §5)
+# ============================================================================
+def _can_reply():
+    return current_role() in ("admin", "support") or plans.inbox_reply(_plan_id())
+
+
+def _inbox_peer(bot_id, peer):
+    """عميل تواصل فعلاً مع **هذا** البوت — لا نراسل رقماً لم يراسلنا."""
+    peer = str(peer or "")
+    if not _PEER_RE.match(peer) or not db.peer_known(bot_id, peer):
+        abort(404)
+    return peer
+
+
+@app.route("/bot/<int:bot_id>/inbox")
+@login_required
+def inbox(bot_id):
+    b = _owned(bot_id)
+    peer = request.args.get("peer", "")
+    is_wa = (b.get("channel") or "telegram") == "whatsapp"
+    lang = session.get("lang", i18n.DEFAULT)
+    return react_page("inbox", "inbox_title",
+                      {"bot": {"id": b["id"], "name": b["name"], "channel": b.get("channel") or "telegram"},
+                       "conversations": db.list_conversations(bot_id),
+                       "peer": peer if _PEER_RE.match(peer) else "",
+                       "canReply": _can_reply(), "isWa": is_wa, "windowSec": WA_WINDOW},
+                      title=i18n.t("inbox_title", lang) + " · " + b["name"])
+
+
+@app.route("/api/bot/<int:bot_id>/inbox")
+@login_required
+def api_inbox(bot_id):
+    _owned(bot_id)
+    return jsonify({"conversations": db.list_conversations(bot_id),
+                    "unread": db.unread_total(bot_id)})
+
+
+@app.route("/api/bot/<int:bot_id>/inbox/thread")
+@login_required
+def api_inbox_thread(bot_id):
+    _owned(bot_id)
+    peer = _inbox_peer(bot_id, request.args.get("peer"))
+    try:
+        after = max(0, int(request.args.get("after") or 0))
+    except ValueError:
+        after = 0
+    msgs = db.list_messages(bot_id, peer, after)
+    if msgs or not after:
+        db.mark_conversation_read(bot_id, peer)
+    return jsonify({"messages": msgs, "conv": db.get_conversation(bot_id, peer) or {},
+                    "lastIn": db.peer_last_in(bot_id, peer), "now": int(_time.time())})
+
+
+@app.route("/bot/<int:bot_id>/inbox/send", methods=["POST"])
+@login_required
+def inbox_send(bot_id):
+    b = _owned(bot_id)
+    lang = session.get("lang", i18n.DEFAULT)
+    data = request.get_json(silent=True) or {}
+    peer = _inbox_peer(bot_id, data.get("peer"))
+    if not _can_reply():
+        return jsonify({"ok": False, "upgrade": True, "error": i18n.t("inbox_readonly", lang)}), 403
+    text = str(data.get("text") or "").strip()[:4000]
+    asset = None
+    if data.get("asset_id"):
+        aid = _own_asset_id(data.get("asset_id"))
+        if not aid:
+            abort(404)
+        asset = db.get_asset(aid, owner_id=uid())
+    if not text and not asset:
+        return jsonify({"ok": False, "error": i18n.t("inbox_empty_text", lang)})
+    if _rate_limited(f"u{uid()}:b{bot_id}", limit=40, window=60, bucket="inbox"):
+        return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)})
+    # واتساب: لا نص حر بعد 24 ساعة من آخر رسالة للعميل — المخالفة تُقيّد الرقم
+    if (b.get("channel") or "telegram") == "whatsapp" and \
+            int(_time.time()) - db.peer_last_in(bot_id, peer) > WA_WINDOW:
+        return jsonify({"ok": False, "window": True, "error": i18n.t("inbox_wa_window", lang)})
+    ok, err = manager.send_to_peer(bot_id, peer, text=text or None, asset=asset)
+    if not ok:
+        return jsonify({"ok": False, "error": i18n.t(f"inbox_err_{err}", lang)})
+    db.log_message(bot_id, peer, "out", "human", text, kind="media" if asset else "text")
+    # الرد اليدوي يعني التولّي — لا يقاطعه البوت ولا الذكاء الاصطناعي
+    db.set_conversation_mode(bot_id, peer, "human")
+    return jsonify({"ok": True, "conv": db.get_conversation(bot_id, peer)})
+
+
+@app.route("/bot/<int:bot_id>/inbox/mode", methods=["POST"])
+@login_required
+def inbox_mode(bot_id):
+    _owned(bot_id)
+    data = request.get_json(silent=True) or {}
+    peer = _inbox_peer(bot_id, data.get("peer"))
+    mode = data.get("mode")
+    if mode not in ("bot", "human"):
+        abort(400)
+    if mode == "human" and not _can_reply():
+        return jsonify({"ok": False, "upgrade": True,
+                        "error": i18n.t("inbox_readonly", session.get("lang", i18n.DEFAULT))}), 403
+    db.set_conversation_mode(bot_id, peer, mode)
+    return jsonify({"ok": True, "conv": db.get_conversation(bot_id, peer)})
+
+
+# ============================================================================
+#  مكتبة الوسائط  (TESTER_FEEDBACK_PLAN §6)
+# ============================================================================
+def _asset_json(a):
+    return {"id": a["id"], "kind": a["kind"], "mime": a["mime"], "size": a["size"],
+            "name": a.get("name") or "", "created_at": a["created_at"],
+            "source": a.get("source_url") or "", "url": url_for("asset_file", asset_id=a["id"])}
+
+
+def _asset_quota():
+    used = db.assets_bytes(uid())
+    limit = None if current_role() in ("admin", "support") else plans.asset_bytes_limit(_plan_id())
+    return {"used": used, "limit": limit}
+
+
+def _asset_saved(data, name, source_url=None):
+    lang = session.get("lang", i18n.DEFAULT)
+    if not asset_store.quota_ok(uid(), current_role(), _plan_id(), len(data or b"")):
+        return jsonify({"ok": False, "upgrade": True, "error": i18n.t("asset_err_quota", lang)})
+    res = asset_store.save(uid(), data, name=name, source_url=source_url)
+    if not res.get("ok"):
+        return jsonify({"ok": False, "error": i18n.t(f"asset_err_{res.get('reason', 'type')}", lang)})
+    return jsonify({"ok": True, "asset": _asset_json(db.get_asset(res["id"], owner_id=uid())),
+                    "quota": _asset_quota()})
+
+
+def _clean_asset_name(v):
+    return _re.sub(r"[\x00-\x1f\x7f<>]", "", str(v or "")).strip()[:80]
+
+
+@app.route("/media")
+@login_required
+def media_page():
+    return react_page("media", "media_title",
+                      {"assets": [_asset_json(a) for a in db.list_assets(uid())],
+                       "quota": _asset_quota()})
+
+
+@app.route("/api/assets")
+@login_required
+def api_assets():
+    return jsonify({"assets": [_asset_json(a) for a in db.list_assets(uid())],
+                    "quota": _asset_quota()})
+
+
+@app.route("/api/assets/upload", methods=["POST"])
+@login_required
+def api_asset_upload():
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"ok": False, "error": i18n.t("asset_err_too_small",
+                                                     session.get("lang", i18n.DEFAULT))})
+    data = f.read(asset_store.MAX_ANY + 1)          # لا نقرأ أكثر من الحد قبل الحكم
+    if len(data) > asset_store.MAX_ANY:
+        return jsonify({"ok": False, "error": i18n.t("asset_err_too_large",
+                                                     session.get("lang", i18n.DEFAULT))})
+    name = _clean_asset_name(request.form.get("name") or os.path.splitext(f.filename or "")[0])
+    return _asset_saved(data, name)
+
+
+@app.route("/api/assets/url", methods=["POST"])
+@login_required
+def api_asset_url():
+    lang = session.get("lang", i18n.DEFAULT)
+    data = request.get_json(silent=True) or {}
+    url = str(data.get("url") or "").strip()[:1000]
+    if _rate_limited(f"u{uid()}", limit=20, window=600, bucket="asset_url"):
+        return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)})
+    blob, err = asset_store.fetch_url(url)
+    if err:
+        return jsonify({"ok": False, "error": i18n.t(f"asset_err_{err}", lang)})
+    return _asset_saved(blob, _clean_asset_name(data.get("name")), source_url=url[:500])
+
+
+@app.route("/api/assets/<int:asset_id>/delete", methods=["POST"])
+@login_required
+def api_asset_delete(asset_id):
+    row = db.delete_asset(asset_id, uid())          # الملكية شرط في الحذف نفسه
+    if not row:
+        abort(404)
+    asset_store.delete_file(row["fname"])
+    return jsonify({"ok": True, "quota": _asset_quota()})
+
+
+@app.route("/assets/<int:asset_id>")
+@login_required
+def asset_file(asset_id):
+    a = db.get_asset(asset_id, owner_id=uid())
+    if not a:
+        abort(404)
+    fname = secure_filename(a["fname"])
+    if not os.path.exists(asset_store.path_of(fname)):
+        abort(404)
+    resp = send_from_directory(asset_store.BASE_DIR, fname, mimetype=a["mime"], conditional=True)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
+
+
 def settle_payment(row):
     """إشعار المالك بعمولة الإحالة إن تحققت. التسوية نفسها تمّت داخل
     db.finalize_payment ليشملها مسار تليجرام أيضاً."""
@@ -1709,6 +2280,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
     role = current_role()
     nav = [
         {"k": "dashboard",   "u": url_for("dashboard"),    "i": "grid",     "l": i18n.t("nav_bots", lang)},
+        {"k": "media",       "u": url_for("media_page"),   "i": "image",    "l": i18n.t("media_nav", lang)},
         {"k": "pricing",     "u": url_for("pricing"),      "i": "tag",      "l": i18n.t("nav_pricing", lang)},
         {"k": "billing",     "u": url_for("billing"),      "i": "card",     "l": i18n.t("nav_billing", lang)},
         {"k": "wallet",      "u": url_for("wallet_page"),  "i": "wallet",   "l": i18n.t("wallet_nav", lang)},
@@ -1751,6 +2323,8 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
             "register": url_for("register"), "landing": url_for("home"),
             "forgot": url_for("forgot"),
             "requestBot": url_for("request_bot"), "botCreate": url_for("bot_create"),
+            "botCreateManaged": url_for("bot_create_managed"),
+            "media": url_for("media_page"), "assets": url_for("api_assets"),
             "logo": url_for("static", filename="logo.svg"),
             "lang": url_for("set_lang", code="en" if lang == "ar" else "ar"),
             "terms": url_for("terms"), "privacy": url_for("privacy"),
@@ -1931,60 +2505,267 @@ def healthz():
         return jsonify({"ok": False, "error": str(e)[:120]}), 503
 
 
-# تاريخ آخر تعديل فعلي على النصوص القانونية — حدّثه عند تغيير الشروط.
-LEGAL_UPDATED = "2026-09-02"
+# ============================================================================
+#  الموقع العام: الرئيسية · الوثائق القانونية · 404 · ملفات محركات البحث.
+#  كل صفحة عامة تمرّ بـ `_render_public`: وسوم SEO وبيانات منظّمة وحمولة React
+#  ومحتوى مرسوم في الخادم يُفهرَس ويُقرأ بلا جافاسكربت (templates_web/public.html).
+# ============================================================================
 
-@app.route("/terms")
-def terms():
-    return react_page("terms", "terms_title",
-                      {"email": db.get_platform("support_email", "info@youssefalsherief.tech"),
-                       "updated": LEGAL_UPDATED})
+# تاريخ آخر تعديل فعلي على النصوص القانونية — حدّثه عند تغيير أي وثيقة.
+LEGAL_UPDATED = "2026-09-12"
+# آخر تعديل جوهري على الصفحة الرئيسية (يظهر في sitemap.xml)
+SITE_UPDATED = "2026-09-12"
 
-@app.route("/privacy")
-def privacy():
-    return react_page("privacy", "privacy_title",
-                      {"email": db.get_platform("support_email", "info@youssefalsherief.tech"),
-                       "updated": LEGAL_UPDATED})
+LEGAL_ENDPOINTS = {"terms": "terms", "privacy": "privacy",
+                   "refund": "refund_policy", "aup": "acceptable_use"}
+
+# نصوص الموقع العام: كل مفاتيح الصفحة الرئيسية بالبادئة، لا قائمة يدوية تنسى مفتاحاً
+_PUBLIC_T_PREFIXES = ("lp", "hero_", "feat_", "ai_setup", "tmpl_", "footer_")
+_PUBLIC_T_EXTRA = ("get_started_free", "login", "signin_link", "brand_tag", "daily_activity",
+                   "legal_updated", "stat_subs", "stat_orders", "stat_revenue", "stat_leads")
+
+# مسارات لا تُفهرَس: خاصة بالمستخدم أو تقنية أو مكررة لمحتوى الرئيسية
+_NOINDEX_PATHS = ("/dashboard", "/admin", "/bot/", "/account", "/billing", "/wallet",
+                  "/subscribe/", "/settings", "/pricing", "/api/", "/wh/", "/reset/",
+                  "/request-bot", "/affiliate")
+
+_SITEMAP = (("home", "1.0", "weekly"), ("register", "0.6", "monthly"), ("login", "0.3", "yearly"),
+            ("terms", "0.3", "yearly"), ("privacy", "0.3", "yearly"),
+            ("refund_policy", "0.3", "yearly"), ("acceptable_use", "0.3", "yearly"))
+
+
+def _site_base():
+    """أصل الموقع للروابط المطلقة (canonical · og · sitemap · رابط الأفيليت).
+    `PUBLIC_URL` أولاً (AGENTS.md §3.14)، وإلا أصل الطلب — روابط لا تحمل أسراراً."""
+    base = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    return base if base.startswith(("https://", "http://")) else request.host_url.rstrip("/")
+
+
+def _public_payload(page, lang):
+    """الحمولة المشتركة لكل صفحات الموقع العام (window.BY في public.html)."""
+    plat = db.all_platform()
+    user = getattr(g, "user", None)
+    email = plat.get("support_email", "") or "info@youssefalsherief.tech"
+    wa = plat.get("support_whatsapp", "")
+    contact = [{"l": email, "h": "mailto:" + email}]
+    if wa:
+        contact.append({"l": "WhatsApp", "h": "https://wa.me/" + wa})
+    contact.append({"l": "youssefalsherief.tech", "h": "https://youssefalsherief.tech/"})
+    return {
+        "page": page, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
+        "year": _dt.date.today().year, "email": email,
+        "t": {k: i18n.t(k, lang) for k in i18n.T
+              if k.startswith(_PUBLIC_T_PREFIXES) or k in _PUBLIC_T_EXTRA},
+        "icons": {n: _icon_svg(n) for n in _LANDING_ICONS},
+        "auth": {"in": bool(user), "name": session.get("uname") if user else None},
+        "urls": {"home": url_for("home"), "register": url_for("register"), "login": url_for("login"),
+                 "dashboard": url_for("dashboard"), "subscribe": "/subscribe/",
+                 "logo": _static_v("logo.svg"), "mark": _static_v("mark.svg"),
+                 "lang": url_for("set_lang", code="en" if lang == "ar" else "ar")},
+        "contact": contact,
+        "legalDocs": [{"id": d, "title": LEGAL.title(d, lang), "url": url_for(LEGAL_ENDPOINTS[d])}
+                      for d in LEGAL.ORDER],
+    }
+
+
+def _seo(lang, title, description, path, jsonld=None, index=True, alternates=True):
+    base = _site_base()
+    canonical = base + path
+    return {
+        "title": title, "description": description, "canonical": canonical,
+        "robots": "index,follow,max-image-preview:large" if index else "noindex,follow",
+        "alternates": ([{"lang": "ar", "href": canonical + "?lang=ar"},
+                        {"lang": "en", "href": canonical + "?lang=en"},
+                        {"lang": "x-default", "href": canonical}] if alternates else []),
+        "og_image": base + _static_v(f"brand/og-{lang}.png"),
+        "og_locale": "ar_EG" if lang == "ar" else "en_US",
+        "og_locale_alt": "en_US" if lang == "ar" else "ar_EG",
+        # _js_json لا json.dumps: البيانات المنظّمة داخل <script> أيضاً (AGENTS.md §3.9)
+        "jsonld": _js_json(jsonld) if jsonld else None,
+        "gsv": os.getenv("GOOGLE_SITE_VERIFICATION", "").strip(),
+    }
+
+
+def _render_public(payload, seo, status=200):
+    return render_template("public.html", by_json=_js_json(payload), P=payload, seo=seo), status
+
+
+def _public_plan(p, lang):
+    """باقة للعرض العام — من `priced_plans` نفسها التي تُبنى عليها صفحة الدفع."""
+    return {"id": p["id"], "name": plans.plan_name(p["id"], lang),
+            "features": p.get("features_ar" if lang == "ar" else "features_en", []),
+            "price": p["price"], "list_price": p["list_price"], "has_discount": p["has_discount"],
+            "annual_price": p["annual_price"], "annual_list_price": p["annual_list_price"],
+            "annual_has_discount": p["annual_has_discount"],
+            "annual_saving_pct": p["annual_saving_pct"],
+            "annual_monthly_equiv": p["annual_monthly_equiv"],
+            "whatsapp": bool(p.get("whatsapp")), "hot": p["id"] == "whatsapp"}
+
+
+def _home_jsonld(lang, plist, faq):
+    """بيانات منظّمة (schema.org): المنظّمة · الموقع · التطبيق وعروضه · الأسئلة.
+    الأسعار من الخادم نفسه — لا رقم يختلف عمّا يدفعه العميل."""
+    base = _site_base()
+    plat = db.all_platform()
+    email = plat.get("support_email", "") or "info@youssefalsherief.tech"
+    wa = plat.get("support_whatsapp", "")
+    contact = {"@type": "ContactPoint", "contactType": "customer support", "email": email,
+               "availableLanguage": ["ar", "en"], "areaServed": "EG"}
+    if wa:
+        contact["telephone"] = "+" + wa
+    offers = []
+    for p in plist:
+        o = {"@type": "Offer", "name": p["name"], "price": f"{float(p['price']):.2f}",
+             "priceCurrency": "EGP", "url": base + "/#pricing"}
+        if p["price"]:
+            o["priceSpecification"] = {"@type": "UnitPriceSpecification",
+                                       "price": f"{float(p['price']):.2f}", "priceCurrency": "EGP",
+                                       "billingDuration": "P1M", "unitText": "MONTH"}
+        offers.append(o)
+    return {"@context": "https://schema.org", "@graph": [
+        {"@type": "Organization", "@id": base + "/#org", "name": "BotYalla", "url": base + "/",
+         "logo": base + _static_v("brand/icon-512.png"), "email": email,
+         "founder": {"@type": "Person", "name": "Youssef Alsherief",
+                     "url": "https://youssefalsherief.tech/"},
+         "contactPoint": [contact]},
+        {"@type": "WebSite", "@id": base + "/#site", "url": base + "/", "name": "BotYalla",
+         "inLanguage": ["ar", "en"], "publisher": {"@id": base + "/#org"}},
+        {"@type": "SoftwareApplication", "name": "BotYalla",
+         "applicationCategory": "BusinessApplication", "operatingSystem": "Web",
+         "url": base + "/", "inLanguage": lang, "publisher": {"@id": base + "/#org"},
+         "offers": offers},
+        {"@type": "FAQPage", "mainEntity": [
+            {"@type": "Question", "name": x["q"],
+             "acceptedAnswer": {"@type": "Answer", "text": x["a"]}} for x in faq]},
+    ]}
 
 
 @app.route("/")
 def home():
+    """الصفحة الرئيسية = صفحة الهبوط لكل زائر، مسجّلاً أو لا (للمسجّل زرّ «لوحتي»)."""
     lang = session.get("lang", i18n.DEFAULT)
-    # كل نصوص الواجهة تُحقن من الخادم — لا نص مكتوب داخل حزمة React
-    keys = ("hero_title_a","hero_title_b","hero_sub","lp_badge","lp_cta_demo",
-            "lp_trust_1","lp_trust_2","lp_trust_3","lp_live","get_started_free",
-            "signin_link","daily_activity","lp_feats_t","lp_feats_sub","lp_how_t",
-            "lp_how_sub","lp_faq_t","lp_final_t","lp_final_sub","nav_pricing","login",
-            "brand_tag","footer_terms","footer_privacy")
-    payload = i18n.landing_payload(lang)
-    plat = db.all_platform()
-    payload.update({
-        "lang": lang,
-        "dir": i18n.dir_for(lang),
-        "brand": "BotYalla",
-        "t": {k: i18n.t(k, lang) for k in keys},
-        "icons": {n: _icon_svg(n) for n in _LANDING_ICONS},
-        "urls": {"register": url_for("register"), "login": url_for("login"),
-                 "pricing": url_for("pricing"), "home": url_for("home"),
-                 "logo": url_for("static", filename="logo.svg"),
-                 "lang": url_for("set_lang", code="en" if lang == "ar" else "ar"),
-                 "terms": url_for("terms"), "privacy": url_for("privacy")},
-        "contact": [
-            {"l": plat.get("support_email", ""), "h": "mailto:" + plat.get("support_email", "")},
-            {"l": "WhatsApp", "h": "https://wa.me/" + plat.get("support_whatsapp", "")},
-            {"l": "youssefalsherief.tech", "h": "https://youssefalsherief.tech/"},
-        ],
-        "templates": [
-            {"icon": {"flow":"flow","store":"store","booking":"calendar",
-                      "customer_service":"phone","faq":"grid","feedback":"sparkles",
-                      "support":"shield"}.get(k, "bot"),
-             "name": i18n.t({"flow":"tmpl_flow","store":"tmpl_store","booking":"tmpl_booking",
-                             "customer_service":"tmpl_cs","faq":"tmpl_faq",
-                             "feedback":"tmpl_feedback","support":"tmpl_support"}[k], lang)}
-            for k in ("flow","store","booking","customer_service","faq","feedback","support")
-        ],
-    })
-    return render_template("landing.html", by_json=_js_json(payload))
+    payload = _public_payload("home", lang)
+    payload.update(i18n.landing_payload(lang))
+    price = _egp(mkt_price())
+    payload["mktPrice"] = price
+    # السعر يُملأ هنا لا في الواجهة: نفس النص يدخل البيانات المنظّمة لمحركات البحث
+    payload["faq"] = [{"q": x["q"], "a": x["a"].replace("{price}", f"{price:g}")}
+                      for x in payload["faq"]]
+    plist = [_public_plan(p, lang) for p in priced_plans(lang)]
+    payload["plans"] = plist
+    payload["templates"] = [
+        {"icon": _TMPL_ICON[k], "name": i18n.t(_TMPL_KEY[k], lang)}
+        for k in ("flow", "store", "booking", "customer_service", "faq", "feedback", "support")
+    ]
+    seo = _seo(lang, i18n.t("lp2_seo_title", lang), i18n.t("lp2_seo_desc", lang), url_for("home"),
+               jsonld=_home_jsonld(lang, plist, payload["faq"]))
+    return _render_public(payload, seo)
+
+
+@app.route("/landing")
+def landing():
+    """الرابط القديم للرئيسية — تحويل دائم يحفظ الاستعلام، فروابط الأفيليت
+    المنشورة سابقاً (`/landing?ref=CODE`) لا تنكسر."""
+    qs = request.query_string.decode("utf-8", "ignore")
+    return redirect(url_for("home") + ("?" + qs if qs else ""), code=301)
+
+
+def _legal(doc):
+    lang = session.get("lang", i18n.DEFAULT)
+    payload = _public_payload("legal", lang)
+    wa = db.get_platform("support_whatsapp", "")
+    L = LEGAL.render(doc, lang, {"email": payload["email"], "whatsapp": ("+" + wa) if wa else "—",
+                                 "updated": LEGAL_UPDATED, "site": _site_base()})
+    payload["legal"] = L
+    seo = _seo(lang, f"{L['title']} · BotYalla", L["intro"][:158], request.path)
+    return _render_public(payload, seo)
+
+
+@app.route("/terms")
+def terms():
+    return _legal("terms")
+
+
+@app.route("/privacy")
+def privacy():
+    return _legal("privacy")
+
+
+@app.route("/refund")
+def refund_policy():
+    return _legal("refund")
+
+
+@app.route("/acceptable-use")
+def acceptable_use():
+    return _legal("aup")
+
+
+@app.errorhandler(404)
+def _not_found(e):
+    """404 بهوية الموقع لطلبات الصفحات. مسارات API والويبهوك والملفات الثابتة،
+    وأي طلب يريد JSON، تبقى كما هي — لا صفحة HTML لعميل برمجي."""
+    if (request.path.startswith(("/api/", "/wh/", "/static/"))
+            or request.accept_mimetypes.best == "application/json"):
+        return e
+    lang = session.get("lang", i18n.DEFAULT)
+    payload = _public_payload("notfound", lang)
+    seo = _seo(lang, i18n.t("lp2_nf_t", lang) + " · BotYalla", i18n.t("lp2_nf_d", lang),
+               request.path, index=False, alternates=False)
+    return _render_public(payload, seo, 404)
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    lines = (["User-agent: *", "Allow: /"] + [f"Disallow: {p}" for p in _NOINDEX_PATHS]
+             + ["", f"Sitemap: {_site_base()}/sitemap.xml", ""])
+    return Response("\n".join(lines), mimetype="text/plain")
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    base = _site_base()
+    out = ['<?xml version="1.0" encoding="UTF-8"?>',
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" '
+           'xmlns:xhtml="http://www.w3.org/1999/xhtml">']
+    for ep, prio, freq in _SITEMAP:
+        loc = _xesc(base + url_for(ep))
+        mod = SITE_UPDATED if ep in ("home", "register", "login") else LEGAL_UPDATED
+        alts = "".join(f'<xhtml:link rel="alternate" hreflang="{l}" href="{loc}?lang={l}"/>'
+                       for l in ("ar", "en"))
+        out.append(f"<url><loc>{loc}</loc><lastmod>{mod}</lastmod><changefreq>{freq}</changefreq>"
+                   f"<priority>{prio}</priority>{alts}</url>")
+    out.append("</urlset>")
+    return Response("\n".join(out), mimetype="application/xml")
+
+
+@app.route("/site.webmanifest")
+def webmanifest():
+    lang = session.get("lang", i18n.DEFAULT)
+    icon = lambda n, s, **kw: dict({"src": _static_v(f"brand/{n}.png"),
+                                    "sizes": f"{s}x{s}", "type": "image/png"}, **kw)
+    data = {"name": "BotYalla", "short_name": "BotYalla", "description": i18n.t("lp2_seo_desc", lang),
+            "lang": lang, "dir": i18n.dir_for(lang), "start_url": "/dashboard", "scope": "/",
+            "display": "standalone", "background_color": "#05070D", "theme_color": "#05070D",
+            "icons": [icon("icon-192", 192), icon("icon-512", 512),
+                      icon("icon-512", 512, purpose="maskable")]}
+    return Response(json.dumps(data, ensure_ascii=False), mimetype="application/manifest+json")
+
+
+@app.route("/.well-known/security.txt")
+def security_txt():
+    """RFC 9116: أين يُبلَّغ عن ثغرة — الباحث الأمني لا يبحث في صفحة «تواصل معنا»."""
+    email = db.get_platform("support_email", "") or "info@youssefalsherief.tech"
+    exp = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=365)).strftime("%Y-%m-%dT00:00:00Z")
+    body = (f"Contact: mailto:{email}\nExpires: {exp}\nPreferred-Languages: ar, en\n"
+            f"Canonical: {_site_base()}/.well-known/security.txt\n")
+    return Response(body, mimetype="text/plain")
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return send_from_directory(os.path.join(app.static_folder, "brand"), "favicon-32.png",
+                               mimetype="image/png", max_age=86400)
 
 
 def seed_platform_defaults():
@@ -2052,6 +2833,18 @@ def _save_ops_settings(form):
                             str(int((d * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))))
         else:
             errors.append(i18n.t("plat_bad_price", lang))
+    if "ai_reply_price_egp" in form:
+        # سعر رد «عقل البوت» فوق حصة الباقة — نفس قواعد السعر أعلاه، بسقف 100ج
+        try:
+            d = Decimal((form.get("ai_reply_price_egp") or "").strip())
+            ok = d.is_finite() and Decimal("0.01") <= d <= Decimal("100")
+        except InvalidOperation:
+            ok = False
+        if ok:
+            db.set_platform("ai_reply_price",
+                            str(int((d * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))))
+        else:
+            errors.append(i18n.t("plat_bad_ai_price", lang))
     if "bot_capacity" in form:
         raw = (form.get("bot_capacity") or "").strip()
         if raw == "":

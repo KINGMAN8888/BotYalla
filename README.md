@@ -292,6 +292,9 @@ The platform loads configuration values from `.env`. An annotated template is av
 | `SMTP_USER` / `SMTP_PASS` | String | None | SMTP credentials. |
 | `SMTP_FROM` | String | None | Sender, e.g. `BotYalla <no-reply@yourdomain.com>`. |
 | `SMTP_TLS` | String | `starttls` | `starttls` (587), `ssl` (465) or `none`. |
+| `GOOGLE_SITE_VERIFICATION` | String | None | Google Search Console verification token — rendered as a `google-site-verification` meta tag on public pages. |
+
+> **Public website.** `/` is the public landing page for everyone (the dashboard lives at `/dashboard`); `/terms`, `/privacy`, `/refund` and `/acceptable-use` are the policies; `/robots.txt`, `/sitemap.xml`, `/site.webmanifest` and `/.well-known/security.txt` are served by the app. Set `PUBLIC_URL` in production so canonical, social-preview and sitemap links use your real domain. Go-live checklist: [docs/WEBSITE_LAUNCH.md](docs/WEBSITE_LAUNCH.md).
 
 > **Never commit real credentials.** `.env` is git-ignored — keep it that way, and never hard-code an admin password inside a tracked file such as a test.
 

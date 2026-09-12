@@ -295,7 +295,7 @@ export function AdminRequests() {
 
 /* -------------------------------------------------------------- المنصة */
 export function AdminPlatform() {
-  const { plat = {}, running, capacity = null } = P;
+  const { plat = {}, running, capacity = null, managed = {} } = P;
   const F = ({ name, label, ph }) => (
     <Field label={label}><Input name={name} defaultValue={plat[name] || ""} placeholder={ph} /></Field>
   );
@@ -328,6 +328,15 @@ export function AdminPlatform() {
             {t("plat_bot")}
           </SectionTitle>
           <p className="mt-0 mb-4 text-[13px] text-ink-3">{t("plat_bot_desc")}</p>
+          {/* الإنشاء بضغطة يحتاج «Bot Management Mode» لبوت المنصة (can_manage_bots من getMe) */}
+          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-white/[0.03] px-3.5 py-3
+                          shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+            <span className="text-[13px] font-bold text-ink">{t("plat_managed")}</span>
+            {managed.can_manage
+              ? <Pill tone="on" dot>{t("plat_managed_on")}{managed.username ? ` · @${managed.username}` : ""}</Pill>
+              : <Pill tone="off">{t("plat_managed_off")}</Pill>}
+            {!managed.can_manage && <p className="m-0 w-full text-[12px] leading-relaxed text-ink-3">{t("onetap_admin_hint")}</p>}
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <F name="platform_bot_token" label={t("plat_bot_token")} ph="123456:ABC-..." />
             <F name="admin_chat_id" label={t("plat_admin_id")} ph="123456789" />
@@ -364,6 +373,10 @@ export function AdminPlatform() {
             <Field label={t("plat_mkt_price")} hint={t("plat_mkt_price_h")}>
               <Input name="mkt_msg_price_egp" type="number" step="0.01" min="0.01" max="1000"
                      inputMode="decimal" dir="ltr" defaultValue={plat.mkt_msg_price_egp || ""} />
+            </Field>
+            <Field label={t("plat_ai_price")} hint={t("plat_ai_price_h")}>
+              <Input name="ai_reply_price_egp" type="number" step="0.01" min="0.01" max="100"
+                     inputMode="decimal" dir="ltr" defaultValue={plat.ai_reply_price_egp || ""} />
             </Field>
             <Field label={t("plat_capacity")}
                    hint={capacity ? t("plat_capacity_h").replace("{r}", capacity.running)

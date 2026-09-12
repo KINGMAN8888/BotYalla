@@ -22,6 +22,50 @@ class TelegramChannel(Channel):
         chat_id = self._extract_chat_id(peer)
         await self.bot.send_message(chat_id=chat_id, text=text, reply_markup=ReplyKeyboardRemove())
 
+    async def send_typing(self, peer: str):
+        try:
+            await self.bot.send_chat_action(chat_id=self._extract_chat_id(peer), action="typing")
+        except Exception:
+            pass                               # تجميلي — فشله لا يوقف الرد
+
+    async def send_media(self, peer, asset, bot_id, caption=None, options=None, markup=None):
+        """أول إرسال يرفع الملف، وتليجرام يعيد file_id يُحفظ لهذا البوت ويُعاد
+        استعماله (file_id خاص بكل بوت). مرجع لم يعد صالحاً يُمسح ويُرفع الملف ثانية.
+        `markup`: لوحة جاهزة (قوائم المتجر والحجز) بدل بنائها من `options`."""
+        import database as db, asset_store
+        from telegram.error import BadRequest
+        chat_id = self._extract_chat_id(peer)
+        caption = (caption or "").strip()
+        long_caption = len(caption) > 1024            # حدّ تليجرام لتعليق الوسائط
+        kb = markup if markup is not None else (
+            ReplyKeyboardMarkup([[o] for o in options], resize_keyboard=True, one_time_keyboard=True)
+            if options else ReplyKeyboardRemove())
+        ref = db.get_asset_ref(asset["id"], bot_id)
+        for _ in (0, 1):
+            src = ref or open(asset_store.path_of(asset["fname"]), "rb")
+            try:
+                kw = dict(chat_id=chat_id, caption=None if long_caption else (caption or None),
+                          reply_markup=None if long_caption else kb)
+                if asset["kind"] == "video":
+                    m = await self.bot.send_video(video=src, supports_streaming=True, **kw)
+                    fid = m.video.file_id if m.video else None
+                else:
+                    m = await self.bot.send_photo(photo=src, **kw)
+                    fid = m.photo[-1].file_id if m.photo else None
+                if fid and not ref:
+                    db.set_asset_ref(asset["id"], bot_id, fid)
+                if long_caption:
+                    await self.bot.send_message(chat_id=chat_id, text=caption, reply_markup=kb)
+                return m
+            except BadRequest:
+                if not ref:
+                    raise
+                db.drop_asset_ref(asset["id"], bot_id)
+                ref = None
+            finally:
+                if not isinstance(src, str):
+                    src.close()
+
     def _extract_chat_id(self, peer: str) -> int:
         if peer.startswith("tg:"):
             return int(peer[3:])

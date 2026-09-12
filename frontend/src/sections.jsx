@@ -33,9 +33,13 @@ export function ReadBar() {
 /* رابط تخطٍّ للمحتوى — أول ما يصله مستخدم لوحة المفاتيح وقارئ الشاشة */
 export function SkipLink() {
   return (
+    // ثابت فوق حافة الشاشة ويهبط عند التركيز — لا sr-only: هامشه ‎-1px‎ يدفع
+    // صندوقه بكسلاً خارج الحافة في RTL فيصنع تمريراً أفقياً على الجوال.
+    // العنصر الثابت لا يدخل في حساب التمرير، وقارئ الشاشة يراه كما هو.
     <a href="#main"
-       className="sr-only z-[400] rounded-full bg-au-cyan px-5 py-2.5 font-extrabold text-[#07090F]
-                  focus:not-sr-only focus:fixed focus:top-3 focus:start-3">
+       className="fixed top-3 start-3 z-[400] -translate-y-[300%] rounded-full bg-au-cyan px-5 py-2.5
+                  font-extrabold text-[#07090F] no-underline transition-transform duration-300
+                  focus:translate-y-0">
       {t("lp2_skip")}
     </a>
   );
@@ -47,7 +51,9 @@ export function Facts() {
   return (
     <section aria-label={t("lp2_facts_label")} className="mx-auto max-w-[1240px] px-6">
       <Reveal>
-        <div className="glass grid grid-cols-2 gap-px overflow-hidden rounded-[26px] sm:grid-cols-3 lg:grid-cols-5">
+        {/* 5 عناصر: على عمودين يمتد الأخير بعرض الصف بدل خانة فارغة بجانبه */}
+        <div className="glass grid grid-cols-2 gap-px overflow-hidden rounded-[26px] sm:grid-cols-3 lg:grid-cols-5
+                        [&>*:last-child]:col-span-2 sm:[&>*:last-child]:col-span-1">
           {facts.map((f, i) => {
             const m = String(f.v).match(/^(\d+)(.*)$/);
             return (
@@ -146,14 +152,14 @@ export function Steps() {
   return (
     <section id="how" aria-labelledby="how-t"
              className="scroll-mt-24 mx-auto max-w-[1240px] px-6 py-[clamp(64px,10vw,120px)]">
-      <div className="grid items-start gap-14 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-14 lg:grid-cols-2">
         <Reveal className="lg:sticky lg:top-28">
           <h2 id="how-t" className="display m-0 mb-4 text-[clamp(28px,4.2vw,52px)] font-extrabold text-ink">
             {t("lp_how_t")}
           </h2>
           <p className="m-0 text-[clamp(14px,1.3vw,17px)] leading-[1.8] text-ink-2">{t("lp_how_sub")}</p>
           <p className="m-0 mt-5 flex items-start gap-2.5 text-[14px] leading-[1.75] text-ink-3">
-            <Icon name="phone" size={16} className="mt-1 text-[#25D366]" />{t("lp2_how_wa")}
+            <img src="/static/whatsapp.png" alt="WhatsApp" className="mt-1 size-4 object-contain inline-block" />{t("lp2_how_wa")}
           </p>
           <div className="mt-8">
             <Magnetic href={authed ? BY.urls.dashboard : BY.urls.register} icon="rocket">
@@ -270,7 +276,9 @@ export function Finale() {
   );
 }
 
-/* ------------------------------------------------------------ شريط التنقّل */
+/* ------------------------------------------------------------ شريط التنقّل
+   على الجوال: الشعار واللغة وزرّ القائمة فقط — لا زرّ أيقونة غامض بلا نص.
+   القائمة ورقة تحريرية مرقّمة، وفي آخرها «ابدأ مجاناً» بعرض الشاشة. */
 export function Nav() {
   const [solid, setSolid] = useState(false);
   const [open, setOpen] = useState(false);
@@ -294,12 +302,12 @@ export function Nav() {
   }, [open]);
 
   return (
-    <header className={"sticky top-0 z-[200] transition-all duration-500 " +
-      (solid || open ? "bg-ob-0/80 backdrop-blur-xl backdrop-saturate-150 shadow-[0_1px_0_rgb(255_255_255/0.07)]"
+    <header className={"sticky top-0 z-[200] transition-colors duration-500 " +
+      (solid || open ? "bg-ob-0/85 backdrop-blur-xl backdrop-saturate-150 shadow-[0_1px_0_rgb(255_255_255/0.07)]"
                      : "bg-transparent")}>
-      <div className="mx-auto flex max-w-[1320px] items-center gap-4 px-6 py-4">
+      <div className="mx-auto flex max-w-[1320px] items-center gap-3 px-5 py-3 sm:px-6 sm:py-4">
         <a href={home} className="flex shrink-0 items-center no-underline" aria-label={BY.brand}>
-          <img src={BY.urls.logo} alt={BY.brand} className="h-9 w-auto" width="140" height="36" />
+          <img src={BY.urls.logo} alt={BY.brand} className="h-8 w-auto sm:h-9" width="140" height="36" />
         </a>
 
         <nav aria-label={t("lp2_menu")} className="ms-6 hidden items-center gap-1 lg:flex">
@@ -312,38 +320,38 @@ export function Nav() {
           ))}
         </nav>
 
-        <div className="ms-auto flex items-center gap-1.5">
+        <div className="ms-auto flex items-center gap-2">
           <a href={BY.urls.lang} hrefLang={BY.lang === "ar" ? "en" : "ar"}
-             className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-bold text-ink-2
+             className="inline-flex h-10 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-extrabold text-ink-2
                         no-underline shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] transition-colors hover:text-au-cyan">
             <Icon name="globe" size={15} />{BY.lang === "ar" ? "EN" : "ع"}
           </a>
           {authed ? (
             <a href={BY.urls.dashboard}
-               className="inline-flex items-center gap-2 rounded-full bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)]
-                          px-5 py-2.5 text-sm font-extrabold text-[#07090F] no-underline">
+               className="hidden h-10 items-center gap-2 rounded-full bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)]
+                          px-5 text-sm font-extrabold text-[#07090F] no-underline sm:inline-flex">
               <Icon name="grid" size={15} />{t("lp2_nav_dashboard")}
             </a>
           ) : (
             <>
               <a href={BY.urls.login}
-                 className="hidden rounded-full px-4 py-2 text-sm font-bold text-ink-2 no-underline transition-colors
-                            hover:bg-white/5 hover:text-ink sm:inline-flex">
+                 className="hidden h-10 items-center rounded-full px-4 text-sm font-bold text-ink-2 no-underline
+                            transition-colors hover:bg-white/5 hover:text-ink md:inline-flex">
                 {t("login")}
               </a>
               <a href={BY.urls.register}
-                 className="inline-flex items-center gap-2 rounded-full bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)]
-                            px-5 py-2.5 text-sm font-extrabold text-[#07090F] no-underline
+                 className="hidden h-10 items-center gap-2 rounded-full bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)]
+                            px-5 text-sm font-extrabold text-[#07090F] no-underline
                             shadow-[0_8px_24px_-8px_rgb(124_108_246/0.8)] transition-transform duration-300
-                            hover:-translate-y-0.5">
-                <Icon name="rocket" size={15} />
-                <span className="hidden sm:inline">{t("get_started_free")}</span>
+                            hover:-translate-y-0.5 sm:inline-flex">
+                <Icon name="rocket" size={15} />{t("get_started_free")}
               </a>
             </>
           )}
           <button type="button" aria-expanded={open} aria-controls="mnav" onClick={() => setOpen(!open)}
                   aria-label={open ? t("lp2_close") : t("lp2_menu")}
-                  className="grid size-10 place-items-center rounded-full text-ink shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] lg:hidden">
+                  className="grid size-10 place-items-center rounded-full text-ink
+                             shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] lg:hidden">
             <span className="relative block h-3 w-4">
               <i className={"absolute inset-x-0 top-0 block h-0.5 rounded bg-current transition-transform duration-300 " +
                             (open ? "translate-y-[5px] rotate-45" : "")} />
@@ -356,91 +364,160 @@ export function Nav() {
 
       <AnimatePresence>
         {open && (
-          <motion.nav id="mnav" aria-label={t("lp2_menu")}
+          <motion.div id="mnav"
                       initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}
-                      exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+                      exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
                       className="overflow-hidden lg:hidden">
-            <div className="flex flex-col gap-1 px-6 pb-6">
-              {links.map((x) => (
-                <a key={x.h} href={x.h} onClick={() => setOpen(false)}
-                   className="rounded-2xl px-4 py-3.5 text-[16px] font-bold text-ink no-underline hover:bg-white/5">
-                  {x.l}
+            <nav aria-label={t("lp2_menu")} className="mx-auto max-w-[1320px] px-5 pb-7 pt-1 sm:px-6">
+              <ol className="m-0 list-none p-0">
+                {links.map((x, i) => (
+                  <li key={x.h} className="shadow-[inset_0_-1px_0_rgb(255_255_255/0.07)]">
+                    <a href={x.h} onClick={() => setOpen(false)}
+                       className="flex items-baseline gap-4 py-4 no-underline">
+                      <span className="tnum text-[12px] font-extrabold text-au-cyan">0{i + 1}</span>
+                      <span className="display text-[24px] font-extrabold text-ink">{x.l}</span>
+                    </a>
+                  </li>
+                ))}
+              </ol>
+              <div className="mt-6 grid gap-2.5">
+                <a href={authed ? BY.urls.dashboard : BY.urls.register}
+                   className="flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)]
+                              py-3.5 text-[15px] font-extrabold text-[#07090F] no-underline">
+                  <Icon name="rocket" size={17} />{authed ? t("lp2_nav_dashboard") : t("get_started_free")}
                 </a>
-              ))}
-              {!authed && (
-                <a href={BY.urls.login}
-                   className="rounded-2xl px-4 py-3.5 text-[16px] font-bold text-ink-2 no-underline hover:bg-white/5">
-                  {t("login")}
-                </a>
-              )}
-            </div>
-          </motion.nav>
+                {!authed && (
+                  <a href={BY.urls.login}
+                     className="flex items-center justify-center rounded-2xl py-3.5 text-[15px] font-bold text-ink
+                                no-underline shadow-[inset_0_0_0_1px_rgb(255_255_255/0.14)]">
+                    {t("login")}
+                  </a>
+                )}
+              </div>
+            </nav>
+          </motion.div>
         )}
       </AnimatePresence>
     </header>
   );
 }
 
-/* ------------------------------------------------------------------ التذييل */
-function FootCol({ title, items, external = false }) {
-  return (
-    <div>
-      <h2 className="mb-4 text-[13px] font-extrabold text-ink">{title}</h2>
-      <ul className="m-0 flex list-none flex-col gap-1 p-0">
-        {items.map(([h, l], i) => (
-          <li key={i}>
-            <a href={h} {...(external ? { target: "_blank", rel: "noopener" } : {})}
-               className="inline-block py-1 text-sm text-ink-3 no-underline transition-colors hover:text-au-cyan">
-              {l}
-            </a>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
+/* ------------------------------------------------------------------ التذييل
+   التذييل محادثة — لأن المنتج نفسه محادثة. مساعد BotYalla يحيّي من وصل لآخر
+   الصفحة، والروابط الأساسية أزرار «ردّ سريع» كلوحة أزرار البوت، ثم الروابط
+   والسياسات كرقائق، ثم كلمة «BotYalla» عملاقة تذوب في الخلفية تختم الصفحة.
+   كل شيء في المنتصف — على الجوال وعلى الشاشات الواسعة. */
 export function Footer() {
   const home = BY.urls.home;
-  const product = [
-    [home + "#features", t("lp2_nav_features")], [home + "#pricing", t("lp2_nav_pricing")],
-    [home + "#faq", t("lp2_nav_faq")], [BY.urls.register, t("get_started_free")], [BY.urls.login, t("login")],
-  ];
+  const authed = !!(BY.auth && BY.auth.in);
+  const contact = BY.contact || [];
+  const wa = contact.find((c) => String(c.h).startsWith("https://wa.me/"));
+  const mail = contact.find((c) => String(c.h).startsWith("mailto:"));
+  const replies = [
+    { h: authed ? BY.urls.dashboard : BY.urls.register, icon: "rocket", primary: true,
+      l: authed ? t("lp2_nav_dashboard") : t("get_started_free") },
+    wa && { h: wa.h, l: t("lp2_foot_wa"), icon: "phone", ext: true },
+    mail && { h: mail.h, l: t("lp2_foot_mail"), icon: "link" },
+    { h: home + "#pricing", l: t("lp2_cta_secondary"), icon: "tag" },
+  ].filter(Boolean);
+  const product = [[home + "#features", "lp2_nav_features"], [home + "#how", "lp2_nav_how"],
+                   [home + "#pricing", "lp2_nav_pricing"], [home + "#faq", "lp2_nav_faq"],
+                   [BY.urls.login, "login"]];
+
   return (
-    <footer className="relative mt-10 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
-      <div className="mx-auto max-w-[1240px] px-6 py-16">
-        <div className="grid gap-12 sm:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr_1fr]">
-          <div>
-            <img src={BY.urls.logo} alt={BY.brand} className="h-9 w-auto" width="140" height="36" loading="lazy" />
-            <p className="mt-4 max-w-[340px] text-sm leading-[1.8] text-ink-3">{t("lp2_foot_tag")}</p>
-            <p className="mt-4 text-[12.5px] text-ink-4">{t("lp2_foot_made")}</p>
+    <footer className="relative mt-20 overflow-hidden">
+      <div aria-hidden="true"
+           className="pointer-events-none absolute inset-x-0 top-0 h-px
+                      bg-[linear-gradient(90deg,transparent,rgb(124_108_246/0.6),rgb(34_211_238/0.6),transparent)]" />
+      <div aria-hidden="true"
+           className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[440px] w-[760px] max-w-[150vw] -translate-x-1/2
+                      rounded-full bg-[radial-gradient(closest-side,rgb(124_108_246/0.22),transparent)] blur-2xl" />
+
+      <div className="mx-auto flex max-w-[860px] flex-col items-center px-5 pt-20 text-center sm:px-6">
+        <Reveal className="flex w-full flex-col items-center">
+          <div className="relative">
+            <span className="glass grid size-[68px] place-items-center rounded-[22px]">
+              <img src={BY.urls.mark} alt="" className="h-10 w-auto" width="40" height="42" loading="lazy" />
+            </span>
+            <span className="absolute -bottom-0.5 -end-0.5 size-4 rounded-full border-[3px] border-ob-0 bg-au-teal" />
           </div>
-          <FootCol title={t("lp2_foot_product")} items={product} />
-          <FootCol title={t("lp2_foot_legal")} items={(BY.legalDocs || []).map((d) => [d.url, d.title])} />
-          <FootCol title={t("lp2_foot_contact")} items={(BY.contact || []).map((c) => [c.h, c.l])} external />
-        </div>
-        <div className="mt-12 flex flex-wrap items-center justify-between gap-4 pt-6 text-[12.5px] text-ink-4
-                        shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
+          <div className="mt-3 text-[14px] font-extrabold text-ink">{t("lp2_foot_bot")}</div>
+          <div className="mt-0.5 text-[12px] font-bold text-au-teal">{t("lp2_foot_online")}</div>
+
+          <p className="glass mx-auto mt-5 mb-0 max-w-[440px] rounded-[24px] px-6 py-4 text-[15.5px] leading-[1.8] text-ink">
+            {t("lp2_foot_hi")}
+          </p>
+
+          <div className="mt-5 flex max-w-[560px] flex-wrap justify-center gap-2.5">
+            {replies.map((r, i) => (
+              <a key={i} href={r.h} {...(r.ext ? { target: "_blank", rel: "noopener" } : {})}
+                 className={"inline-flex items-center gap-2 rounded-full px-5 py-3 text-[14px] font-extrabold no-underline " +
+                   "transition-transform duration-300 hover:-translate-y-0.5 " +
+                   (r.primary
+                     ? "bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] text-[#07090F] shadow-[0_12px_30px_-10px_rgb(124_108_246/0.8)]"
+                     : "bg-white/[0.05] text-ink shadow-[inset_0_0_0_1px_rgb(255_255_255/0.14)] hover:bg-white/10")}>
+                <Icon name={r.icon} size={16} />{r.l}
+              </a>
+            ))}
+          </div>
+        </Reveal>
+
+        <p className="mx-auto mt-14 mb-0 max-w-[46ch] text-[14px] leading-[1.85] text-ink-3">{t("lp2_foot_tag")}</p>
+
+        <nav aria-label={t("lp2_foot_product")} className="mt-7 flex flex-wrap justify-center gap-x-1 gap-y-1.5">
+          {product.map(([h, k]) => (
+            <a key={h} href={h}
+               className="rounded-full px-3.5 py-1.5 text-[14px] font-bold text-ink-2 no-underline transition-colors
+                          hover:bg-white/5 hover:text-ink">
+              {t(k)}
+            </a>
+          ))}
+        </nav>
+
+        <nav aria-label={t("lp2_foot_legal")} className="mt-4 flex flex-wrap justify-center gap-2">
+          {(BY.legalDocs || []).map((d) => (
+            <a key={d.id} href={d.url}
+               className="rounded-full bg-white/[0.035] px-3.5 py-1.5 text-[12.5px] font-bold text-ink-3 no-underline
+                          shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] transition-colors hover:text-ink">
+              {d.title}
+            </a>
+          ))}
+        </nav>
+
+        <div className="mt-10 flex flex-col items-center gap-1.5 text-[12.5px] text-ink-4">
           <span>© {BY.year} {BY.brand} — {t("lp2_foot_rights")}</span>
-          <a href="https://youssefalsherief.tech/" target="_blank" rel="noopener"
-             className="text-ink-3 no-underline transition-colors hover:text-au-cyan">Youssef Alsherief</a>
+          <span>
+            {t("lp2_foot_made")} · {t("lp2_foot_by")}{" "}
+            <a href="https://youssefalsherief.tech/" target="_blank" rel="noopener"
+               className="font-bold text-ink-3 no-underline transition-colors hover:text-au-cyan">Youssef Alsherief</a>
+          </span>
         </div>
       </div>
+
+      <div aria-hidden="true" dir="ltr" className="footer-mark mt-8 select-none text-center">BotYalla</div>
     </footer>
   );
 }
 
-/* زرّ ثابت على الجوال بعد البطل — النداء الأساسي لا يغيب عن الإبهام */
+/* زرّ ثابت على الجوال بعد البطل — النداء الأساسي لا يغيب عن الإبهام. ويختفي
+   فور ظهور التذييل: هناك أزرار الردّ السريع، ولا معنى لنداءين فوق بعضهما. */
 export function StickyCTA() {
-  const [show, setShow] = useState(false);
+  const [pastHero, setPastHero] = useState(false);
+  const [footerIn, setFooterIn] = useState(false);
   const authed = !!(BY.auth && BY.auth.in);
   useEffect(() => {
-    const on = () => setShow(window.scrollY > 640 &&
-      window.innerHeight + window.scrollY < document.documentElement.scrollHeight - 420);
+    const on = () => setPastHero(window.scrollY > 640);
     on();
     window.addEventListener("scroll", on, { passive: true });
-    return () => window.removeEventListener("scroll", on);
+    let io = null;
+    const f = document.querySelector("footer");
+    if (f && "IntersectionObserver" in window) {
+      io = new IntersectionObserver(([e]) => setFooterIn(e.isIntersecting));
+      io.observe(f);
+    }
+    return () => { window.removeEventListener("scroll", on); if (io) io.disconnect(); };
   }, []);
+  const show = pastHero && !footerIn;
   return (
     <AnimatePresence>
       {show && (

@@ -18,6 +18,17 @@ class Channel:
         """إزالة لوحة المفاتيح (مفيد لتليجرام)، أو مجرد إرسال نص عادي لواتساب"""
         raise NotImplementedError
 
+    async def send_typing(self, peer: str):
+        """مؤشّر «يكتب…» أثناء تفكير الذكاء الاصطناعي — اختياري، والقناة التي لا
+        تدعمه لا تفعل شيئاً."""
+        return None
+
+    async def send_media(self, peer: str, asset: dict, bot_id: int, caption: str = None,
+                         options: list = None):
+        """صورة أو فيديو من مكتبة الوسائط (asset = صفّ assets)، مع أزرار اختيارية
+        تحته — «فيديو تفاعلي». الملف يُرفع للقناة مرة ويُعاد استعمال مرجعه."""
+        raise NotImplementedError
+
     def normalize(self, raw) -> dict:
         """يحوّل رسالة واردة إلى شكل موحّد:
         {id, peer, text, name, kind: 'text'|'start'|'cancel'|'media'|'unsupported'}

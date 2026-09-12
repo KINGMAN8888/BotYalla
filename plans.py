@@ -158,3 +158,41 @@ def wa_limit(pid):
 def media_limit(pid):
     """عدد ملفات العملاء المقبولة شهرياً. القرص مورد محدود على السيرفر."""
     return plan(pid).get("media_files", 100)
+
+
+# ---- حدود المزايا الجديدة (خطة ملاحظات المختبِر) ----
+# تُعرّف هنا لا داخل PLANS حتى لا تتغيّر حدود الباقات الموروثة إلا بقرار صريح،
+# وكل قيمة غائبة تسقط إلى حدّ المجانية لا إلى بلا حد.
+#   ai_setups  : جلسات «وكيل الإعداد» الشهرية (المجانية تحصل على وكيل حقيقي بحصة صغيرة)
+#   ai_replies : ردود «عقل البوت» المشمولة شهرياً — ما فوقها من المحفظة
+#   inbox_reply: الرد اليدوي من صندوق الوارد (المجانية ترى المحادثات فقط)
+#   asset_mb   : مساحة مكتبة الوسائط بالميجابايت
+FEATURES = {
+    "free":     {"ai_setups": 3,   "ai_replies": 0,     "inbox_reply": False, "asset_mb": 25},
+    "merchant": {"ai_setups": 30,  "ai_replies": 500,   "inbox_reply": True,  "asset_mb": 300},
+    "whatsapp": {"ai_setups": 60,  "ai_replies": 1500,  "inbox_reply": True,  "asset_mb": 1000},
+    "agency":   {"ai_setups": 300, "ai_replies": 10000, "inbox_reply": True,  "asset_mb": 5000},
+    "pro":      {"ai_setups": 30,  "ai_replies": 500,   "inbox_reply": True,  "asset_mb": 300},
+    "business": {"ai_setups": 60,  "ai_replies": 1500,  "inbox_reply": True,  "asset_mb": 1000},
+}
+
+
+def feature(pid, key):
+    return FEATURES.get(pid, FEATURES["free"]).get(key, FEATURES["free"][key])
+
+
+def ai_setups_limit(pid):
+    return feature(pid, "ai_setups")
+
+
+def ai_replies_limit(pid):
+    """0 = الباقة لا تتيح «عقل البوت» (المجانية)."""
+    return feature(pid, "ai_replies")
+
+
+def inbox_reply(pid):
+    return bool(feature(pid, "inbox_reply"))
+
+
+def asset_bytes_limit(pid):
+    return int(feature(pid, "asset_mb")) * 1024 * 1024

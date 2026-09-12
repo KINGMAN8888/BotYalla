@@ -51,7 +51,7 @@ export function LegalPublic() {
           <p className="m-0 text-[clamp(15px,1.35vw,17.5px)] leading-[1.85] text-ink-2">{L.intro}</p>
         </header>
 
-        <div className="grid gap-10 lg:grid-cols-[250px_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-10 lg:grid-cols-[250px_minmax(0,1fr)]">
           <aside className="hidden lg:block">
             <div className="sticky top-28">
               <div className="mb-3 text-[12px] font-extrabold text-ink-3">{t("lp2_legal_toc")}</div>
