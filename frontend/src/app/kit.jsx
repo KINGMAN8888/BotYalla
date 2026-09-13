@@ -1,4 +1,5 @@
-import { useRef, useEffect, useState, useCallback, useId, Children, isValidElement } from "react";
+import { useRef, useEffect, useLayoutEffect, useState, useCallback, useId, Children, isValidElement } from "react";
+import { createPortal } from "react-dom";
 import { motion, useInView, useReducedMotion, animate, AnimatePresence } from "motion/react";
 
 /* ============================================================================
@@ -179,6 +180,9 @@ export function Select({ children, className = "", value: controlledValue, defau
     () => (defaultValue != null ? defaultValue : options[0] ? options[0].value : ""));
   const containerRef = useRef(null);
   const selectRef = useRef(null);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+  const [pos, setPos] = useState(null);
   const listId = useId();
 
   const isControlled = controlledValue !== undefined;
@@ -186,10 +190,41 @@ export function Select({ children, className = "", value: controlledValue, defau
   const selectedIdx = options.findIndex((o) => String(o.value) === String(value));
   const displayLabel = selectedIdx >= 0 ? options[selectedIdx].label : "—";
 
+  /* القائمة تُرسم في <body> بموضع ثابت تحت الزر، طافيةً فوق الصفحة كالقائمة الأصلية:
+     داخل التدفق كانت تزيح ما بجانبها، و`absolute` كانت ستُقصّ داخل البطاقات
+     (overflow-hidden) والجداول (overflow-x-auto). تنقلب لأعلى لو لا مكان تحتها. */
+  const place = useCallback(() => {
+    const b = btnRef.current;
+    if (!b) return;
+    const r = b.getBoundingClientRect();
+    const vh = window.innerHeight, vw = window.innerWidth, gap = 6, margin = 8;
+    const below = vh - r.bottom - gap - margin, above = r.top - gap - margin;
+    const want = Math.min(240, options.length * 38 + 12);
+    const up = below < want && above > below;
+    const w = Math.max(r.width, 160);                     // زر ضيق (جدول الأدمن) لا يضيّق الخيارات
+    const left = Math.min(Math.max(margin, isRTL ? r.right - w : r.left), vw - w - margin);
+    setPos({ left, width: w, up,
+             top: up ? undefined : r.bottom + gap,
+             bottom: up ? vh - r.top + gap : undefined,
+             maxH: Math.max(96, Math.min(240, up ? above : below)) });
+  }, [options.length]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) { setPos(null); return; }
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);       // capture: أي حاوية تُمرَّر، لا الصفحة وحدها
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [isOpen, place]);
+
   useEffect(() => {
     if (!isOpen) return;
     const handleClick = (e) => {
-      if (containerRef.current && !containerRef.current.contains(e.target)) setIsOpen(false);
+      const inside = (el) => el && el.contains(e.target);
+      if (!inside(containerRef.current) && !inside(menuRef.current)) setIsOpen(false);
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -244,7 +279,7 @@ export function Select({ children, className = "", value: controlledValue, defau
           فيقرأ قارئ الشاشة اسم الحقل، والنقر على العنوان يفتح القائمة.
           (نقرات الخيارات تُلغى افتراضياً فلا يعيد الـlabel فتحها.) */}
       <button
-        type="button" disabled={disabled} role="combobox" aria-haspopup="listbox"
+        ref={btnRef} type="button" disabled={disabled} role="combobox" aria-haspopup="listbox"
         aria-expanded={isOpen} aria-controls={listId}
         aria-activedescendant={isOpen && active >= 0 ? `${listId}-${active}` : undefined}
         onClick={() => (isOpen ? setIsOpen(false) : open())}
@@ -266,15 +301,22 @@ export function Select({ children, className = "", value: controlledValue, defau
         {children}
       </select>
 
+      {createPortal(
       <AnimatePresence>
-        {isOpen && (
+        {isOpen && pos && (
           <motion.div
-            id={listId} role="listbox"
-            initial={{ opacity: 0, y: -10, scale: 0.98 }}
+            ref={menuRef} id={listId} role="listbox"
+            // الضغط داخل القائمة لا يسحب التركيز من الزر (الأسهم تبقى تعمل)
+            onMouseDown={(e) => e.preventDefault()}
+            initial={{ opacity: 0, y: pos.up ? 8 : -8, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -10, scale: 0.98 }}
-            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="mt-2 max-h-60 w-full overflow-y-auto rounded-xl glass p-1.5 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.08)]"
+            exit={{ opacity: 0, y: pos.up ? 8 : -8, scale: 0.98 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            style={{ position: "fixed", left: pos.left, width: pos.width, top: pos.top,
+                     bottom: pos.bottom, maxHeight: pos.maxH }}
+            className="z-[1000] overflow-y-auto overscroll-contain rounded-xl bg-[rgb(17_18_32/0.97)] p-1.5
+                       backdrop-blur-xl shadow-[0_18px_40px_-12px_rgb(0_0_0/0.75),inset_0_0_0_1px_rgb(255_255_255/0.1)]
+                       [scrollbar-width:thin] [scrollbar-color:rgb(255_255_255/0.18)_transparent]"
           >
             {options.map((opt, i) => (
               <div
@@ -295,7 +337,8 @@ export function Select({ children, className = "", value: controlledValue, defau
             ))}
           </motion.div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body)}
     </div>
   );
 }
