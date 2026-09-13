@@ -251,9 +251,19 @@ T = {
  "bc_window_note":   {"ar": "النص الحر يصل فقط لمن راسل البوت خلال 24 ساعة. للباقين استخدم قالباً معتمداً.",
                       "en": "Free text only reaches customers who messaged within 24 hours. Use an approved template for the rest."},
  "bc_reachable":     {"ar": "داخل نافذة الـ24 ساعة", "en": "inside the 24-hour window"},
- "bc_direct_desc":   {"ar": "يصل لكل المشتركين بدون قالب مسبق — Meta تنشئ القالب تلقائياً. يدعم فقط utility و authentication.",
-                      "en": "Reaches all subscribers without a pre-approved template — Meta auto-creates it. Only supports utility and authentication."},
- "bc_direct_cat":    {"ar": "فئة الرسالة", "en": "Message category"},
+ "bc_direct_desc":   {"ar": "رسالة خدمية تصل لكل المشتركين بدون قالب مسبق — Meta تولّد القالب تلقائياً. للتحديثات فقط (طلب · شحن · موعد)، لا للإعلانات.",
+                      "en": "A service message to all subscribers without a pre-approved template — Meta generates it automatically. For updates only (order · shipping · appointment), not ads."},
+ "bc_direct_cost_d": {"ar": "فئة الرسالة لا تراجعها Meta قبل الإرسال، فتُحسب بسعر الرسالة من رصيدك — ويُردّ كل ما لم يصل.",
+                      "en": "Meta doesn't review the category before sending, so each message is charged at the message price — anything undelivered is refunded."},
+ "bc_direct_beta_t": {"ar": "ميزة تجريبية من Meta — اقرأ قبل الإرسال", "en": "A Meta beta feature — read before sending"},
+ "bc_direct_beta_d": {"ar": "Direct Send ما زالت في مرحلة تجريبية (بيتا) لدى Meta، ومتاحة فقط للحسابات التي فعّلتها Meta لها. "
+                            "لو لم تكن مفعّلة لحساب واتساب للأعمال الخاص بك، سترفض Meta الرسائل ولن تصل لأي مشترك.",
+                      "en": "Direct Send is still a beta feature at Meta, available only to accounts Meta has enabled it for. "
+                            "If it isn't enabled for your WhatsApp Business account, Meta will reject the messages and no subscriber will receive them."},
+ "bc_direct_beta_r": {"ar": "في هذه الحالة لا تخسر شيئاً: يُردّ رصيدك كاملاً تلقائياً فور انتهاء الإرسال، وتظهر لك رسالة توضّح ما حدث. "
+                            "وحينها أرسل الرسالة نفسها عبر «قالب معتمد» — يصل لكل المشتركين دون الحاجة لهذه الميزة.",
+                      "en": "You lose nothing in that case: your credit is refunded in full automatically as soon as sending ends, and a message explains what happened. "
+                            "Then send the same message with an «Approved template» — it reaches every subscriber without needing this feature."},
  # إعدادات AI
  "ai_settings":      {"ar": "إعدادات الذكاء الاصطناعي", "en": "AI settings"},
  "ai_settings_sub":  {"ar": "فعّل الوكيل الذكي الذي يظبط بوتاتك تلقائياً من وصف بسيط.",

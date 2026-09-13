@@ -359,6 +359,81 @@ export function AdminRequests() {
   );
 }
 
+/* ربط واتساب نيابةً عن العميل — من تذكرة «ربط واتساب» وحدها. الخادم يُنشئ البوت في
+   حساب العميل وبحدود باقته هو، والتوكن يُرسل مرة: لا يُعرض ولا يُكتب في التذكرة. */
+function WaConnect({ tk }) {
+  const w = tk.wa || {};
+  const blocked = !w.ok || w.full;
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  return (
+    <details open={tk.status !== "closed"}
+             className="mt-4 rounded-xl bg-white/[0.03] p-4 shadow-[inset_0_0_0_1px_rgb(45_212_167/0.3)]">
+      <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 text-[14px] font-extrabold text-ink
+                          [&::-webkit-details-marker]:hidden">
+        <Icon name="phone" size={16} className="text-au-teal" />
+        {bi("ربط واتساب للعميل", "Connect WhatsApp for the customer")}
+        <Pill tone={w.ok ? "on" : "off"}>{w.plan}</Pill>
+        <Pill tone={w.full ? "off" : "mute"}>
+          {bi("البوتات", "Bots")} <span className="tnum">{w.bots}/{w.max >= 9999 ? "∞" : w.max}</span>
+        </Pill>
+        {w.waBots > 0 && <Pill tone="on">{bi(`عنده ${w.waBots} بوت واتساب`, `${w.waBots} WhatsApp bot(s)`)}</Pill>}
+      </summary>
+      <ol className="mt-3 mb-4 ps-5 text-[12.5px] leading-relaxed text-ink-2">
+        <li>{bi("اطلب من العميل في الرد يضيفك مسؤولاً على حساب Meta Business بتاعه — ولا تطلب كلمة سره أو كود تحقق أبداً.",
+                "Ask the customer (in a reply) to add you as an admin on their Meta Business account — never ask for a password or a code.")}</li>
+        <li>{bi("من developers.facebook.com: تطبيق Business ← WhatsApp ← أضف رقمه ووثّقه، ثم System User بتوكن دائم (whatsapp_business_messaging و whatsapp_business_management).",
+                "On developers.facebook.com: Business app → WhatsApp → add and verify the number, then a System User with a permanent token (whatsapp_business_messaging and whatsapp_business_management).")}</li>
+        <li>
+          Webhook: <code className="rounded bg-white/10 px-1.5 py-0.5" dir="ltr">{origin}/wh/whatsapp</code>
+          {bi(" بالـ Verify token من إعدادات المنصة، واشترك في messages.",
+              " with the Verify token from platform settings; subscribe to messages.")}
+        </li>
+        <li>{bi("الصق البيانات هنا — البوت يتنشأ في حساب العميل ويوصله إشعار في التذكرة.",
+                "Paste the details here — the bot is created in the customer's account and they're notified in the ticket.")}</li>
+      </ol>
+      {!w.ok && (
+        <p className="mt-0 mb-3 text-[12.5px] font-bold text-red-300">
+          {bi("باقة العميل لا تشمل واتساب — اطلب منه الترقية أولاً.", "The customer's plan doesn't include WhatsApp — ask them to upgrade first.")}
+        </p>
+      )}
+      {w.ok && w.full && (
+        <p className="mt-0 mb-3 text-[12.5px] font-bold text-red-300">
+          {bi("العميل وصل للحد الأقصى لبوتات باقته.", "The customer reached their plan's bot limit.")}
+        </p>
+      )}
+      <Form action={`/admin/tickets/${tk.id}/wa-connect`}
+            confirm={bi(`إنشاء بوت واتساب في حساب ${tk.username}؟`, `Create a WhatsApp bot in ${tk.username}'s account?`)}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label={bi("اسم البوت", "Bot name")}>
+            <Input name="name" required maxLength={60} defaultValue={w.biz || ""} />
+          </Field>
+          <Field label={bi("نوع البوت", "Bot type")}>
+            <Select name="template" defaultValue="customer_service">
+              {BY.templates.map((x) => <option key={x.k} value={x.k}>{x.label}</option>)}
+            </Select>
+          </Field>
+          <Field label="Phone Number ID">
+            <Input name="wa_phone_id" required inputMode="numeric" pattern="[0-9]+" autoComplete="off" dir="ltr" />
+          </Field>
+          <Field label={`WABA ID (${t("optional")})`}
+                 hint={bi("لازم لقوالب Meta — تقدر تضيفه بعدين من صفحة القوالب.", "Needed for Meta templates — can be added later on the templates page.")}>
+            <Input name="waba_id" inputMode="numeric" pattern="[0-9]*" autoComplete="off" dir="ltr" />
+          </Field>
+          <Field label="Access Token" className="sm:col-span-2">
+            <Input type="password" name="wa_token" required autoComplete="off" spellCheck="false" dir="ltr"
+                   placeholder="EAAG…" />
+          </Field>
+        </div>
+        <div className="mt-4">
+          <Btn sm icon="rocket" type="submit" disabled={blocked}>
+            {bi("أنشئ البوت في حساب العميل", "Create the bot in the customer's account")}
+          </Btn>
+        </div>
+      </Form>
+    </details>
+  );
+}
+
 /* ---------------------------------------------------------- تذاكر الدعم */
 export function AdminTickets() {
   const tickets = P.tickets || [];
@@ -388,6 +463,7 @@ export function AdminTickets() {
         <Card key={tk.id} id={`t${tk.id}`} className="mb-4">
           <TicketHead tk={tk} who />
           <TicketThread tk={tk} staffView />
+          {tk.kind === "wa_setup" && <WaConnect tk={tk} />}
           <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end">
             <Form action={`/admin/tickets/${tk.id}/reply`} className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-end">
               <Textarea name="body" required minLength={2} maxLength={3000} className="min-h-[52px] flex-1"

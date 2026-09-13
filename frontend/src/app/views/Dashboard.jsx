@@ -172,9 +172,118 @@ function BotCard({ b, i }) {
   );
 }
 
+/* «سيبها علينا»: خطوات Meta صعبة على غير التقنيين، والربط مشمول في باقات واتساب.
+   يُرسل بـ fetch لا بنموذج لأنه داخل نموذج الإنشاء (النماذج لا تتداخل) — ولذلك حقوله
+   بلا name ولا required: لا تُرسَل مع البوت ولا تعطّل إنشاءه، وEnter فيها لا يُنشئ بوتاً. */
+function WaAssist() {
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState({ business: "", number: "", meta: "unsure", contact: "", notes: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [done, setDone] = useState(P.waAssist && P.waAssist.open
+    ? { id: P.waAssist.open, existing: true } : null);
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const noEnter = (e) => { if (e.key === "Enter") e.preventDefault(); };
+
+  async function send() {
+    setErr(null);
+    if (!f.business.trim() || f.number.replace(/\D/g, "").length < 8) {
+      setErr(bi("اكتب اسم النشاط ورقم واتساب صحيح.", "Enter your business name and a valid WhatsApp number."));
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await fetch("/whatsapp/assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf },
+        body: JSON.stringify(f),
+      });
+      const d = await r.json();
+      if (d.ok) setDone({ id: d.id, existing: d.existing }); else setErr(d.error);
+    } catch {
+      setErr(bi("تعذّر الإرسال الآن — جرّب تاني.", "Could not send right now — try again."));
+    }
+    setBusy(false);
+  }
+
+  const box = "mb-5 rounded-xl p-4 bg-[linear-gradient(120deg,rgb(45_212_167/0.14),rgb(34_211_238/0.05))] " +
+              "shadow-[inset_0_0_0_1px_rgb(45_212_167/0.35)]";
+  if (done) {
+    return (
+      <div className={box} role="status">
+        <b className="flex items-center gap-2 text-[14px] text-ink">
+          <Icon name="check" size={16} className="text-au-teal" />
+          {done.existing ? bi(`طلب الربط #T${done.id} مفتوح عند فريقنا`, `Your setup request #T${done.id} is open with our team`)
+                         : bi(`وصل طلبك #T${done.id} لفريقنا`, `Request #T${done.id} reached our team`)}
+        </b>
+        <p className="mt-2 mb-3 text-[12.5px] leading-relaxed text-ink-2">
+          {bi("هنكلمك في «الدعم والشكاوى» ونكمّل الخطوات معاك هناك. لما البوت يجهز هيظهر في «بوتاتي» ويوصلك إشعار — مش محتاج تكمّل الخطوات اللي تحت.",
+              "We'll reach you in «Support» and finish the steps with you there. When the bot is ready it shows up in «My bots» and you get notified — no need to fill in the steps below.")}
+        </p>
+        <Btn sm variant="ghost" icon="chat" href={`/support#t${done.id}`}>{bi("تابع المحادثة", "Open the conversation")}</Btn>
+      </div>
+    );
+  }
+  return (
+    <div className={box}>
+      <b className="flex items-center gap-2 text-[14px] text-ink">
+        <Icon name="users" size={16} className="text-au-teal" />
+        {bi("خطوات واتساب صعبة؟ سيبها علينا", "WhatsApp steps look hard? Leave them to us")}
+      </b>
+      <p className="mt-2 mb-0 text-[12.5px] leading-relaxed text-ink-2">
+        {bi("مشمولة في باقتك: فريقنا يربط رقمك بـ Meta بنفسه ويسلّمك البوت جاهز في «بوتاتي». هتحتاج سجل تجاري وبطاقة ضريبية ورقم للبوت.",
+            "Included in your plan: our team connects your number to Meta and hands you the bot ready in «My bots». You'll need a commercial register, a tax card and a number for the bot.")}
+      </p>
+      <p className="mt-2 mb-0 text-[12px] leading-relaxed text-ink-3">
+        <Icon name="shield" size={12} className="me-1 align-[-2px]" />
+        {bi("عمرنا ما هنطلب كلمة سر فيسبوك أو كود تحقق — هنطلب بس تضيف فريقنا مسؤولاً على حساب Meta Business بتاعك، وتقدر تشيله بعد الربط.",
+            "We'll never ask for your Facebook password or a verification code — only that you add our team as an admin on your Meta Business account, which you can remove afterwards.")}
+      </p>
+      {!open ? (
+        <Btn sm icon="users" type="button" className="mt-3" onClick={() => setOpen(true)}>
+          {bi("اطلب الربط من فريقنا", "Ask our team to connect it")}
+        </Btn>
+      ) : (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <Field label={bi("اسم النشاط", "Business name")}>
+            <Input value={f.business} onChange={set("business")} onKeyDown={noEnter} maxLength={80}
+                   placeholder={t("eg_cafe")} />
+          </Field>
+          <Field label={bi("رقم واتساب اللي البوت هيرد منه", "Number the bot will answer from")}>
+            <Input value={f.number} onChange={set("number")} onKeyDown={noEnter} inputMode="tel" dir="ltr"
+                   maxLength={20} placeholder="+20 10 0000 0000" />
+          </Field>
+          <Field label={bi("عندك حساب Meta Business؟", "Do you have a Meta Business account?")}>
+            <Select value={f.meta} onChange={set("meta")}>
+              <option value="yes">{bi("أيوه", "Yes")}</option>
+              <option value="no">{bi("لأ", "No")}</option>
+              <option value="unsure">{bi("مش متأكد", "Not sure")}</option>
+            </Select>
+          </Field>
+          <Field label={`${bi("أفضل وسيلة أو وقت للتواصل", "Best way or time to reach you")} (${t("optional")})`}>
+            <Input value={f.contact} onChange={set("contact")} onKeyDown={noEnter} maxLength={60} />
+          </Field>
+          <Field label={`${bi("ملاحظات", "Notes")} (${t("optional")})`} className="sm:col-span-2">
+            <Input value={f.notes} onChange={set("notes")} onKeyDown={noEnter} maxLength={1000}
+                   placeholder={bi("مثلاً: الرقم شغال حالياً على تطبيق واتساب", "e.g. the number is on the WhatsApp app today")} />
+          </Field>
+          {err && <p role="alert" className="m-0 text-[12.5px] font-bold text-red-300 sm:col-span-2">{err}</p>}
+          <div className="flex flex-wrap gap-2 sm:col-span-2">
+            <Btn sm icon="rocket" type="button" disabled={busy} onClick={send}>
+              {busy ? "…" : bi("ابعت الطلب", "Send request")}
+            </Btn>
+            <Btn sm variant="ghost" type="button" onClick={() => setOpen(false)}>{bi("إلغاء", "Cancel")}</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* معالج إنشاء البوت — التوكن أولاً لأنه أصعب خطوة على غير التقنيين */
 function CreateWizard({ collapsed = false }) {
-  const waAllowed = P.waAllowed !== false;
+  // مغلق افتراضياً: حمولة بلا الحقل لا تفتح ميزة مدفوعة (والخادم يرفض على أي حال)
+  const waAllowed = P.waAllowed === true;
   const [channel, setChannel] = useState("telegram");
   const [status, setStatus] = useState(null);   // {ok, text}
   const timer = useRef(null);
@@ -212,20 +321,33 @@ function CreateWizard({ collapsed = false }) {
               <img src="/static/Telegram.svg.png" alt="Telegram" className="size-4 object-contain inline-block" /> Telegram
             </label>
             <label className={"flex items-center gap-2 text-[14px] " +
-                              (waAllowed ? "cursor-pointer" : "cursor-not-allowed opacity-50")}>
+                              (waAllowed ? "cursor-pointer" : "cursor-not-allowed text-ink-3")}
+                   title={waAllowed ? undefined : bi("ميزة مدفوعة — رقّي باقتك", "Paid feature — upgrade your plan")}>
               <input type="radio" name="channel" value="whatsapp" disabled={!waAllowed}
                      checked={channel === "whatsapp"} onChange={(e) => setChannel(e.target.value)} />
-              <img src="/static/whatsapp.png" alt="WhatsApp" className="size-4 object-contain inline-block" /> WhatsApp
+              <img src="/static/whatsapp.png" alt="WhatsApp"
+                   className={"size-4 object-contain inline-block " + (waAllowed ? "" : "opacity-50 grayscale")} /> WhatsApp
+              {!waAllowed && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/15 px-2 py-0.5
+                                 text-[11.5px] font-extrabold text-amber-200">
+                  <Icon name="lock" size={12} />{bi("مدفوعة", "Paid")}
+                </span>
+              )}
             </label>
           </div>
           {!waAllowed && (
-            <p className="mt-3 mb-0 text-[12.5px] text-ink-3">
-              {bi("واتساب مدفوع لكل رسالة من Meta، فهو متاح من الباقة الاحترافية فأعلى.",
-                  "WhatsApp is billed per message by Meta, so it starts at the Pro plan.")}{" "}
-              <a href={BY.urls.pricing} className="text-au-cyan underline-offset-4 hover:underline">
-                {bi("عرض الباقات", "See plans")}
-              </a>
-            </p>
+            <div role="note" className="mt-4 flex flex-wrap items-center gap-3 rounded-xl bg-amber-400/10 p-4
+                                        shadow-[inset_0_0_0_1px_rgb(251_191_36/0.35)]">
+              <Icon name="lock" size={18} className="shrink-0 text-amber-200" />
+              <div className="min-w-0 flex-1">
+                <b className="block text-[13.5px] text-ink">{bi("واتساب ميزة مدفوعة", "WhatsApp is a paid feature")}</b>
+                <span className="text-[12.5px] leading-relaxed text-ink-3">
+                  {bi("Meta بتحاسب على كل رسالة واتساب، عشان كده القناة متاحة في باقة «واتساب» فأعلى — ومعاها فريقنا يربطه لك بنفسه.",
+                      "Meta bills every WhatsApp message, so the channel starts at the «WhatsApp» plan — and with it our team connects it for you.")}
+                </span>
+              </div>
+              <Btn sm icon="crown" href={BY.urls.pricing}>{bi("رقّي باقتك", "Upgrade your plan")}</Btn>
+            </div>
           )}
         </>
       )
@@ -257,6 +379,8 @@ function CreateWizard({ collapsed = false }) {
         </>
       ) : (
         <>
+          {/* مشمولة في باقات واتساب: الفريق يربطها بدل العميل (باقته هو، لا صلاحية الفريق) */}
+          {P.waPlan && <WaAssist />}
           <Btn variant="ghost" sm icon="link" href="https://developers.facebook.com/apps"
                target="_blank" rel="noopener">
             {bi("افتح لوحة مطوري Meta", "Open Meta developers")}

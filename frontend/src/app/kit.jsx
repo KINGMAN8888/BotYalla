@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback, Children, isValidElement } from "react";
+import { useRef, useEffect, useState, useCallback, useId, Children, isValidElement } from "react";
 import { motion, useInView, useReducedMotion, animate, AnimatePresence } from "motion/react";
 
 /* ============================================================================
@@ -154,26 +154,37 @@ export const Input = (p) => <input {...p} className={`${INPUT} ${p.className || 
 export const Textarea = (p) => (
   <textarea {...p} className={`${INPUT} min-h-[96px] resize-y ${p.className || ""}`} />
 );
-export function Select({ children, className = "", value: controlledValue, defaultValue, onChange, ...rest }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [internalValue, setInternalValue] = useState(defaultValue != null ? defaultValue : "");
-  const containerRef = useRef(null);
-
-  const isControlled = controlledValue !== undefined;
-  const value = isControlled ? controlledValue : internalValue;
-
+/* قائمة منسدلة بمظهر المنصة. تحتها <select> حقيقي مخفي: هو ما يُرسَل مع النموذج،
+   وهو نفسه ما يصل للمستدعي في onChange — فيعمل `e.target.value` و`e.target.form`
+   كالعنصر الأصلي. القيمة الجديدة تُكتب فيه **قبل** onChange، فنموذج يُرسَل من داخله
+   (تغيير الدور/الباقة في لوحة الأدمن) يحمل الاختيار الجديد لا القديم.
+   لوحة المفاتيح: الأسهم · Enter/مسافة · Esc. */
+export function Select({ children, className = "", value: controlledValue, defaultValue, onChange,
+                         disabled, ...rest }) {
   const options = [];
   Children.forEach(children, (child) => {
     if (isValidElement(child) && child.type === "option") {
       options.push({
         value: child.props.value !== undefined ? child.props.value : child.props.children,
         label: child.props.children,
+        disabled: !!child.props.disabled,
       });
     }
   });
 
-  const selectedOption = options.find((o) => String(o.value) === String(value));
-  const displayLabel = selectedOption ? selectedOption.label : "—";
+  const [isOpen, setIsOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  // بلا قيمة مبدئية يختار المتصفح أول خيار — فنعرض الشيء نفسه الذي سيُرسَل
+  const [internalValue, setInternalValue] = useState(
+    () => (defaultValue != null ? defaultValue : options[0] ? options[0].value : ""));
+  const containerRef = useRef(null);
+  const selectRef = useRef(null);
+  const listId = useId();
+
+  const isControlled = controlledValue !== undefined;
+  const value = isControlled ? controlledValue : internalValue;
+  const selectedIdx = options.findIndex((o) => String(o.value) === String(value));
+  const displayLabel = selectedIdx >= 0 ? options[selectedIdx].label : "—";
 
   useEffect(() => {
     if (!isOpen) return;
@@ -184,47 +195,99 @@ export function Select({ children, className = "", value: controlledValue, defau
     return () => document.removeEventListener("mousedown", handleClick);
   }, [isOpen]);
 
-  const handleSelect = (val) => {
-    if (!isControlled) setInternalValue(val);
+  useEffect(() => {
+    if (isOpen && active >= 0) {
+      document.getElementById(`${listId}-${active}`)?.scrollIntoView({ block: "nearest" });
+    }
+  }, [isOpen, active, listId]);
+
+  const open = () => {
+    if (disabled) return;
+    setActive(selectedIdx >= 0 ? selectedIdx : 0);
+    setIsOpen(true);
+  };
+
+  const choose = (opt) => {
+    if (!opt || opt.disabled) return;
     setIsOpen(false);
-    if (onChange) onChange({ target: { name: rest.name, value: val } });
+    const el = selectRef.current;
+    if (!el || String(opt.value) === String(value)) return;   // كالأصلي: لا change لنفس القيمة
+    el.value = String(opt.value);
+    if (!isControlled) setInternalValue(opt.value);
+    if (onChange) onChange({ target: el, currentTarget: el, preventDefault() {}, stopPropagation() {} });
+  };
+
+  const move = (d) => setActive((a) => {
+    let i = a;
+    for (let k = 0; k < options.length; k++) {
+      i = (i + d + options.length) % options.length;
+      if (!options[i].disabled) return i;
+    }
+    return a;
+  });
+
+  const onKeyDown = (e) => {
+    const k = e.key;
+    if (!isOpen) {
+      if (k === "ArrowDown" || k === "ArrowUp" || k === "Enter" || k === " ") { e.preventDefault(); open(); }
+      return;
+    }
+    if (k === "Escape") { e.preventDefault(); setIsOpen(false); }
+    else if (k === "Tab") setIsOpen(false);
+    else if (k === "ArrowDown" || k === "ArrowUp") { e.preventDefault(); move(k === "ArrowDown" ? 1 : -1); }
+    else if (k === "Enter" || k === " ") { e.preventDefault(); choose(options[active]); }
   };
 
   return (
-    <div ref={containerRef} className={`relative ${className}`}>
-      <select {...rest} value={value} onChange={onChange} className="hidden">
-        {children}
-      </select>
-
-      <div
-        onClick={() => setIsOpen(!isOpen)}
-        className={`${INPUT} cursor-pointer flex items-center justify-between gap-2 select-none`}
+    <div ref={containerRef} className="relative">
+      {/* الزر قبل <select>: أول عنصر قابل للتسمية داخل <label> الحقل هو ما يسمّيه،
+          فيقرأ قارئ الشاشة اسم الحقل، والنقر على العنوان يفتح القائمة.
+          (نقرات الخيارات تُلغى افتراضياً فلا يعيد الـlabel فتحها.) */}
+      <button
+        type="button" disabled={disabled} role="combobox" aria-haspopup="listbox"
+        aria-expanded={isOpen} aria-controls={listId}
+        aria-activedescendant={isOpen && active >= 0 ? `${listId}-${active}` : undefined}
+        onClick={() => (isOpen ? setIsOpen(false) : open())}
+        onKeyDown={onKeyDown}
+        onKeyUp={(e) => { if (e.key === " ") e.preventDefault(); }}
+        className={`${INPUT} flex cursor-pointer select-none items-center justify-between gap-2 text-start ` +
+                   `disabled:cursor-not-allowed disabled:opacity-60 ${className}`}
       >
         <span className="truncate">{displayLabel}</span>
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" 
+             stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
              className={`shrink-0 text-ink-3 transition-transform duration-300 ${isOpen ? "rotate-180" : ""}`}>
           <path d="m6 9 6 6 6-6"/>
         </svg>
-      </div>
+      </button>
+
+      <select ref={selectRef} {...rest} disabled={disabled} value={value} onChange={() => {}}
+              tabIndex={-1} aria-hidden="true" className="sr-only">
+        {children}
+      </select>
 
       <AnimatePresence>
         {isOpen && (
           <motion.div
+            id={listId} role="listbox"
             initial={{ opacity: 0, y: -10, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.98 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="mt-2 w-full rounded-xl glass p-1.5 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.08)]"
+            className="mt-2 max-h-60 w-full overflow-y-auto rounded-xl glass p-1.5 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.08)]"
           >
             {options.map((opt, i) => (
               <div
-                key={i}
-                onClick={() => handleSelect(opt.value)}
-                className={`cursor-pointer rounded-lg px-3 py-2 text-[13.5px] transition-colors ${
-                  String(opt.value) === String(value)
-                    ? "bg-[linear-gradient(120deg,rgba(124,108,246,0.15),rgba(34,211,238,0.05))] text-au-cyan font-bold"
-                    : "text-ink-2 hover:bg-white/[0.04] hover:text-ink"
+                key={i} id={`${listId}-${i}`} role="option" aria-selected={i === selectedIdx}
+                aria-disabled={opt.disabled || undefined}
+                onMouseEnter={() => setActive(i)}
+                onClick={(e) => { e.preventDefault(); choose(opt); }}
+                className={`rounded-lg px-3 py-2 text-[13.5px] transition-colors ${
+                  opt.disabled ? "cursor-not-allowed opacity-50 text-ink-3"
+                  : i === selectedIdx
+                    ? "cursor-pointer bg-[linear-gradient(120deg,rgba(124,108,246,0.15),rgba(34,211,238,0.05))] text-au-cyan font-bold"
+                  : i === active ? "cursor-pointer bg-white/[0.06] text-ink"
+                  : "cursor-pointer text-ink-2 hover:bg-white/[0.04] hover:text-ink"
                 }`}
               >
                 {opt.label}

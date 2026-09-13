@@ -13,17 +13,22 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import database as db
 import mailer
 
-KINDS = ("support", "complaint", "payment", "other")
+KINDS = ("support", "complaint", "payment", "other", "wa_setup")
+# wa_setup لا يُختار من نموذج الدعم العام: يُفتح من «سيبها علينا» في خطوة واتساب وحدها
+# (/whatsapp/assist)، حيث تُفحص باقة العميل — ومنه وحده يربط الفريق بوتاً في حسابه.
+USER_KINDS = KINDS[:4]
 _KIND = {"support":   ("🛠️", "دعم فني", "Support"),
          "complaint": ("⚠️", "شكوى", "Complaint"),
          "payment":   ("💳", "مشكلة دفع", "Payment issue"),
-         "other":     ("💬", "أخرى", "Other")}
+         "other":     ("💬", "أخرى", "Other"),
+         "wa_setup":  ("🟢", "ربط واتساب", "WhatsApp setup")}
 TAG_RE = re.compile(r"#T(\d+)\b")
 SUBJECT_MAX, BODY_MIN, BODY_MAX = 120, 10, 3000
 
 
 def norm_kind(kind):
-    return kind if kind in KINDS else "other"
+    """نوع تذكرة من نموذج الدعم العام — لا يقبل wa_setup (انظر USER_KINDS)."""
+    return kind if kind in USER_KINDS else "other"
 
 
 def alert_text(t, body, followup=False):
@@ -31,10 +36,13 @@ def alert_text(t, body, followup=False):
     icon, ar, en = _KIND.get(t.get("kind"), _KIND["other"])
     head = (f"↩️ رد جديد من العميل على #T{t['id']}" if followup
             else f"{icon} {ar} / {en} — تذكرة جديدة #T{t['id']}")
+    how = ("\n🔧 للربط: «تذاكر الدعم» في اللوحة ← «ربط واتساب للعميل».\n"
+           "To connect: Support tickets → «Connect WhatsApp for the customer»."
+           if t.get("kind") == "wa_setup" and not followup else "")
     return (f"{head}\n👤 {t.get('username') or '?'} (#{t['user_id']})\n📌 {t['subject']}\n\n"
             f"{body[:1500]}\n\n"
             "↩️ اعمل Reply على الرسالة دي واكتب ردّك — هيوصل للعميل.\n"
-            "Reply to this message to answer the customer.")
+            "Reply to this message to answer the customer." + how)
 
 
 def alert_markup(tid):

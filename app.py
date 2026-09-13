@@ -570,10 +570,15 @@ def dashboard():
     total["revenue"] = round(total["revenue"], 2)
     sub = db.get_subscription(uid())
     plan_id = sub["plan"] if sub["status"] == "active" else "free"
-    wa_ok = current_role() in ("admin", "support") or bool(plans.plan(plan_id).get("whatsapp"))
+    wa_plan = bool(plans.plan(plan_id).get("whatsapp"))
+    wa_ok = current_role() in ("admin", "support") or wa_plan
     info = manager.platform_info()
     return react_page("dashboard", "nav_bots",
                       {"bots": [_public_bot(b) for b in bots], "total": total, "waAllowed": wa_ok,
+                       # «فريقنا يربط واتساب لك» مشمولة في باقات واتساب — باقة العميل نفسه لا
+                       # صلاحية الفريق. `open` = طلبه المفتوح إن وُجد (طلب واحد لكل عميل)
+                       "waPlan": wa_plan,
+                       "waAssist": {"open": db.open_ticket_of_kind(uid(), "wa_setup") if wa_plan else None},
                        "onboarding": _onboarding(bots),
                        # الإنشاء بضغطة متاح فقط لو بوت المنصة يعمل وفيه «وضع إدارة البوتات»
                        "oneTap": {"available": bool(info.get("username") and info.get("can_manage")),
@@ -670,9 +675,10 @@ def bot_create():
             sub = db.get_subscription(uid())
             plan_id = sub["plan"] if sub["status"] == "active" else "free"
             if not plans.plan(plan_id).get("whatsapp"):
-                flash(("بوتات واتساب متاحة من الباقة الاحترافية فأعلى."
+                flash(("واتساب ميزة مدفوعة 🔒 — متاحة في باقة «واتساب» فأعلى. رقّي باقتك لتفعيلها."
                        if session.get("lang") != "en" else
-                       "WhatsApp bots require the Pro plan or higher."), "error")
+                       "WhatsApp is a paid feature 🔒 — it starts at the «WhatsApp» plan. Upgrade to enable it."),
+                      "error")
                 return redirect(url_for("pricing"))
         chk = wa_verify(phone_id, wa_token)
         if not chk["ok"]:
@@ -1023,22 +1029,67 @@ def broadcast(bot_id):
                     flash((f"📢 أُرسل القالب «{name}» إلى {sent} مشترك (فشل {failed})." if ar else
                            f"📢 Template «{name}» sent to {sent} subscribers ({failed} failed)."), "ok")
         elif is_wa and request.form.get("mode") == "direct_send":
-            # ---- Direct Send API (بيتا) — بدون قالب مسبق ----
+            # ---- Direct Send (بيتا): نص بلا قالب مسبق، وMeta تولّد القالب في الخلفية ----
+            # الفئة نحن من يعلنها ولا يراجعها أحد قبل الإرسال — فلا شيء يمنع إعلاناً
+            # مؤشَّراً «utility»، والمنصة هي من تدفع لـMeta. لذا تُحاسَب من المحفظة بسعر
+            # الرسالة كالحملة التسويقية (§20)، والفئة ثابتة لا تُقرأ من الفورم.
+            # و«authentication» مستبعدة: قوالبها لرموز التحقق وحدها.
             ds_text = request.form.get("text", "").strip()
-            ds_cat = request.form.get("ds_category", "utility").strip().lower()
-            if ds_cat not in ("utility", "authentication"):
-                ds_cat = "utility"
             if not ds_text:
                 flash("اكتب نص الرسالة." if ar else "Write the message.", "error")
             elif len(ds_text) > 4096:
                 flash("النص أطول من 4096 حرفاً." if ar else "Text exceeds 4096 characters.", "error")
             else:
+                # كل المشتركين، والقائمة المحسوبة هي نفسها المُرسَل إليها (§22)
                 audience = db.list_bot_peers(bot_id)
-                # Direct Send يدعم فقط utility/authentication — مجاني من المحفظة (§20)
-                sent, failed = manager.broadcast_direct(bot_id, ds_text, ds_cat,
-                                                        peers=audience)
-                flash((f"📢 أُرسل إلى {sent} مشترك عبر Direct Send (فشل {failed})." if ar else
-                       f"📢 Sent to {sent} subscribers via Direct Send ({failed} failed)."), "ok")
+                q = _campaign_quote(uid(), len(audience), "MARKETING")
+                if not audience:
+                    flash("لا مشتركين بعد." if ar else "No subscribers yet.", "error")
+                    return redirect(url_for("broadcast", bot_id=bot_id))
+                if not q["enough"]:
+                    flash(((f"رصيد الرسائل لا يكفي: الإرسال {_egp(q['cost'])} ج.م "
+                            f"لـ{q['n']} رسالة، ورصيدك {_egp(q['balance'])} ج.م. "
+                            f"اشحن {_egp(q['short'])} ج.م على الأقل.") if ar else
+                           (f"Not enough credit: this send costs {_egp(q['cost'])} EGP for "
+                            f"{q['n']} messages and your balance is {_egp(q['balance'])} EGP. "
+                            f"Top up at least {_egp(q['short'])} EGP.")), "error")
+                    return redirect(url_for("broadcast", bot_id=bot_id))
+                # خصم ذرّي قبل الإرسال، ثم ردّ كل ما لم يصل بالسعر نفسه
+                if db.wallet_charge(uid(), q["cost"], ref=f"bot:{bot_id}",
+                                    note=f"direct send ×{q['n']}") is None:
+                    flash("تعذّر حجز الرصيد — أعد المحاولة." if ar else
+                          "Could not reserve credit — please retry.", "error")
+                    return redirect(url_for("broadcast", bot_id=bot_id))
+                sent, failed = manager.broadcast_direct(bot_id, ds_text, "utility", peers=audience)
+                back = max(0, q["cost"] - sent * q["price"])
+                if back:
+                    db.wallet_refund(uid(), back, ref=f"bot:{bot_id}",
+                                     note=f"undelivered {q['n'] - sent} of {q['n']}")
+                log.info("direct send bot=%s n=%s sent=%s failed=%s charged=%s refunded=%s",
+                         bot_id, q["n"], sent, failed, q["cost"], back)
+                bal = _egp(db.wallet_balance(uid()))
+                if not sent:
+                    # لا شيء وصل: أشهر سبب أن الحساب غير مفعّل لبيتا Meta. نقول ذلك
+                    # صراحةً ونطمئنه أن الرصيد رجع كله، ونوجّهه للبديل الذي يعمل.
+                    flash((f"لم تصل أي رسالة — رفضتها Meta. السبب الأرجح أن Direct Send (ميزة "
+                           f"تجريبية) غير مفعّلة لحساب واتساب للأعمال الخاص بك. رُدّ رصيدك "
+                           f"كاملاً ({_egp(back)} ج.م) — الرصيد الآن {bal} ج.م. أرسل الرسالة "
+                           f"نفسها عبر «قالب معتمد» بدلاً منها." if ar else
+                           f"No message was delivered — Meta rejected them. Most likely Direct Send "
+                           f"(a beta feature) isn't enabled for your WhatsApp Business account. "
+                           f"Your credit was refunded in full ({_egp(back)} EGP) — balance is now "
+                           f"{bal} EGP. Send the same message with an «Approved template» instead."),
+                          "error")
+                else:
+                    refund_note = ((f" ورُدّ {_egp(back)} ج.م عن {q['n'] - sent} رسالة لم تصل."
+                                    if ar else f" {_egp(back)} EGP refunded for {q['n'] - sent} "
+                                    f"undelivered.") if back else "")
+                    flash((f"📢 أُرسل إلى {sent} مشترك عبر Direct Send (فشل {failed}). "
+                           f"خُصم {_egp(q['cost'] - back)} ج.م.{refund_note} الرصيد {bal} ج.م."
+                           if ar else
+                           f"📢 Sent to {sent} subscribers via Direct Send ({failed} failed). "
+                           f"Charged {_egp(q['cost'] - back)} EGP.{refund_note} Balance {bal} EGP."),
+                          "ok")
         else:
             text = request.form.get("text", "").strip()
             # صورة/فيديو اختياري من مكتبة المستخدم نفسه (والنص يصير تعليقه)
@@ -1740,7 +1791,144 @@ def support_reply(tid):
 @app.route("/admin/tickets")
 @require_roles("admin", "support")
 def admin_tickets():
-    return react_page("admin_tickets", "nav_tickets", {"tickets": db.list_tickets()})
+    lang = session.get("lang", i18n.DEFAULT)
+    tickets = db.list_tickets()
+    for tk in tickets:
+        if tk["kind"] == "wa_setup":
+            tk["wa"] = _wa_setup_status(tk, lang)
+    return react_page("admin_tickets", "nav_tickets", {"tickets": tickets})
+
+# ---------- ربط واتساب بمساعدة الفريق (مشمول في باقات واتساب) ----------
+def _active_plan(user_id):
+    sub = db.get_subscription(user_id)
+    return sub["plan"] if sub["status"] == "active" else "free"
+
+def _wa_setup_status(tk, lang):
+    """ما يلزم الفريق قبل الربط: هل باقة العميل تشمل واتساب، وهل بقي له مكان لبوت."""
+    pid = _active_plan(tk["user_id"])
+    p = plans.plan(pid)
+    bots = db.list_bots(tk["user_id"])
+    subj = tk.get("subject") or ""
+    return {"plan": plans.plan_name(pid, lang), "ok": bool(p.get("whatsapp")),
+            "bots": len(bots), "max": p["max_bots"], "full": len(bots) >= p["max_bots"],
+            "waBots": sum(1 for b in bots if (b.get("channel") or "telegram") == "whatsapp"),
+            "biz": subj.split(" — ", 1)[1].strip() if " — " in subj else ""}
+
+_WA_META = {"yes":    ("عنده حساب Meta Business", "Has a Meta Business account"),
+            "no":     ("معندوش حساب Meta Business", "No Meta Business account"),
+            "unsure": ("مش متأكد من حساب Meta Business", "Not sure about Meta Business")}
+
+@app.route("/whatsapp/assist", methods=["POST"])
+@login_required
+def wa_assist():
+    """«سيبها علينا»: فريقنا يربط واتساب للعميل — مشمولة في باقات واتساب وحدها.
+    الطلب تذكرة wa_setup تصل الفريق فوراً على بوت المنصة، والمحادثة كلها (ما يلزم من
+    العميل) في صفحة الدعم. طلب مفتوح واحد لكل عميل: الثاني يرجّع الأول لا تذكرة جديدة."""
+    lang = session.get("lang", i18n.DEFAULT)
+    ar = lang != "en"
+    if not plans.plan(_active_plan(uid())).get("whatsapp"):
+        return jsonify({"ok": False, "error": ("ربط واتساب مشمول في باقة «واتساب» فأعلى — رقّي باقتك أولاً."
+                                               if ar else "WhatsApp setup is included from the «WhatsApp» "
+                                               "plan — upgrade first.")}), 403
+    open_tid = db.open_ticket_of_kind(uid(), "wa_setup")
+    if open_tid:
+        return jsonify({"ok": True, "id": open_tid, "existing": True})
+    d = request.get_json(silent=True) or {}
+    biz = str(d.get("business") or "").strip()[:80]
+    number = _re.sub(r"\D", "", str(d.get("number") or ""))
+    meta = d.get("meta") if d.get("meta") in _WA_META else "unsure"
+    contact = str(d.get("contact") or "").strip()[:60]
+    notes = str(d.get("notes") or "").strip()[:1000]
+    if not biz or not 8 <= len(number) <= 15:
+        return jsonify({"ok": False, "error": ("اكتب اسم النشاط ورقم واتساب صحيح." if ar else
+                                               "Enter your business name and a valid WhatsApp number.")}), 400
+    if _rate_limited(f"u{uid()}", limit=3, window=86400, bucket="wa_assist"):
+        return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)}), 429
+    shown = number if number.startswith("0") else "+" + number
+    if ar:
+        subject = f"ربط واتساب — {biz}"
+        body = (f"طلب ربط واتساب (مشمول في الباقة)\n• النشاط: {biz}\n• رقم واتساب للبوت: {shown}\n"
+                f"• {_WA_META[meta][0]}" + (f"\n• للتواصل: {contact}" if contact else "")
+                + (f"\n• ملاحظات: {notes}" if notes else ""))
+    else:
+        subject = f"WhatsApp setup — {biz}"
+        body = (f"WhatsApp setup request (included in plan)\n• Business: {biz}\n• Bot number: {shown}\n"
+                f"• {_WA_META[meta][1]}" + (f"\n• Contact: {contact}" if contact else "")
+                + (f"\n• Notes: {notes}" if notes else ""))
+    tid = db.create_ticket(uid(), "wa_setup", subject[:SD.SUBJECT_MAX], body[:SD.BODY_MAX])
+    log.info("wa_setup ticket #T%s opened by user=%s", tid, uid())
+    _alert_ticket(tid, body)
+    return jsonify({"ok": True, "id": tid, "existing": False})
+
+@app.route("/admin/tickets/<int:tid>/wa-connect", methods=["POST"])
+@require_roles("admin", "support")
+def admin_wa_connect(tid):
+    """الفريق يربط واتساب نيابةً عن العميل — من تذكرة wa_setup وحدها، فلا يُنشئ الدعم
+    بوتاً في أي حساب بلا طلب صاحبه. البوت يُنشأ في حساب العميل **وبحدود باقته هو**
+    (واتساب + max_bots) لا بصلاحيات الفريق. التوكن لا يُكتب في التذكرة ولا يُعرض."""
+    ar = session.get("lang") != "en"
+    back = redirect(url_for("admin_tickets") + f"#t{tid}")
+    t = db.get_ticket(tid)
+    if not t:
+        abort(404)
+    if t["kind"] != "wa_setup":
+        flash("الربط من تذاكر «ربط واتساب» فقط." if ar else
+              "Connect only from «WhatsApp setup» tickets.", "error")
+        return back
+    st = _wa_setup_status(t, "ar" if ar else "en")
+    if not st["ok"]:
+        flash((f"باقة العميل ({st['plan']}) لا تشمل واتساب — اطلب منه الترقية أولاً." if ar else
+               f"The customer's plan ({st['plan']}) doesn't include WhatsApp — ask them to upgrade first."),
+              "error")
+        return back
+    if st["full"]:
+        flash((f"العميل وصل للحد الأقصى لبوتات باقته ({st['max']})." if ar else
+               f"The customer reached their plan's bot limit ({st['max']})."), "error")
+        return back
+    name = (request.form.get("name") or "").strip()[:60]
+    template = request.form.get("template", "")
+    phone_id = (request.form.get("wa_phone_id") or "").strip()
+    wa_token = (request.form.get("wa_token") or "").strip()
+    waba = (request.form.get("waba_id") or "").strip()
+    if not (name and phone_id.isdigit() and wa_token and template in T.TEMPLATES) or \
+            (waba and not waba.isdigit()):
+        flash("أكمل: الاسم والنوع وPhone Number ID (أرقام) والتوكن." if ar else
+              "Fill in the name, type, Phone Number ID (digits) and token.", "error")
+        return back
+    chk = wa_verify(phone_id, wa_token)
+    if not chk["ok"]:
+        flash((f"❌ بيانات واتساب غير صالحة: {chk['error']}" if ar else
+               f"❌ Invalid WhatsApp credentials: {chk['error']}"), "error")
+        return back
+    info = {"username": chk.get("number") or phone_id, "name": chk.get("name") or name}
+    cfg = T.initial_config(name, template, info, "")
+    cfg["wa_token"] = wa_token
+    cfg["created_via"] = "staff"
+    if waba:
+        cfg["wa_waba_id"] = waba
+    try:
+        new_id = db.create_bot(t["user_id"], name, f"wa:{phone_id}", template, cfg, "whatsapp")
+    except Exception:
+        log.exception("wa connect for ticket #T%s", tid)
+        flash("تعذّر الإنشاء — غالباً الرقم ده مربوط ببوت آخر بالفعل." if ar else
+              "Could not create it — this number is most likely connected to another bot already.", "error")
+        return back
+    number = info["username"]
+    msg = ((f"✅ ربطنا واتساب لبوتك «{name}» على الرقم {number}.\n"
+            "البوت في «بوتاتي» الآن: افتحه، راجع رسالة الترحيب، ثم اضغط «تشغيل». أي سؤال؟ ردّ هنا.")
+           if db.user_lang(t["user_id"]) != "en" else
+           (f"✅ We connected WhatsApp to your bot «{name}» on {number}.\n"
+            "It's in «My bots» now: open it, review the welcome message, then press «Start». "
+            "Questions? Reply here."))
+    res = SD.record_staff_reply(tid, msg, "web")
+    tg_ok = bool(res and res["chat"]) and manager.notify_text(res["chat"], res["text"])
+    log.info("wa connect: staff=%s user=%s ticket=#T%s bot=%s", uid(), t["user_id"], tid, new_id)
+    notify_admins(f"🤖 بوت واتساب جديد (ربط من الفريق) / New WhatsApp bot (staff setup): «{name}» "
+                  f"— {t.get('username')} · {session.get('uname')}")
+    flash(((f"✅ اتعمل بوت واتساب «{name}» في حساب {t.get('username')} واتبلّغ العميل" if ar else
+            f"✅ WhatsApp bot «{name}» created in {t.get('username')}'s account; the customer was notified")
+           + (" + Telegram" if tg_ok else "") + (" + Email" if res and res["emailed"] else "")), "ok")
+    return back
 
 @app.route("/admin/tickets/<int:tid>/reply", methods=["POST"])
 @require_roles("admin", "support")

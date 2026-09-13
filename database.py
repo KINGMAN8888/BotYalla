@@ -1325,6 +1325,13 @@ def count_open_tickets():
     with get_conn() as c:
         return c.execute("SELECT COUNT(*) FROM tickets WHERE status='open'").fetchone()[0]
 
+def open_ticket_of_kind(user_id, kind):
+    """أحدث تذكرة غير مقفولة من نوع معيّن للمستخدم (طلب ربط واتساب مثلاً) — أو None."""
+    with get_conn() as c:
+        r = c.execute("SELECT id FROM tickets WHERE user_id=? AND kind=? AND status<>'closed' "
+                      "ORDER BY id DESC LIMIT 1", (user_id, kind)).fetchone()
+        return r[0] if r else None
+
 # ---------- الإيصالات المرفوضة آلياً ----------
 def img_hash_active(img_hash):
     """إيصال بنفس البصمة في دفعة معلّقة أو معتمدة = إعادة استخدام. المرفوضة لا تُحسب:

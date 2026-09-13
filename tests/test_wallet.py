@@ -320,6 +320,88 @@ class CampaignAudienceTests(unittest.TestCase):
         self.assertEqual(self._campaign(lambda peers: (0, len(peers))), 0)
 
 
+class DirectSendBillingTests(unittest.TestCase):
+    """Direct Send: نصّ بلا قالب وفئة نعلنها نحن ولا تراجعها Meta قبل الإرسال —
+    فلا تُقرأ من الفورم، وتُحاسَب من المحفظة كالحملة: على كل المشتركين وعلى ما
+    وصل فقط. قبلها كانت مجانية لأي فئة يكتبها المستخدم، والمنصة تدفع لـMeta."""
+
+    @classmethod
+    def setUpClass(cls):
+        _boot()
+        cls.pw = "ds_" + os.urandom(6).hex()
+        cls.u = db.create_user("ds_owner", auth.hash_password(cls.pw))
+        db.activate_subscription(cls.u, "whatsapp", days=30)
+        cls.bid = db.create_bot(cls.u, "WA-DS", "wa:ds", "flow",
+                                {"business_name": "WA", "wa_token": "t"}, channel="whatsapp")
+        for i in range(6):
+            db.add_bot_user(cls.bid, 6000 + i, f"d{i}", peer=f"wa:2012000000{i:02d}")
+        cls._orig = web.manager.broadcast_direct
+        with web.app.test_request_context():
+            cls.path = web.url_for("broadcast", bot_id=cls.bid)
+
+    @classmethod
+    def tearDownClass(cls):
+        web.manager.broadcast_direct = cls._orig
+
+    def setUp(self):
+        web._login_attempts.clear()
+        with db.get_conn() as c:
+            c.execute("DELETE FROM wallet WHERE owner_id=?", (self.u,))
+            c.execute("DELETE FROM wallet_ledger WHERE owner_id=?", (self.u,))
+        self.calls = []
+
+    def _send(self, outcome=lambda peers: (len(peers), 0), balance=100000, **form):
+        """يشحن `balance` ثم يرسل، ويرجّع ما خُصم فعلاً بالقروش."""
+        db.wallet_topup(self.u, balance)
+        start = db.wallet_balance(self.u)
+
+        def fake(bot_id, text, category="utility", peers=None):
+            self.calls.append({"category": category, "peers": peers})
+            return outcome(peers or [])
+        web.manager.broadcast_direct = fake
+        c = self.client = _client()
+        c.post("/login", data={"username": "ds_owner", "password": self.pw, "csrf_token": "tk"})
+        c.post(self.path, data={"mode": "direct_send", "text": "طلبك اتشحن", "csrf_token": "tk",
+                                **form})
+        return start - db.wallet_balance(self.u)
+
+    def _flashes(self, cat):
+        with self.client.session_transaction() as s:
+            return [m for c, m in s.get("_flashes", []) if c == cat]
+
+    def test_a_rejected_send_tells_the_owner_why_and_that_all_was_refunded(self):
+        """أشهر سبب لرفض الكل: الحساب غير مفعّل لبيتا Meta — العميل يُبلَّغ بذلك وبالردّ."""
+        self.assertEqual(self._send(lambda peers: (0, len(peers))), 0)
+        errs = self._flashes("error")
+        self.assertTrue(any("تجريبية" in m and "كاملاً" in m and "قالب معتمد" in m for m in errs),
+                        errs)
+
+    def test_a_partial_send_says_how_much_came_back(self):
+        self._send(lambda peers: (4, 2))
+        oks = self._flashes("ok")
+        self.assertTrue(any(f"عن 2 رسالة لم تصل" in m for m in oks), oks)
+
+    def test_everyone_reached_is_charged_at_the_message_price(self):
+        self.assertEqual(self._send(), 6 * web.mkt_price())
+        self.assertEqual(len(self.calls[0]["peers"]), 6, "القائمة المحسوبة هي المُرسَل إليها")
+
+    def test_the_category_never_comes_from_the_form(self):
+        for cat in ("authentication", "marketing", "utility"):
+            spent = self._send(ds_category=cat)
+            self.assertEqual(spent, 6 * web.mkt_price(), cat)
+        self.assertEqual({c["category"] for c in self.calls}, {"utility"})
+
+    def test_only_delivered_messages_are_paid_for(self):
+        self.assertEqual(self._send(lambda peers: (2, 1)), 2 * web.mkt_price())
+
+    def test_a_crashed_send_is_refunded_in_full(self):
+        self.assertEqual(self._send(lambda peers: (0, len(peers))), 0)
+
+    def test_short_credit_sends_nothing(self):
+        self.assertEqual(self._send(balance=5 * web.mkt_price()), 0)     # يكفي 5 من 6
+        self.assertEqual(self.calls, [], "لا إرسال قبل أن تكفي التكلفة")
+
+
 class TopupInputAndAlertTests(unittest.TestCase):
     """مدخلات الشحن الشاذة · تنبيه تليجرام · إعدادات الأدمن الرقمية."""
 

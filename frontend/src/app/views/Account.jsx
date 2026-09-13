@@ -10,6 +10,8 @@ export const TICKET_KIND = {
   complaint: ["megaphone", "شكوى",      "Complaint"],
   payment:   ["card",      "مشكلة دفع", "Payment issue"],
   other:     ["chat",      "أخرى",      "Other"],
+  // يُفتح من «سيبها علينا» في خطوة واتساب وحدها — لا يظهر ضمن أنواع نموذج الدعم
+  wa_setup:  ["phone",     "ربط واتساب", "WhatsApp setup"],
 };
 const TICKET_TONE = { open: "warn", answered: "on", closed: "mute" };
 const ticketLabel = (s) => ({ open: bi("مفتوحة", "Open"), answered: bi("اتردّ عليها", "Answered"),
@@ -94,7 +96,7 @@ export function Support() {
       <Card className="mb-6">
         <Form action="">
           <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label={bi("نوع الرسالة", "Message type")}>
-            {Object.entries(TICKET_KIND).map(([k, [ic, ar, en]]) => (
+            {Object.entries(TICKET_KIND).filter(([k]) => k !== "wa_setup").map(([k, [ic, ar, en]]) => (
               <button key={k} type="button" onClick={() => setKind(k)} aria-pressed={kind === k}
                 className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-[13px] font-bold transition
                   ${kind === k ? "bg-au-cyan/15 text-ink shadow-[inset_0_0_0_1px_rgb(143_233_255/0.45)]"

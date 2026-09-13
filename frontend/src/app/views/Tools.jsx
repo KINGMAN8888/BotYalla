@@ -164,6 +164,9 @@ export function Broadcast() {
   // القالب يصل لكل المشتركين لا لنافذة الـ24 ساعة وحدها — فعليهم تُحسب التكلفة
   const cost = billable ? audience * (wallet.price || 0) : 0;
   const short = Math.max(0, cost - (wallet.balance || 0));
+  // Direct Send يُحاسَب دائماً (فئته نعلنها نحن ولا تراجعها Meta) — على كل المشتركين
+  const dsCost = audience * (wallet.price || 0);
+  const dsShort = Math.max(0, dsCost - (wallet.balance || 0));
   const fill = (k, o) => Object.entries(o).reduce((a, [x, y]) => a.replace(`{${x}}`, y), t(k));
 
   return (
@@ -201,28 +204,51 @@ export function Broadcast() {
 
         {isWa && mode === "direct_send" ? (
           <Form action="" className="mt-5"
-                confirm={bi("إرسال الرسالة لكل المشتركين عبر Direct Send؟", "Send to all subscribers via Direct Send?")}>
+                confirm={bi("إرسال الرسالة لكل المشتركين عبر Direct Send؟ تُخصم تكلفتها من رصيدك.\n"
+                            + "تذكير: الميزة تجريبية لدى Meta — لو حسابك غير مفعّل لها لن تصل الرسائل، ويُردّ رصيدك كاملاً.",
+                            "Send to all subscribers via Direct Send? The cost comes out of your credit.\n"
+                            + "Reminder: this is a Meta beta — if your account isn't enabled for it, nothing is delivered and your credit is refunded in full.")}>
             <input type="hidden" name="mode" value="direct_send" />
             <p className="mt-0 mb-4 text-[12.5px] leading-relaxed text-ink-3">{t("bc_direct_desc")}</p>
-            <Field label={t("bc_direct_cat")}>
-              <Select name="ds_category" defaultValue="utility">
-                <option value="utility">Utility</option>
-                <option value="authentication">Authentication</option>
-              </Select>
-            </Field>
+            {/* تنبيه بيتا Meta: العميل يعرف قبل الإرسال أنها قد تُرفض كلها، وأنه لن يخسر شيئاً */}
+            <div role="note" className="mb-4 rounded-xl bg-amber-400/10 p-4 shadow-[inset_0_0_0_1px_rgb(251_191_36/0.35)]">
+              <div className="flex items-center gap-2 text-[13px] font-extrabold text-amber-200">
+                <Icon name="help" size={15} />{t("bc_direct_beta_t")}
+              </div>
+              <p className="mt-2 mb-0 text-[12.5px] leading-relaxed text-ink-2">{t("bc_direct_beta_d")}</p>
+              <p className="mt-2 mb-0 text-[12.5px] leading-relaxed text-ink-2">{t("bc_direct_beta_r")}</p>
+            </div>
             <Field label={t("msg_text")}>
-              <Textarea name="text" required value={text} onChange={(e) => setText(e.target.value)}
-                        className="min-h-[140px]" />
+              <Textarea name="text" required maxLength={4096} value={text}
+                        onChange={(e) => setText(e.target.value)} className="min-h-[140px]" />
             </Field>
-            <div className="mt-3 text-[12.5px] text-ink-3">{text.length} / 4096</div>
-            <div className="mt-4 rounded-xl bg-white/[0.03] p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+            <div className="mt-3 text-[12.5px] text-ink-3 tnum">{text.length} / 4096</div>
+            <div className={"mt-4 rounded-xl p-4 " + (dsShort
+              ? "bg-red-500/10 shadow-[inset_0_0_0_1px_rgb(248_113_113/0.35)]"
+              : "bg-[linear-gradient(120deg,rgb(124_108_246/0.18),rgb(34_211_238/0.06))]")}>
               <div className="flex items-center gap-2 text-[13px] font-extrabold text-ink">
                 <Icon name="wallet" size={15} className="text-au-cyan" />{t("camp_cost_title")}
               </div>
-              <div className="mt-2 text-[12.5px] text-ink-3">{t("camp_cost_free")}</div>
+              <div className="mt-2 text-[14px] font-extrabold text-ink tnum">
+                {fill("camp_cost_calc", { n: num(audience), p: num(egp(wallet.price)), c: num(egp(dsCost)) })}
+              </div>
+              <div className="mt-1 text-[12.5px] text-ink-3 tnum">
+                {fill("camp_after", { n: num(egp(Math.max(0, wallet.balance - dsCost))) })}
+              </div>
+              {dsShort > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <span className="text-[13px] font-extrabold text-red-300">
+                    {fill("camp_short", { n: num(egp(dsShort)) })}
+                  </span>
+                  <Btn variant="ghost" sm icon="plus" href={BY.urls.wallet}>{t("wallet_topup")}</Btn>
+                </div>
+              )}
+              <div className="mt-3 text-[11.5px] text-ink-3">{t("bc_direct_cost_d")}</div>
             </div>
             <div className="mt-5">
-              <Btn icon="rocket" type="submit" disabled={!text.trim()}>{t("send_campaign")}</Btn>
+              <Btn icon="rocket" type="submit" disabled={!text.trim() || !audience || dsShort > 0}>
+                {t("send_campaign")}
+              </Btn>
             </div>
           </Form>
         ) : isWa && mode === "template" ? (

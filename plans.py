@@ -38,9 +38,11 @@ PLANS = {
  "whatsapp": {
     "name_ar": "واتساب", "name_en": "WhatsApp", "price": 899, "max_bots": 5,
     "features_ar": ["كل مميزات باقة التاجر", "قناة واتساب الرسمية",
+                    "فريقنا يربط واتساب لك بنفسه",
                     "2000 رسالة خدمية شهرياً", "قوالب Meta",
                     "يتطلب سجلاً تجارياً وبطاقة ضريبية"],
     "features_en": ["Everything in Merchant", "Official WhatsApp channel",
+                    "Our team connects WhatsApp for you",
                     "2,000 service messages/month", "Meta templates",
                     "Requires a commercial register and tax card"],
     "ai": True, "broadcast": True, "whatsapp": True, "white_label": False,
