@@ -126,8 +126,17 @@ systemctl restart botyalla
 
 # ------------------------------------------------------------ 7) Nginx
 log "[7/9] Nginx"
+# Preserve existing domain if updating without specifying one
+if [[ -z "$DOMAIN" && -f /etc/nginx/sites-available/botyalla ]]; then
+  EXISTING_SN=$(grep -oP '(?<=server_name ).*(?=;)' /etc/nginx/sites-available/botyalla | head -n 1)
+  if [[ -n "$EXISTING_SN" && "$EXISTING_SN" != "_" && "$EXISTING_SN" != "__SERVER_NAME__" ]]; then
+    DOMAIN=$(echo "$EXISTING_SN" | awk '{print $1}')
+  fi
+fi
+
 SERVER_NAME="${DOMAIN:-_}"
 [[ -n "$DOMAIN" ]] && SERVER_NAME="$DOMAIN www.$DOMAIN"
+
 sed "s/__SERVER_NAME__/$SERVER_NAME/" "$APP_DIR/deploy/nginx.conf" \
   > /etc/nginx/sites-available/botyalla
 ln -sf /etc/nginx/sites-available/botyalla /etc/nginx/sites-enabled/botyalla
@@ -162,11 +171,18 @@ else
   die "Deployment incomplete"
 fi
 
-if [[ -n "$DOMAIN" ]]; then
-  log "HTTPS"
+if [[ -n "$DOMAIN" && "$DOMAIN" != "_" ]]; then
+  log "HTTPS Configuration (Auto-fixing SSL)"
   apt-get install -y certbot python3-certbot-nginx >/dev/null 2>&1 || true
-  echo "  Run this now:  certbot --nginx -d $DOMAIN -d www.$DOMAIN"
-  echo "  Then uncomment the HSTS line in /etc/nginx/sites-available/botyalla and reload nginx"
+  
+  # Remove old configs that might cause 502 due to stale proxy_pass
+  rm -f /etc/nginx/sites-enabled/botyalla-le-ssl.conf
+  rm -f /etc/nginx/sites-available/botyalla-le-ssl.conf
+  systemctl reload nginx
+  
+  # Re-issue and configure Nginx automatically
+  echo "  Securing $DOMAIN with Let's Encrypt..."
+  certbot --nginx -d "$DOMAIN" -d "www.$DOMAIN" --non-interactive --agree-tos -m "info@youssefalsherief.tech" --redirect >/dev/null 2>&1 || warn "SSL setup failed. Run certbot manually."
 fi
 
 echo ""
