@@ -211,11 +211,11 @@ export function Select({ children, className = "", value: controlledValue, defau
       <AnimatePresence>
         {isOpen && (
           <motion.div
-            initial={{ opacity: 0, y: -10, scale: 0.95 }}
+            initial={{ opacity: 0, y: -10, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -10, scale: 0.95 }}
+            exit={{ opacity: 0, y: -10, scale: 0.98 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute z-[99] mt-2 max-h-60 w-full overflow-y-auto rounded-xl glass p-1.5 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.08)]"
+            className="mt-2 w-full rounded-xl glass p-1.5 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.08)]"
           >
             {options.map((opt, i) => (
               <div
