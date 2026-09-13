@@ -41,6 +41,16 @@ echo(
 set /p GO=Type y to continue: 
 if /i not "!GO!"=="y" ( echo Cancelled. & pause & exit /b 0 )
 
+echo(
+echo ^>^> Syncing local changes to GitHub...
+git add .
+git commit -m "Auto-commit before deploy" >nul 2>&1
+git push origin main
+if errorlevel 1 (
+  echo [!] Failed to push to GitHub. Please check your connection and git permissions.
+  pause & exit /b 1
+)
+
 where ssh >nul 2>&1
 if errorlevel 1 (
   echo(
