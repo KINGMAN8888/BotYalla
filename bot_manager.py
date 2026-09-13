@@ -336,6 +336,37 @@ class BotManager:
                 failed += 1
         return sent, failed
 
+    def broadcast_direct(self, bot_id, text, category="utility", peers=None):
+        """بثّ بـ Direct Send API — بدون قالب مسبق.
+        يدعم فقط utility و authentication."""
+        row = db.get_bot(bot_id)
+        if not row or (row.get("channel") or "telegram") != "whatsapp":
+            return 0, 0
+        if peers is None:
+            peers = db.list_bot_peers(bot_id)
+        if not peers:
+            return 0, 0
+        try:
+            return self._submit(self._broadcast_direct(row, peers, text, category),
+                                timeout=max(30, len(peers) * 0.6))
+        except Exception:
+            log.exception("broadcast_direct")
+            return 0, len(peers)
+
+    @staticmethod
+    async def _broadcast_direct(row, peers, text, category):
+        channel = _wa_channel(row)
+        sent = failed = 0
+        for peer in peers:
+            try:
+                ok = await channel.send_direct(peer, text, category)
+                sent += 1 if ok else 0
+                failed += 0 if ok else 1
+                await asyncio.sleep(0.1)
+            except Exception:
+                failed += 1
+        return sent, failed
+
     # ---- بوت المنصة (تنبيهات الدفع) ----
     def start_platform_bot(self, token):
         if not token: return False, "لا يوجد توكن لبوت المنصة"

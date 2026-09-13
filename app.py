@@ -1022,6 +1022,23 @@ def broadcast(bot_id):
                 else:
                     flash((f"📢 أُرسل القالب «{name}» إلى {sent} مشترك (فشل {failed})." if ar else
                            f"📢 Template «{name}» sent to {sent} subscribers ({failed} failed)."), "ok")
+        elif is_wa and request.form.get("mode") == "direct_send":
+            # ---- Direct Send API (بيتا) — بدون قالب مسبق ----
+            ds_text = request.form.get("text", "").strip()
+            ds_cat = request.form.get("ds_category", "utility").strip().lower()
+            if ds_cat not in ("utility", "authentication"):
+                ds_cat = "utility"
+            if not ds_text:
+                flash("اكتب نص الرسالة." if ar else "Write the message.", "error")
+            elif len(ds_text) > 4096:
+                flash("النص أطول من 4096 حرفاً." if ar else "Text exceeds 4096 characters.", "error")
+            else:
+                audience = db.list_bot_peers(bot_id)
+                # Direct Send يدعم فقط utility/authentication — مجاني من المحفظة (§20)
+                sent, failed = manager.broadcast_direct(bot_id, ds_text, ds_cat,
+                                                        peers=audience)
+                flash((f"📢 أُرسل إلى {sent} مشترك عبر Direct Send (فشل {failed})." if ar else
+                       f"📢 Sent to {sent} subscribers via Direct Send ({failed} failed)."), "ok")
         else:
             text = request.form.get("text", "").strip()
             # صورة/فيديو اختياري من مكتبة المستخدم نفسه (والنص يصير تعليقه)

@@ -181,6 +181,19 @@ class WhatsAppChannel(Channel):
             p["template"]["components"] = components
         return await self._post(p)
 
+    async def send_direct(self, peer, text, category="utility"):
+        """Direct Send API (بيتا) — إرسال بدون قالب مسبق.
+
+        Meta تُنشئ القالب تلقائياً في الخلفية. يدعم فقط utility و authentication —
+        لا يدعم marketing. الحقل الإضافي الوحيد هو ``category`` في جسم الطلب."""
+        if category not in ("utility", "authentication"):
+            log.warning("send_direct called with unsupported category %r", category)
+            return None
+        p = self._base(peer, "text")
+        p["text"] = {"body": text}
+        p["category"] = category
+        return await self._post(p)
+
     async def fetch_media(self, media):
         """خطوتان تفرضهما Meta: المعرّف يعطي رابطاً صالحاً 5 دقائق فقط،
         والرابط نفسه لا يُفتح إلا بترويسة Authorization. والوارد يبقى قابلاً

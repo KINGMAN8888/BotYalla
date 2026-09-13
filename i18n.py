@@ -247,9 +247,13 @@ T = {
  "wa_tpl_link":      {"ar": "القوالب", "en": "Templates"},
  "bc_mode_text":     {"ar": "نص حر", "en": "Free text"},
  "bc_mode_tpl":      {"ar": "قالب معتمد", "en": "Approved template"},
+ "bc_mode_direct":   {"ar": "إرسال مباشر (Direct Send)", "en": "Direct Send"},
  "bc_window_note":   {"ar": "النص الحر يصل فقط لمن راسل البوت خلال 24 ساعة. للباقين استخدم قالباً معتمداً.",
                       "en": "Free text only reaches customers who messaged within 24 hours. Use an approved template for the rest."},
  "bc_reachable":     {"ar": "داخل نافذة الـ24 ساعة", "en": "inside the 24-hour window"},
+ "bc_direct_desc":   {"ar": "يصل لكل المشتركين بدون قالب مسبق — Meta تنشئ القالب تلقائياً. يدعم فقط utility و authentication.",
+                      "en": "Reaches all subscribers without a pre-approved template — Meta auto-creates it. Only supports utility and authentication."},
+ "bc_direct_cat":    {"ar": "فئة الرسالة", "en": "Message category"},
  # إعدادات AI
  "ai_settings":      {"ar": "إعدادات الذكاء الاصطناعي", "en": "AI settings"},
  "ai_settings_sub":  {"ar": "فعّل الوكيل الذكي الذي يظبط بوتاتك تلقائياً من وصف بسيط.",

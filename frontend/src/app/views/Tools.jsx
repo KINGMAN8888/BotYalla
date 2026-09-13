@@ -188,7 +188,7 @@ export function Broadcast() {
           <>
             <p className="mt-4 mb-0 text-[12.5px] leading-relaxed text-ink-3">{t("bc_window_note")}</p>
             <div className="mt-4 flex flex-wrap gap-4">
-              {[["text", t("bc_mode_text")], ["template", t("bc_mode_tpl")]].map(([v, label]) => (
+              {[["text", t("bc_mode_text")], ["template", t("bc_mode_tpl")], ["direct_send", t("bc_mode_direct")]].map(([v, label]) => (
                 <label key={v} className="flex cursor-pointer items-center gap-2 text-[13.5px]">
                   <input type="radio" name="mode" value={v} checked={mode === v}
                          onChange={(e) => setMode(e.target.value)} />
@@ -199,7 +199,33 @@ export function Broadcast() {
           </>
         )}
 
-        {isWa && mode === "template" ? (
+        {isWa && mode === "direct_send" ? (
+          <Form action="" className="mt-5"
+                confirm={bi("إرسال الرسالة لكل المشتركين عبر Direct Send؟", "Send to all subscribers via Direct Send?")}>
+            <input type="hidden" name="mode" value="direct_send" />
+            <p className="mt-0 mb-4 text-[12.5px] leading-relaxed text-ink-3">{t("bc_direct_desc")}</p>
+            <Field label={t("bc_direct_cat")}>
+              <Select name="ds_category" defaultValue="utility">
+                <option value="utility">Utility</option>
+                <option value="authentication">Authentication</option>
+              </Select>
+            </Field>
+            <Field label={t("msg_text")}>
+              <Textarea name="text" required value={text} onChange={(e) => setText(e.target.value)}
+                        className="min-h-[140px]" />
+            </Field>
+            <div className="mt-3 text-[12.5px] text-ink-3">{text.length} / 4096</div>
+            <div className="mt-4 rounded-xl bg-white/[0.03] p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+              <div className="flex items-center gap-2 text-[13px] font-extrabold text-ink">
+                <Icon name="wallet" size={15} className="text-au-cyan" />{t("camp_cost_title")}
+              </div>
+              <div className="mt-2 text-[12.5px] text-ink-3">{t("camp_cost_free")}</div>
+            </div>
+            <div className="mt-5">
+              <Btn icon="rocket" type="submit" disabled={!text.trim()}>{t("send_campaign")}</Btn>
+            </div>
+          </Form>
+        ) : isWa && mode === "template" ? (
           <Form action="" className="mt-5"
                 confirm={bi("إرسال القالب لكل المشتركين؟", "Send this template to all subscribers?")}>
             <input type="hidden" name="mode" value="template" />
