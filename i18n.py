@@ -536,11 +536,9 @@ T = {
  # --- إنشاء بوت بضغطة (بوت المنصة على تليجرام) ---
  "mb_tg_bad":        {"ar": "⚠️ الرابط غير صالح أو انتهت صلاحيته. ارجع للمنصة واضغط «أنشئ بوتي» من جديد.",
                       "en": "⚠️ This link is invalid or expired. Go back to the platform and tap “Create my bot” again."},
- "mb_tg_prompt":     {"ar": "✨ خطوة واحدة وبوت «{name}» يبقى جاهز!\n\nاضغط زر «أنشئ بوتي» تحت، وتليجرام هيعرض عليك الاسم واليوزر — تقدر تعدّلهم، وبعدين أكّد.",
-                      "en": "✨ One step and your “{name}” bot is ready!\n\nTap “Create my bot” below. Telegram shows the name and username — edit them if you like, then confirm."},
+ "mb_tg_prompt":     {"ar": "✨ خطوة واحدة وبوت «{name}» يبقى جاهز!\n\nاضغط «أنشئ بوتي» تحت الرسالة دي، وتليجرام هيفتح شاشة إنشاء البوت والاسم واليوزر جاهزين — تقدر تعدّلهم، وبعدين اضغط Create.",
+                      "en": "✨ One step and your “{name}” bot is ready!\n\nTap “Create my bot” under this message. Telegram opens its bot creation screen with the name and username filled in — edit them if you like, then tap Create."},
  "mb_tg_button":     {"ar": "✨ أنشئ بوتي", "en": "✨ Create my bot"},
- "mb_tg_fallback":   {"ar": "لو الزر مش ظاهر عندك، افتح شاشة الإنشاء من هنا:", "en": "Don't see the button? Open the creation screen here:"},
- "mb_tg_open":       {"ar": "افتح شاشة إنشاء البوت", "en": "Open bot creation"},
  "mb_tg_no_request": {"ar": "👋 عشان ننشئ بوتك ونربطه بحسابك، ابدأ من لوحة BotYalla واضغط «أنشئ بوتي على تليجرام».",
                       "en": "👋 To create a bot linked to your account, start from the BotYalla dashboard and tap “Create my Telegram bot”."},
  "mb_tg_limit":      {"ar": "⚠️ وصلت لحد البوتات في باقتك، فمقدرناش نضيف البوت ده لحسابك. رقّي باقتك من المنصة وحاول تاني.",

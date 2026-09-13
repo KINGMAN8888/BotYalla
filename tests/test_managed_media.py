@@ -84,6 +84,7 @@ class ManagedBotsTests(Base):
             c.execute("DELETE FROM bots WHERE owner_id IN (?,?)", (self.uid, self.other))
             c.execute("DELETE FROM managed_bot_requests")
             c.execute("DELETE FROM settings WHERE key='tg_chat_id'")
+        A._login_attempts.clear()          # حدّ «managed» (10 طلبات/10 دقائق) يُحسب عبر الاختبارات
 
     def request(self, name="Raghad Tailor", template="customer_service"):
         d = self.post("/bot/create/managed", {"name": name, "template": template}).get_json()
@@ -114,6 +115,29 @@ class ManagedBotsTests(Base):
         self.assertEqual(db.get_setting(self.uid, "tg_chat_id"), "4242", "حساب تليجرام لم يُربط")
         st = self.c.get(f"/bot/create/managed/{d['id']}").get_json()
         self.assertEqual((st["status"], st["bot_id"]), ("created", bid))
+
+    def test_start_code_sends_the_newbot_link(self):
+        """زر لوحة المفاتيح request_managed_bot فتح شاشة «Forward» فارغة على iOS —
+        الإنشاء يمرّ عبر رابط newbot الموثّق، في رسالة واحدة."""
+        _, code = self.request(name="رغد للتفصيل")
+        sent = []
+
+        class Msg:
+            async def reply_text(self, text, reply_markup=None, **k): sent.append((text, reply_markup))
+
+        class Upd:
+            effective_user = type("U", (), {"id": 4343})()
+            message = Msg()
+
+        pb = FakePlatformBot()
+        asyncio.run(MB.on_start_code(Upd(), type("C", (), {"bot": pb})(), code))
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(pb.calls, [], "أُرسل زر request_managed_bot")
+        btn = sent[0][1].inline_keyboard[0][0]
+        req = db.pending_managed_for_tg(4343)
+        self.assertEqual(btn.url, f"https://t.me/newbot/BotYallaBot/{req['suggested_username']}"
+                                  "?name=%D8%B1%D8%BA%D8%AF+%D9%84%D9%84%D8%AA%D9%81%D8%B5%D9%8A%D9%84")
+        self.assertEqual(MB.newbot_link("M", "x_bot"), "https://t.me/newbot/M/x_bot")
 
     def test_code_is_single_use_and_bound(self):
         _, code = self.request()

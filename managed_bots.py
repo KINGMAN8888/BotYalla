@@ -4,9 +4,12 @@
 
 1. المنصة تولّد رابطاً لمرة واحدة إلى بوت المنصة: ``t.me/<platform>?start=mb-<code>``
    (زر على الموبايل · QR على الكمبيوتر). الكود يُخزَّن تجزئةً وصالح 15 دقيقة.
-2. بوت المنصة يربط حساب تليجرام بطلب المنصة، ثم يعرض زر «أنشئ بوتي»
-   (``KeyboardButton.request_managed_bot``) — واجهة تليجرام الأصلية مملوءة مسبقاً
-   بالاسم واليوزر المقترحين، ومعه رابط احتياطي ``t.me/newbot/<platform>/<username>``.
+2. بوت المنصة يربط حساب تليجرام بطلب المنصة، ثم يعرض زر «أنشئ بوتي» برابط
+   ``t.me/newbot/<platform>/<username>?name=<name>`` — شاشة الإنشاء الأصلية في تليجرام
+   مملوءة مسبقاً بالاسم واليوزر المقترحين.
+   (زر لوحة المفاتيح ``request_managed_bot`` يصل للتطبيق كطلب محادثة
+   ``requestPeerTypeCreateBot``، وتليجرام iOS فتحه كشاشة «Forward» فارغة بدل شاشة
+   الإنشاء — 2026-09-13. الرابط هو الطريق الموثّق ويعمل على كل التطبيقات.)
 3. المستخدم يؤكّد ← تحديث ``managed_bot`` ``{user, bot}`` ← ``getManagedBotToken(bot.id)``
    ← صفّ البوت يُنشأ بالقالب المختار ويُهيّأ بروفايله ويُشغَّل ← «بوتك جاهز» برابطه.
 
@@ -26,6 +29,7 @@ import os
 import random
 import re
 import secrets
+from urllib.parse import urlencode
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 
@@ -75,8 +79,11 @@ def start_link(platform_username, code):
     return f"https://t.me/{platform_username}?start={CODE_PREFIX}{code}"
 
 
-def newbot_link(platform_username, suggested):
-    return f"https://t.me/newbot/{platform_username}/{suggested}"
+def newbot_link(platform_username, suggested, name=None):
+    """https://t.me/newbot/{manager}/{suggested_username}[?name={suggested_name}] (Bot API 9.6)."""
+    link = f"https://t.me/newbot/{platform_username}/{suggested}"
+    name = (name or "").strip()[:64]
+    return f"{link}?{urlencode({'name': name})}" if name else link
 
 
 def extract(update):
@@ -101,33 +108,19 @@ def extract(update):
 
 # ------------------------------------------------------------ بوت المنصة
 async def on_start_code(update, ctx, code):
-    """/start mb-<code>: يربط حساب تليجرام بالطلب ثم يعرض زر الإنشاء الأصلي."""
+    """/start mb-<code>: يربط حساب تليجرام بالطلب ثم يعرض زر الإنشاء (رابط newbot).
+    التأكيد في تليجرام يرسل تحديث ``managed_bot`` فيلتقطه ``on_update``."""
     u = update.effective_user
     req = db.link_managed_request(token_hash(code), u.id)
     if not req:
         await update.message.reply_text(i18n.t("mb_tg_bad", "ar") + "\n" + i18n.t("mb_tg_bad", "en"))
         return
     lang = db.user_lang(req["user_id"])
-    me = ctx.bot.username
-    rid = (req["id"] % 2147483647) or 1              # request_id: عدد صحيح 32-بت موقَّع
-    try:
-        await ctx.bot.do_api_request("sendMessage", api_kwargs={
-            "chat_id": u.id,
-            "text": i18n.t("mb_tg_prompt", lang).format(name=req["business_name"]),
-            "reply_markup": {
-                "keyboard": [[{"text": i18n.t("mb_tg_button", lang),
-                               "request_managed_bot": {
-                                   "request_id": rid,
-                                   "suggested_name": req["business_name"][:64],
-                                   "suggested_username": req["suggested_username"]}}]],
-                "resize_keyboard": True, "one_time_keyboard": True}})
-    except Exception:
-        # تطبيق قديم أو بوت منصة بلا «وضع إدارة البوتات» — الرابط الاحتياطي أدناه يكفي
-        log.exception("could not send request_managed_bot keyboard")
+    link = newbot_link(ctx.bot.username, req["suggested_username"], req["business_name"])
     await update.message.reply_text(
-        i18n.t("mb_tg_fallback", lang),
+        i18n.t("mb_tg_prompt", lang).format(name=req["business_name"]),
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-            i18n.t("mb_tg_open", lang), url=newbot_link(me, req["suggested_username"]))]]))
+            i18n.t("mb_tg_button", lang), url=link)]]))
 
 
 async def on_update(update, ctx):
