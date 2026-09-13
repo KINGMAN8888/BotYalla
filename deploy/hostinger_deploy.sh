@@ -38,8 +38,6 @@ if [[ $UPDATE_ONLY -eq 0 ]]; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   apt-get install -y python3 python3-venv python3-pip nginx git curl sqlite3 ufw fail2ban
-  # OCR is optional: extracts amount from receipt image
-  apt-get install -y tesseract-ocr tesseract-ocr-ara || warn "Could not install OCR — manual check remains available"
 
   # Node is required for frontend build. If installation fails, we rely on uploaded static/dist.
   if ! command -v node >/dev/null 2>&1; then
@@ -77,7 +75,11 @@ log "[3/9] Virtual Environment"
 [[ -d "$APP_DIR/venv" ]] || python3 -m venv "$APP_DIR/venv"
 "$APP_DIR/venv/bin/pip" install --quiet --upgrade pip
 "$APP_DIR/venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
-"$APP_DIR/venv/bin/pip" install --quiet pytesseract Pillow || true
+
+# Receipt OCR — on every run, --update included: without it no fake receipt is refused
+# automatically (payments.py). apt skips it quickly when already installed.
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tesseract-ocr tesseract-ocr-ara tesseract-ocr-eng >/dev/null \
+  || warn "Could not install tesseract — receipts will wait for manual review"
 
 # ------------------------------------------------------------ 4) Secrets
 log "[4/9] Environment File"
@@ -170,6 +172,10 @@ else
   journalctl -u botyalla -n 30 --no-pager
   die "Deployment incomplete"
 fi
+# Same PATH as the service: this is what the app sees when it reads a receipt
+( cd "$APP_DIR" && env -i PATH="$APP_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin" "$APP_DIR/venv/bin/python" -c \
+  'import payments as p; s = p.ocr_status(); print("  ✓ Receipt OCR:", s["langs"]) if s["ok"] else print("  ✗ Receipt OCR off:", s["reason"])' ) \
+  || warn "Could not check receipt OCR"
 
 if [[ -n "$DOMAIN" && "$DOMAIN" != "_" ]]; then
   log "HTTPS Configuration (Auto-fixing SSL)"
