@@ -26,7 +26,7 @@ if "!SSHUSER!"=="" set "SSHUSER=root"
 set /p DOMAIN=^> Domain (leave empty to deploy via IP): 
 
 set /p MODE=^> [1] Full Deploy  [2] Update Only  : 
-if "!MODE!"=="2" ( set "ARGS=--update" ) else ( set "ARGS=!DOMAIN!" )
+if "!MODE!"=="2" ( set "ARGS=--update !DOMAIN!" ) else ( set "ARGS=!DOMAIN!" )
 
 echo(
 echo --------------------------------------------------
