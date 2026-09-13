@@ -72,11 +72,9 @@ function OneTapCreate() {
                    placeholder={t("eg_cafe")} />
           </Field>
           <Field label={t("bot_type")}>
-            <select value={tpl} onChange={(e) => setTpl(e.target.value)}
-                    className="w-full cursor-pointer appearance-none rounded-xl bg-black/25 px-3.5 py-2.5 text-[14px] text-ink
-                               shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] outline-none">
+            <Select value={tpl} onChange={(e) => setTpl(e.target.value)}>
               {BY.templates.map((x) => <option key={x.k} value={x.k}>{x.label}</option>)}
-            </select>
+            </Select>
           </Field>
           <Btn icon="rocket" type="submit" disabled={busy || !name.trim()}>{busy ? "…" : t("onetap_btn")}</Btn>
         </form>
