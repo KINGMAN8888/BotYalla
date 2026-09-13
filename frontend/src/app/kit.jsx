@@ -1,5 +1,5 @@
-import { useRef, useEffect, useState, useCallback } from "react";
-import { motion, useInView, useReducedMotion, animate } from "motion/react";
+import { useRef, useEffect, useState, useCallback, Children, isValidElement } from "react";
+import { motion, useInView, useReducedMotion, animate, AnimatePresence } from "motion/react";
 
 /* ============================================================================
    عناصر واجهة مشتركة للوحة التحكم. البيانات كلها من الخادم (window.BY).
@@ -154,9 +154,88 @@ export const Input = (p) => <input {...p} className={`${INPUT} ${p.className || 
 export const Textarea = (p) => (
   <textarea {...p} className={`${INPUT} min-h-[96px] resize-y ${p.className || ""}`} />
 );
-export const Select = (p) => (
-  <select {...p} className={`${INPUT} cursor-pointer appearance-none ${p.className || ""}`} />
-);
+export function Select({ children, className = "", value: controlledValue, defaultValue, onChange, ...rest }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [internalValue, setInternalValue] = useState(defaultValue != null ? defaultValue : "");
+  const containerRef = useRef(null);
+
+  const isControlled = controlledValue !== undefined;
+  const value = isControlled ? controlledValue : internalValue;
+
+  const options = [];
+  Children.forEach(children, (child) => {
+    if (isValidElement(child) && child.type === "option") {
+      options.push({
+        value: child.props.value !== undefined ? child.props.value : child.props.children,
+        label: child.props.children,
+      });
+    }
+  });
+
+  const selectedOption = options.find((o) => String(o.value) === String(value));
+  const displayLabel = selectedOption ? selectedOption.label : "—";
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClick = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setIsOpen(false);
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [isOpen]);
+
+  const handleSelect = (val) => {
+    if (!isControlled) setInternalValue(val);
+    setIsOpen(false);
+    if (onChange) onChange({ target: { name: rest.name, value: val } });
+  };
+
+  return (
+    <div ref={containerRef} className={`relative ${className}`}>
+      <select {...rest} value={value} onChange={onChange} className="hidden">
+        {children}
+      </select>
+
+      <div
+        onClick={() => setIsOpen(!isOpen)}
+        className={`${INPUT} cursor-pointer flex items-center justify-between gap-2 select-none`}
+      >
+        <span className="truncate">{displayLabel}</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" 
+             className={`shrink-0 text-ink-3 transition-transform duration-300 ${isOpen ? "rotate-180" : ""}`}>
+          <path d="m6 9 6 6 6-6"/>
+        </svg>
+      </div>
+
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: -10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.95 }}
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute z-[99] mt-2 max-h-60 w-full overflow-y-auto rounded-xl glass p-1.5 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.08)]"
+          >
+            {options.map((opt, i) => (
+              <div
+                key={i}
+                onClick={() => handleSelect(opt.value)}
+                className={`cursor-pointer rounded-lg px-3 py-2 text-[13.5px] transition-colors ${
+                  String(opt.value) === String(value)
+                    ? "bg-[linear-gradient(120deg,rgba(124,108,246,0.15),rgba(34,211,238,0.05))] text-au-cyan font-bold"
+                    : "text-ink-2 hover:bg-white/[0.04] hover:text-ink"
+                }`}
+              >
+                {opt.label}
+              </div>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 /* -------------------------------------------------------------- شارة/حبّة */
 export function Pill({ tone = "on", children, dot }) {
