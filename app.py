@@ -39,6 +39,7 @@ import media_store
 from bot_manager import WA_WINDOW
 import ai_agent as ai
 import managed_bots as MB
+import support_desk as SD
 import asset_store
 import flow_engine as FE
 import base64
@@ -350,6 +351,16 @@ def sync_bot_telegram(bot_row):
     cfg["tg_sync_errors"] = res.get("errors", [])
     db.update_bot_config(bot_row["id"], cfg)
     return res
+
+# حقول المنصة التي يجوز أن تصل متصفح أي مستخدم: وسائل الدفع والتواصل فقط.
+# `all_platform()` فيها توكن بوت المنصة وسرّ واتساب ومفتاح الـ AI — لا تُمرَّر لصفحة عميل أبداً.
+_PUBLIC_PLAT = ("vodafone_number", "instapay_handle", "instapay_link", "bank_holder",
+                "bank_name", "bank_account", "bank_iban",
+                "support_email", "support_whatsapp", "support_telegram")
+
+def _public_plat():
+    p = db.all_platform()
+    return {k: p.get(k, "") for k in _PUBLIC_PLAT}
 
 def notify_admins(text):
     """إشعار كل الأدمنز على تليجرام بأي حركة (best-effort)."""
@@ -1368,7 +1379,7 @@ def subscribe(plan_id):
     if not plans.is_sellable(plan_id):
         return redirect(url_for("pricing"))
     p = plans.plan(plan_id)
-    plat = db.all_platform()
+    plat = _public_plat()
     # الدورة تأتي من رابط صفحة الأسعار، وتُطبَّع فوراً: `?cycle=anything` تصير شهرية.
     cyc = plans.norm_cycle(request.args.get("cycle"))
     _pr = _plan_pricing(plan_id, cycle=cyc)
@@ -1388,6 +1399,31 @@ def subscribe(plan_id):
                                            if cyc == "annual" and _mo["price"] > 0 else 0),
                        "qr": url_for("static", filename="instapay_qr.jpg"),
                        "action": url_for("subscribe_pay", plan_id=plan_id)})
+
+def _receipt_check(data, amount):
+    """الفحص الآلي للإيصال **قبل** أي كتابة على القرص (AGENTS.md §3.12).
+    يرجّع (نتيجة الفحص، بصمة الصورة، رسالة الرفض أو None). المرفوض لا ملف له ولا
+    طلب دفع ولا تنبيه للأدمن — يُسجَّل في receipt_refusals فقط، والعميل يعرف السبب."""
+    img_hash = hashlib.sha256(data).hexdigest()
+    refs = [db.get_platform(k, "") for k in ("vodafone_number", "instapay_handle",
+                                             "bank_iban", "bank_account", "bank_holder")]
+    prior = db.count_receipt_refusals(uid(), since=int(_time.time()) - 3600, exclude=("duplicate",))
+    ac = pay.auto_check(data, amount, [r for r in refs if r],
+                        duplicate=db.img_hash_active(img_hash), prior_refusals=prior)
+    if not ac.get("refuse"):
+        return ac, img_hash, None
+    db.log_receipt_refusal(uid(), ac.get("reason") or "not_receipt", img_hash)
+    log.info("receipt refused user=%s reason=%s", uid(), ac.get("reason"))
+    to = db.get_platform("vodafone_number", "") or db.get_platform("instapay_handle", "") or "—"
+    msg = i18n.t(pay.REFUSAL_KEYS.get(ac.get("reason"), "pay_rej_not_receipt"),
+                 session.get("lang", i18n.DEFAULT)).format(amount=f"{float(amount):g}", ref=to)
+    return ac, img_hash, msg
+
+def _verdict_detail(ac):
+    """ملخص الفحص الآلي لتنبيه تليجرام (بالعربي — لغة الأدمن)."""
+    return pay.verdict_label(ac["verdict"], "ar") + "\n" + "\n".join(
+        ("✅ " if c["ok"] else ("❌ " if c["ok"] is False else "• ")) + c["text"]
+        for c in pay.check_lines(ac, "ar"))
 
 @app.route("/subscribe/<plan_id>", methods=["POST"])
 @login_required
@@ -1422,17 +1458,16 @@ def subscribe_pay(plan_id):
                    }.get(imgchk.get("reason"), ("تعذّر قراءة الصورة.", "Could not read the image."))
         flash(_reason[0] if session.get("lang")!="en" else _reason[1], "error")
         return redirect(url_for("subscribe", plan_id=plan_id, cycle=q["cycle"]))
-    # صورة صالحة — الآن فقط تُكتب على القرص
+    # الفحص الآلي قبل الكتابة: ما ليس إيصالاً لتحويل على حسابنا بهذا المبلغ يُرفض
+    # هنا — لا ملف ولا طلب دفع ولا تنبيه للأدمن.
+    ac, img_hash, refused = _receipt_check(data, q["total"])
+    if refused:
+        flash(refused, "error")
+        return redirect(url_for("subscribe", plan_id=plan_id, cycle=q["cycle"]))
     fname = f"pay_{uid()}_{int(_time.time())}{ext}"
     fpath = os.path.join(UPLOAD_DIR, secure_filename(fname))
     with open(fpath, "wb") as _f:
         _f.write(data)
-    # الفحص الآلي
-    img_hash = hashlib.sha256(data).hexdigest()
-    dup = db.img_hash_seen(img_hash)
-    refs = [db.get_platform("vodafone_number",""), db.get_platform("instapay_handle",""),
-            db.get_platform("bank_iban",""), db.get_platform("bank_account","")]
-    ac = pay.auto_check(fpath, q["total"], [r for r in refs if r], duplicate=dup)
     pid = db.create_payment(uid(), plan_id, method, q["total"], ref, fname, img_hash,
                             json.dumps(ac, ensure_ascii=False),
                             promo_id=(q["promo"]["id"] if q["promo"] else None),
@@ -1444,10 +1479,7 @@ def subscribe_pay(plan_id):
     admin_id = db.get_platform("admin_chat_id", "")
     payment = db.get_payment(pid)
     lang = session.get("lang","ar")
-    _lines = pay.check_lines(ac, "ar")
-    _detail = pay.verdict_label(ac["verdict"], "ar") + "\n" + "\n".join(
-        ("✅ " if c["ok"] else ("❌ " if c["ok"] is False else "• ")) + c["text"] for c in _lines)
-    caption = PB.build_caption(payment, session.get("uname",""), _detail)
+    caption = PB.build_caption(payment, session.get("uname",""), _verdict_detail(ac))
     msg_id = manager.send_payment_alert(admin_id, payment, session.get("uname",""), caption, fpath) if admin_id else None
     if msg_id: db.set_payment_msg(pid, msg_id)
     if not msg_id:
@@ -1497,6 +1529,23 @@ def admin_platform():
                        # هل يستطيع بوت المنصة إنشاء بوتات بضغطة (Bot Management Mode)؟
                        "managed": manager.platform_info(),
                        "capacity": manager.capacity_status()})
+
+@app.route("/admin/platform/test-notify", methods=["POST"])
+@require_roles("admin")
+def admin_platform_test():
+    """رسالة اختبار لكل أدمن — تكشف لماذا لا تصل التنبيهات بدل الصمت."""
+    lang = session.get("lang", i18n.DEFAULT)
+    ids = db.admin_chat_ids()
+    if not ids:
+        flash(i18n.t("plat_test_no_admin", lang), "error")
+    elif not manager.platform_running():
+        flash(i18n.t("plat_test_stopped", lang), "error")
+    else:
+        for aid in ids:
+            ok, err = manager.notify_probe(aid)
+            flash(i18n.t("plat_test_ok", lang).format(id=aid) if ok
+                  else i18n.t("plat_test_fail", lang).format(id=aid, err=err), "ok" if ok else "error")
+    return redirect(url_for("admin_platform"))
 
 # ---------- لوحة تحكم الأدمن ----------
 @app.route("/admin")
@@ -1560,7 +1609,11 @@ def admin_payments():
         x["vstyle"] = st; x["vsym"] = sym
     return react_page("admin_payments", "admin_payments_t",
                       {"pays": pays,
-                       "names": _plan_names()})
+                       "names": _plan_names(),
+                       # حالة قراءة الإيصالات: بدونها لا رفض آلياً — الأدمن يرى السبب وطريقة الإصلاح
+                       "ocr": pay.ocr_status(),
+                       "refused24": db.count_receipt_refusals(since=int(_time.time()) - 86400),
+                       "refusals": db.recent_receipt_refusals(8)})
 
 @app.route("/admin/payments/<int:pid>/<any(approve,reject):decision>", methods=["POST"])
 @require_roles("admin")
@@ -1584,7 +1637,7 @@ def admin_payment_decide(pid, decision):
 @app.route("/request-bot", methods=["GET", "POST"])
 @login_required
 def request_bot():
-    plat = db.all_platform()
+    plat = _public_plat()
     if request.method == "POST":
         business = request.form.get("business", "").strip()
         desc = request.form.get("description", "").strip()
@@ -1612,6 +1665,89 @@ def admin_request_status(req_id, status):
     db.set_bot_request_status(req_id, status)
     flash("تم التحديث." if session.get("lang")!="en" else "Updated.", "ok")
     return redirect(url_for("admin_requests"))
+
+# ---------- الدعم والشكاوى (support_desk.py) ----------
+def _alert_ticket(tid, body, followup=False):
+    """التذكرة تصل كل أدمن فوراً على بوت المنصة. best-effort: محفوظة في اللوحة أياً كان."""
+    t = db.get_ticket(tid)
+    if not t:
+        return False
+    sent = False
+    for aid in db.admin_chat_ids():
+        sent = manager.notify_text(aid, SD.alert_text(t, body, followup),
+                                   reply_markup=SD.alert_markup(tid)) or sent
+    if not sent:
+        log.warning("ticket #T%s saved but not delivered on Telegram "
+                    "(platform bot stopped or admin_chat_id missing)", tid)
+    return sent
+
+@app.route("/support", methods=["GET", "POST"])
+@login_required
+def support():
+    lang = session.get("lang", i18n.DEFAULT)
+    if request.method == "POST":
+        body = (request.form.get("body") or "").strip()[:SD.BODY_MAX]
+        subject = (request.form.get("subject") or "").strip()[:SD.SUBJECT_MAX] or body[:60]
+        if len(body) < SD.BODY_MIN:
+            flash(i18n.t("sup_short", lang), "error")
+            return redirect(url_for("support"))
+        if _rate_limited(f"u{uid()}", limit=6, window=3600, bucket="ticket"):
+            flash(i18n.t("ai_rate", lang), "error")
+            return redirect(url_for("support"))
+        tid = db.create_ticket(uid(), SD.norm_kind(request.form.get("kind")), subject, body)
+        log.info("ticket #T%s opened by user=%s", tid, uid())
+        _alert_ticket(tid, body)
+        flash(i18n.t("sup_sent", lang).format(id=tid), "ok")
+        return redirect(url_for("support"))
+    return react_page("support", "nav_support",
+                      {"tickets": db.list_tickets(user_id=uid()), "plat": _public_plat()})
+
+@app.route("/support/<int:tid>/reply", methods=["POST"])
+@login_required
+def support_reply(tid):
+    lang = session.get("lang", i18n.DEFAULT)
+    t = db.get_ticket(tid)
+    if not t or t["user_id"] != uid():
+        abort(404)
+    body = (request.form.get("body") or "").strip()[:SD.BODY_MAX]
+    if len(body) < 2:
+        flash(i18n.t("sup_short", lang), "error")
+    elif _rate_limited(f"u{uid()}", limit=20, window=3600, bucket="ticket_msg"):
+        flash(i18n.t("ai_rate", lang), "error")
+    else:
+        db.add_ticket_msg(tid, "user", body, "web")
+        _alert_ticket(tid, body, followup=True)
+        flash(i18n.t("sup_reply_sent", lang), "ok")
+    return redirect(url_for("support") + f"#t{tid}")
+
+@app.route("/admin/tickets")
+@require_roles("admin", "support")
+def admin_tickets():
+    return react_page("admin_tickets", "nav_tickets", {"tickets": db.list_tickets()})
+
+@app.route("/admin/tickets/<int:tid>/reply", methods=["POST"])
+@require_roles("admin", "support")
+def admin_ticket_reply(tid):
+    lang = session.get("lang", i18n.DEFAULT)
+    body = (request.form.get("body") or "").strip()[:SD.BODY_MAX]
+    if len(body) < 2:
+        flash(i18n.t("sup_short", lang), "error")
+        return redirect(url_for("admin_tickets"))
+    res = SD.record_staff_reply(tid, body, "web")
+    if not res:
+        abort(404)
+    tg_ok = bool(res["chat"]) and manager.notify_text(res["chat"], res["text"])
+    flash(i18n.t("sup_staff_sent", lang) + (" + Telegram" if tg_ok else "")
+          + (" + Email" if res["emailed"] else ""), "ok")
+    return redirect(url_for("admin_tickets") + f"#t{tid}")
+
+@app.route("/admin/tickets/<int:tid>/<any(close,open):action>", methods=["POST"])
+@require_roles("admin", "support")
+def admin_ticket_status(tid, action):
+    db.set_ticket_status(tid, "closed" if action == "close" else "open")
+    flash(i18n.t("sup_closed" if action == "close" else "sup_opened",
+                 session.get("lang", i18n.DEFAULT)), "ok")
+    return redirect(url_for("admin_tickets"))
 
 # ---------- حساب المستخدم (تعديل الاسم/كلمة المرور) ----------
 @app.route("/account", methods=["GET", "POST"])
@@ -2332,6 +2468,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
         {"k": "billing",     "u": url_for("billing"),      "i": "card",     "l": i18n.t("nav_billing", lang)},
         {"k": "wallet",      "u": url_for("wallet_page"),  "i": "wallet",   "l": i18n.t("wallet_nav", lang)},
         {"k": "request_bot", "u": url_for("request_bot"),  "i": "sparkles", "l": i18n.t("custom_bot", lang)},
+        {"k": "support",     "u": url_for("support"),      "i": "help",     "l": i18n.t("nav_support", lang)},
         {"k": "affiliate",   "u": url_for("affiliate"),    "i": "crown",    "l": i18n.t("aff_title", lang)},
     ]
     admin_nav = []
@@ -2341,6 +2478,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
             {"k": "admin_users",    "u": url_for("admin_users"),    "i": "users",  "l": i18n.t("admin_users_t", lang)},
             {"k": "admin_payments", "u": url_for("admin_payments"), "i": "wallet", "l": i18n.t("admin_payments_t", lang)},
             {"k": "admin_requests", "u": url_for("admin_requests"), "i": "inbox",  "l": i18n.t("nav_requests", lang)},
+            {"k": "admin_tickets",  "u": url_for("admin_tickets"),  "i": "chat",   "l": i18n.t("nav_tickets", lang)},
         ]
         if role == "admin":
             # مزايا المالك وحده — لا يراها الدعم إطلاقاً
@@ -2960,7 +3098,7 @@ def wallet_page():
     return react_page("wallet", "wallet_title",
                       {"balance": db.wallet_balance(uid()), "price": mkt_price(),
                        "ledger": db.wallet_ledger(uid(), n),
-                       "plat": db.all_platform(),
+                       "plat": _public_plat(),
                        "qr": url_for("static", filename="instapay_qr.jpg"),
                        "min": TOPUP_MIN, "max": TOPUP_MAX,
                        "presets": [100, 250, 500, 1000],
@@ -3000,16 +3138,15 @@ def wallet_topup():
     if not imgchk["ok"]:
         flash("الملف ليس صورة صالحة." if ar else "The file is not a valid image.", "error")
         return redirect(url_for("wallet_page"))
+    # نفس فحص الاشتراك قبل الكتابة: المبلغ المطلوب هنا هو ما أعلنه للشحن
+    ac, img_hash, refused = _receipt_check(data, amount)
+    if refused:
+        flash(refused, "error")
+        return redirect(url_for("wallet_page"))
     fname = f"topup_{uid()}_{int(_time.time())}{ext}"
     fpath = os.path.join(UPLOAD_DIR, secure_filename(fname))
     with open(fpath, "wb") as _f:
         _f.write(data)
-
-    img_hash = hashlib.sha256(data).hexdigest()
-    dup = db.img_hash_seen(img_hash)
-    refs = [db.get_platform("vodafone_number", ""), db.get_platform("instapay_handle", ""),
-            db.get_platform("bank_iban", ""), db.get_platform("bank_account", "")]
-    ac = pay.auto_check(fpath, float(amount), [r for r in refs if r], duplicate=dup)
     pid = db.create_payment(uid(), db.WALLET_PLAN, request.form.get("method", ""),
                             float(amount), request.form.get("ref", "").strip(), fname,
                             img_hash, json.dumps(ac, ensure_ascii=False))
@@ -3017,10 +3154,7 @@ def wallet_topup():
              pid, uid(), amount, ac.get("verdict"))
     admin_id = db.get_platform("admin_chat_id", "")
     payment = db.get_payment(pid)
-    _detail = pay.verdict_label(ac["verdict"], "ar") + "\n" + "\n".join(
-        ("✅ " if c["ok"] else ("❌ " if c["ok"] is False else "• ")) + c["text"]
-        for c in pay.check_lines(ac, "ar"))
-    caption = PB.build_caption(payment, session.get("uname", ""), _detail)
+    caption = PB.build_caption(payment, session.get("uname", ""), _verdict_detail(ac))
     msg_id = manager.send_payment_alert(admin_id, payment, session.get("uname", ""),
                                         caption, fpath) if admin_id else None
     if msg_id:

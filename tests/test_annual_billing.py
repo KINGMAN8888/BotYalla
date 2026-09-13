@@ -178,7 +178,8 @@ class AnnualPaymentFlowTests(unittest.TestCase):
         c.post("/login", data={"username": self.uname, "password": TEST_PW,
                                "csrf_token": "tk"})
         data = {"method": "instapay", "ref": "R1", "csrf_token": "tk",
-                "screenshot": (io.BytesIO(PNG), "proof.png")}
+                # بصمة جديدة لكل دفعة: الإيصال المستخدم في طلب قائم يُرفض (payments.auto_check)
+                "screenshot": (io.BytesIO(PNG + os.urandom(16)), "proof.png")}
         if cycle is not None:
             data["cycle"] = cycle
         data.update(extra or {})

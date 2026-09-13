@@ -5,6 +5,10 @@ cryptography>=41.0.0
 httpx>=0.27
 # رموز QR للبوتات (SVG من الخادم) — Python خالص بلا تبعيات نظام.
 segno==1.6.6
+# قراءة إيصالات الدفع (OCR). يحتاج برنامج tesseract بالعربي والإنجليزي —
+# يثبّته deploy/hostinger_deploy.sh في كل تشغيل (والتحديث أيضاً).
+pytesseract==0.3.13
+Pillow>=10.0
 Flask==3.0.3
 Werkzeug==3.0.3
 gunicorn==22.0.0

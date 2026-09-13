@@ -28,7 +28,8 @@
 | `database.py` | **كل** وصول لـ SQLite (استعلامات + دوال). لا تكتب SQL خارج هذا الملف |
 | `auth.py` | تشفير كلمات المرور (Werkzeug) |
 | `plans.py` | تعريف الباقات وحدودها |
-| `payments.py` | فحص إيصالات الدفع (صورة/بصمة تكرار/OCR اختياري) + ملخص الفحص |
+| `payments.py` | محرك فحص الإيصالات 2: صورة · تكرار · OCR عربي/إنجليزي · علامات الإيصال · المبلغ · المستلم — يرفض **قبل** الحفظ + ملخص الفحص للأدمن |
+| `support_desk.py` | تذاكر الدعم والشكاوى: تنبيه فوري للأدمن على بوت المنصة (`#T<id>`) ورده بـ Reply من تليجرام أو اللوحة |
 | `platform_bot.py` | بوت المنصة: تنبيه الأدمن + أزرار موافقة/رفض + أوامر `/stats` `/pending` `/users` |
 | `bot_manager.py` | تشغيل عدة بوتات + بوت المنصة في خيط asyncio + البث + الإشعارات |
 | `flow_engine.py` | محرك المحادثات العام (No-Code) + `send_intro` + التكامل الرسمي مع تليجرام (`configure_bot_profile`) في `tg_helpers` |
@@ -41,7 +42,7 @@
 | `icons.py` | مجموعة أيقونات SVG (خطية). `icon('name', size)` |
 
 ## 2) قاعدة البيانات (جداول SQLite)
-`users` · `settings` · `bots` · `bot_users` · `leads` · `orders` · `bookings` · `subscriptions` · `payments` · `platform` · `bot_requests` · `events` · `chat_state` · `usage_msgs` · `seen_msgs` · `media` · `plan_overrides` · `promos` · `promo_uses` · `affiliates` · `referrals` · `reminder_log` · `password_resets` · `managed_bot_requests` · `messages` · `conversations` · `ai_setup_sessions` · `bot_config_versions` · `ai_usage` · `assets` · `asset_refs`
+`users` · `settings` · `bots` · `bot_users` · `leads` · `orders` · `bookings` · `subscriptions` · `payments` · `platform` · `bot_requests` · `events` · `chat_state` · `usage_msgs` · `seen_msgs` · `media` · `plan_overrides` · `promos` · `promo_uses` · `affiliates` · `referrals` · `reminder_log` · `password_resets` · `managed_bot_requests` · `messages` · `conversations` · `ai_setup_sessions` · `bot_config_versions` · `ai_usage` · `assets` · `asset_refs` · `tickets` · `ticket_msgs` · `receipt_refusals`
 
 - **`messages` / `conversations`**: صندوق الوارد — كل رسالة واردة وصادرة، ووضع كل محادثة (`bot` | `human`). تُحذف بعد 12 شهراً (`purge_old_messages`).
 - **`assets` / `asset_refs`**: وسائط صاحب النشاط (`uploads/assets/`) ومرجعها لدى كل قناة (`file_id` تليجرام · `media_id` واتساب المنتهي بعد 30 يوماً).
@@ -97,6 +98,9 @@
 31. **مكتبة الوسائط عبر `asset_store` وحده.** النوع من البايتات، والحدود أضيق القناتين (صورة 5MB · فيديو MP4 16MB)، والمساحة من `plans.asset_bytes_limit`. جلب رابط عبر `fetch_url` وحده (https:443 · العنوان يُحلّ ويُفحص ثم يُتصل به هو · كل تحويل يُفحص). الملفات خارج `static/` وتُقدَّم عبر `/assets/<id>` بالملكية في الاستعلام، وأي معرّف ملف يُحفظ في إعدادات بوت يمرّ بـ`_own_asset_id`.
 32. **الإنشاء بضغطة (Managed Bots) لا يُنشئ بلا طلب مربوط.** الكود لمرة واحدة ويُخزَّن تجزئةً (`token_hash`)، والربط ذرّي (`link_managed_request`) والإنشاء مرة واحدة (`claim_managed_request`)، وحدّ الباقة يُفحص عند إصدار الرابط **وعند** الإنشاء. داخل حلقة المدير استعمل `start_bot_async`/`restart_bot_async` — `start_bot` يستدعي `_submit` فينتظر الحلقة نفسها ويتجمّد.
 33. **توكنات البوتات مشفّرة (Fernet) — ابحث بالفهرس لا بالنص.** اقرأ صفوف `bots` عبر دوال `database` التي تمرّ بـ`_map_bot`، وابحث بالتوكن عبر `get_bot_by_token` (`token_idx` = HMAC) — `WHERE token=?` لا يطابق نصاً عشوائياً أبداً (هكذا ضاع وارد واتساب في أول نسخة). أي كتابة لتوكن تحدّث `token` و`token_idx` معاً. المفتاح `FERNET_KEY` أو `.token.key` بجانب القاعدة — لا يُكتب في الكود، ويُنسخ احتياطياً. توكن تليجرام لا يصل للمتصفح: كل حمولة صفحة تمرّر `_public_bot(b)` — `tests/test_token_crypto.py`.
+34. **الإيصال يُفحص ويُرفض قبل الحفظ، والتفعيل يبقى للأدمن.** مسارا الاشتراك والشحن يمرّان بـ`_receipt_check(data, amount)` **قبل** أي كتابة: `not_receipt` · `wrong_recipient` (حساب المنصة غير ظاهر) · `amount_mismatch` · `duplicate` (إيصال في دفعة **معلّقة أو معتمدة** — المرفوضة يُعاد رفعها) ← لا ملف ولا طلب دفع ولا تنبيه، سطر في `receipt_refusals` ورسالة `pay_rej_*` للعميل. بلا OCR (`ocr_status()`) لا يُرفض شيء آلياً. بعد `RETRY_AFTER` رفضين خلال ساعة يمرّ الإيصال «الشبيه» للأدمن `suspect` — الصورة التي ليست إيصالاً لا تمرّ أبداً. `auto_pass` مؤشر لا تفعيل (§3.3)، والرفض الآلي لا يلمس دفعة قائمة. التحليل دالة نقية `analyze(text, …)` تُختبر بنص جاهز، والاختبارات تشغَّل بـ`BOTYALLA_OCR=0` — `tests/test_receipts_support.py`.
+35. **أسرار المنصة لا تصل المتصفح.** صفحات العميل تأخذ `_public_plat()` (وسائل الدفع والتواصل فقط) لا `db.all_platform()` — الأخيرة فيها توكن بوت المنصة وسرّ واتساب ومفتاح الـ AI، وتُمرَّر كاملة لصفحة `admin_platform` وحدها. حقل جديد يحتاجه العميل يُضاف إلى `_PUBLIC_PLAT` صراحةً.
+36. **التذاكر: الوسم `#T<id>` في نص التنبيه هو الربط.** كل رسالة عميل (جديدة أو متابعة) تصل كل `admin_chat_ids` عبر `_alert_ticket`. رد تليجرام يُقبل من الأدمن وحده (`_is_admin`) في `on_admin_reply`، ويُرسل لتليجرام العميل بـ`ctx.bot` داخل المعالج — لا `manager.notify_text` من داخل الحلقة. الإيميل عبر `mailer.send_ticket_reply` (رابط من `PUBLIC_URL` فقط، §14).
 
 ---
 

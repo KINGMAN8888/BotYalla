@@ -421,24 +421,40 @@ class BotManager:
             if own is not None:
                 await own.shutdown()
 
-    def notify_text(self, chat_id, text):
+    def notify_text(self, chat_id, text, reply_markup=None):
         """إرسال رسالة نصية للأدمن عبر بوت المنصة (best-effort).
         لا تُستدعى من داخل حلقة المدير نفسها — استخدم notify_text_async هناك."""
         if self._platform is None or not chat_id:
             return False
         try:
-            self._submit(self._platform.bot.send_message(int(chat_id), text)); return True
+            self._submit(self._platform.bot.send_message(int(chat_id), text,
+                                                         reply_markup=reply_markup)); return True
         except Exception:
             log.exception("notify_text"); return False
 
-    async def notify_text_async(self, chat_id, text):
+    async def notify_text_async(self, chat_id, text, reply_markup=None):
         """نفس الغرض لكن من داخل حلقة asyncio (يتجنّب انتظار النتيجة على نفس الحلقة)."""
         if self._platform is None or not chat_id:
             return False
         try:
-            await self._platform.bot.send_message(int(chat_id), text); return True
+            await self._platform.bot.send_message(int(chat_id), text, reply_markup=reply_markup)
+            return True
         except Exception:
             log.exception("notify_text_async"); return False
+
+    def notify_probe(self, chat_id):
+        """رسالة اختبار للأدمن ← (ok, error). تكشف سبب الفشل بدل ابتلاعه — أشهره أن
+        الأدمن لم يضغط Start في بوت المنصة، فتليجرام يرفض أن يبدأ البوت المحادثة."""
+        if self._platform is None:
+            return False, "stopped"
+        try:
+            self._submit(self._platform.bot.send_message(
+                int(chat_id), "✅ اختبار تنبيهات BotYalla — التنبيهات هتوصلك هنا.\n"
+                              "BotYalla alerts test — alerts will arrive here."))
+            return True, None
+        except Exception as e:
+            log.warning("notify probe to %s failed: %s", chat_id, e)
+            return False, f"{type(e).__name__}: {e}"[:300]
 
     def send_payment_alert(self, admin_id, payment, username, caption, screenshot_path):
         if self._platform is None:

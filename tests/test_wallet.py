@@ -189,8 +189,9 @@ class TopupFlowTests(unittest.TestCase):
 
     def _request(self, amount):
         self.c.post("/wallet/topup",
+                    # بصمة جديدة لكل طلب: الإيصال المستخدم في طلب قائم يُرفض (payments.auto_check)
                     data={"amount": str(amount), "method": "instapay", "ref": "R",
-                          "screenshot": (io.BytesIO(PNG), "p.png"), "csrf_token": "tk"},
+                          "screenshot": (io.BytesIO(PNG + os.urandom(16)), "p.png"), "csrf_token": "tk"},
                     content_type="multipart/form-data", follow_redirects=True)
         pays = db.list_payments(self.u)
         return pays[0] if pays else None

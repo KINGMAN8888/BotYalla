@@ -514,6 +514,43 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS ix_mbr_tg ON managed_bot_requests(tg_user_id, status);
 
+        -- ===================== الدعم والشكاوى (support_desk.py) =====================
+        -- كل رسالة تصل الأدمن فوراً على بوت المنصة بالوسم #T<id>، ورده (Reply) يرجع هنا.
+        CREATE TABLE IF NOT EXISTS tickets(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'support',  -- support | complaint | payment | other
+            subject TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',   -- open | answered | closed
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_tickets_user ON tickets(user_id, updated_at);
+        CREATE TABLE IF NOT EXISTS ticket_msgs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id INTEGER NOT NULL,
+            sender TEXT NOT NULL,                  -- user | staff
+            body TEXT NOT NULL,
+            via TEXT NOT NULL DEFAULT 'web',       -- web | telegram
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_ticket_msgs ON ticket_msgs(ticket_id);
+
+        -- ===================== الإيصالات المرفوضة آلياً (payments.auto_check) =====================
+        -- المرفوض لا ملف له ولا طلب دفع — هذا السجل وحده: عدّاد المحاولات (يمرّ للأدمن
+        -- «مشبوهاً» بعد رفضين) وما يراه الأدمن في «إدارة المدفوعات».
+        CREATE TABLE IF NOT EXISTS receipt_refusals(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            img_hash TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_rr_user ON receipt_refusals(user_id, created_at);
+
         -- ===================== المحادثات (صندوق الوارد والتدخّل اليدوي) =====================
         -- كل رسالة واردة وصادرة (بوت · ذكاء اصطناعي · صاحب النشاط). بلاها لا يرى
         -- صاحب البوت محادثة عميله ولا يستطيع الرد عليه.
@@ -1231,6 +1268,90 @@ def set_bot_request_status(req_id, status):
         return
     with get_conn() as c:
         c.execute("UPDATE bot_requests SET status=? WHERE id=?", (status, req_id))
+
+# ---------- تذاكر الدعم والشكاوى (support_desk.py) ----------
+def create_ticket(user_id, kind, subject, body):
+    now = int(time.time())
+    with get_conn() as c:
+        tid = c.execute("INSERT INTO tickets(user_id,kind,subject,status,created_at,updated_at) "
+                        "VALUES(?,?,?,'open',?,?)", (user_id, kind, subject, now, now)).lastrowid
+        c.execute("INSERT INTO ticket_msgs(ticket_id,sender,body,via,created_at) VALUES(?,?,?,?,?)",
+                  (tid, "user", body, "web", now))
+        return tid
+
+def add_ticket_msg(tid, sender, body, via="web"):
+    """رسالة العميل تفتح التذكرة، ورد الفريق يجعلها «اتردّ عليها»."""
+    now = int(time.time())
+    with get_conn() as c:
+        c.execute("INSERT INTO ticket_msgs(ticket_id,sender,body,via,created_at) VALUES(?,?,?,?,?)",
+                  (tid, sender, body, via, now))
+        c.execute("UPDATE tickets SET status=?, updated_at=? WHERE id=?",
+                  ("answered" if sender == "staff" else "open", now, tid))
+
+def get_ticket(tid):
+    with get_conn() as c:
+        r = c.execute("SELECT t.*, u.username FROM tickets t LEFT JOIN users u ON u.id=t.user_id "
+                      "WHERE t.id=?", (tid,)).fetchone()
+        return dict(r) if r else None
+
+def list_tickets(user_id=None, limit=200):
+    """التذاكر مع رسائلها، المفتوحة أولاً."""
+    q = ("SELECT t.*, u.username FROM tickets t LEFT JOIN users u ON u.id=t.user_id "
+         + ("WHERE t.user_id=? " if user_id else "")
+         + "ORDER BY CASE t.status WHEN 'open' THEN 0 WHEN 'answered' THEN 1 ELSE 2 END, "
+           "t.updated_at DESC, t.id DESC LIMIT ?")
+    with get_conn() as c:
+        rows = [dict(r) for r in c.execute(q, ([user_id] if user_id else []) + [limit]).fetchall()]
+        if rows:
+            ids = [r["id"] for r in rows]
+            by = {}
+            for m in c.execute(f"SELECT * FROM ticket_msgs WHERE ticket_id IN ({','.join('?' * len(ids))}) "
+                               "ORDER BY id", ids).fetchall():
+                by.setdefault(m["ticket_id"], []).append(dict(m))
+            for r in rows:
+                r["msgs"] = by.get(r["id"], [])
+        return rows
+
+def set_ticket_status(tid, status):
+    """True لو تغيّرت الحالة فعلاً (زرّ «تم الحل» المكرّر لا يعيد شيئاً)."""
+    if status not in ("open", "answered", "closed"):
+        return False
+    with get_conn() as c:
+        cur = c.execute("UPDATE tickets SET status=?, updated_at=? WHERE id=? AND status<>?",
+                        (status, int(time.time()), tid, status))
+        return cur.rowcount == 1
+
+def count_open_tickets():
+    with get_conn() as c:
+        return c.execute("SELECT COUNT(*) FROM tickets WHERE status='open'").fetchone()[0]
+
+# ---------- الإيصالات المرفوضة آلياً ----------
+def img_hash_active(img_hash):
+    """إيصال بنفس البصمة في دفعة معلّقة أو معتمدة = إعادة استخدام. المرفوضة لا تُحسب:
+    الأدمن قد يرفض لسبب آخر (باقة خطأ) فيعيد العميل رفع نفس الإيصال."""
+    with get_conn() as c:
+        return c.execute("SELECT 1 FROM payments WHERE img_hash=? AND status IN ('pending','approved') "
+                         "LIMIT 1", (img_hash,)).fetchone() is not None
+
+def log_receipt_refusal(user_id, reason, img_hash=None):
+    with get_conn() as c:
+        c.execute("INSERT INTO receipt_refusals(user_id,reason,img_hash,created_at) VALUES(?,?,?,?)",
+                  (user_id, reason, img_hash, int(time.time())))
+
+def count_receipt_refusals(user_id=None, since=0, exclude=()):
+    q, args = "SELECT COUNT(*) FROM receipt_refusals WHERE created_at>=?", [since]
+    if user_id is not None:
+        q += " AND user_id=?"; args.append(user_id)
+    if exclude:
+        q += f" AND reason NOT IN ({','.join('?' * len(exclude))})"; args += list(exclude)
+    with get_conn() as c:
+        return c.execute(q, args).fetchone()[0]
+
+def recent_receipt_refusals(limit=8):
+    with get_conn() as c:
+        rows = c.execute("SELECT r.id, r.reason, r.created_at, u.username FROM receipt_refusals r "
+                         "LEFT JOIN users u ON u.id=r.user_id ORDER BY r.id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
 
 if __name__ == "__main__":

@@ -4,6 +4,142 @@ import {
   Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate, daysLeft,
 } from "../kit.jsx";
 
+/* ------------------------------------------------- تذاكر الدعم (مشتركة مع الأدمن) */
+export const TICKET_KIND = {
+  support:   ["settings",  "دعم فني",   "Support"],
+  complaint: ["megaphone", "شكوى",      "Complaint"],
+  payment:   ["card",      "مشكلة دفع", "Payment issue"],
+  other:     ["chat",      "أخرى",      "Other"],
+};
+const TICKET_TONE = { open: "warn", answered: "on", closed: "mute" };
+const ticketLabel = (s) => ({ open: bi("مفتوحة", "Open"), answered: bi("اتردّ عليها", "Answered"),
+                              closed: bi("مقفولة", "Closed") }[s] || s);
+
+export function TicketHead({ tk, who = false }) {
+  const k = TICKET_KIND[tk.kind] || TICKET_KIND.other;
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <span className="tnum text-[12px] font-bold text-ink-3">#T{tk.id}</span>
+      <b className="text-[15px] text-ink">{tk.subject}</b>
+      <Pill tone="mute"><Icon name={k[0]} size={12} className="me-1 align-[-2px]" />{bi(k[1], k[2])}</Pill>
+      <Pill tone={TICKET_TONE[tk.status] || "mute"}>{ticketLabel(tk.status)}</Pill>
+      {who && (
+        <span className="text-[12.5px] text-ink-3">
+          <Icon name="user" size={12} className="me-1 align-[-2px]" />{tk.username}
+        </span>
+      )}
+      <span className="ms-auto tnum text-[12px] text-ink-3">{fmtDate(tk.updated_at)}</span>
+    </div>
+  );
+}
+
+/* الرسائل كفقاعات: رسائلك على جهة، والطرف الآخر على الجهة المقابلة */
+export function TicketThread({ tk, staffView = false }) {
+  return (
+    <div className="flex flex-col gap-2.5">
+      {(tk.msgs || []).map((m) => {
+        const mine = staffView ? m.sender === "staff" : m.sender === "user";
+        return (
+          <div key={m.id}
+               className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed
+                           shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]
+                           ${mine ? "self-end bg-au-cyan/[0.12] text-ink" : "self-start bg-white/[0.05] text-ink-2"}`}>
+            <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-ink-3">
+              <Icon name={m.sender === "staff" ? "shield" : "user"} size={12} />
+              {m.sender === "staff" ? bi("فريق BotYalla", "BotYalla team") : (tk.username || bi("العميل", "Customer"))}
+              {m.via === "telegram" && <span>· Telegram</span>}
+              <span className="tnum">· {fmtDate(m.created_at)}</span>
+            </div>
+            {m.body}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ContactButtons({ plat }) {
+  if (!plat.support_email && !plat.support_whatsapp && !plat.support_telegram) return null;
+  return (
+    <Card>
+      <SectionTitle icon="phone">{t("or_contact_now")}</SectionTitle>
+      <div className="flex flex-wrap gap-3">
+        {plat.support_email && (
+          <Btn variant="ghost" icon="inbox" target="_blank" rel="noopener"
+               href={`mailto:${plat.support_email}`}>{t("contact_email")}</Btn>
+        )}
+        {plat.support_whatsapp && (
+          <Btn variant="green" icon="phone" target="_blank" rel="noopener"
+               href={`https://wa.me/${plat.support_whatsapp}`}>{t("contact_whatsapp")}</Btn>
+        )}
+        {plat.support_telegram && (
+          <Btn variant="ghost" icon="link" target="_blank" rel="noopener"
+               href={`https://t.me/${plat.support_telegram}`}>{t("contact_telegram")}</Btn>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* --------------------------------------------------------- الدعم والشكاوى */
+export function Support() {
+  const { tickets = [], plat = {} } = P;
+  const [kind, setKind] = useState("support");
+  return (
+    <>
+      <PageHead icon="help" title={t("nav_support")}
+        sub={bi("اكتب مشكلتك أو شكوتك — بتوصل لفريقنا فوراً، والرد بيظهر هنا.",
+                "Tell us what's wrong — it reaches our team instantly, and the reply shows up here.")} />
+
+      <Card className="mb-6">
+        <Form action="">
+          <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label={bi("نوع الرسالة", "Message type")}>
+            {Object.entries(TICKET_KIND).map(([k, [ic, ar, en]]) => (
+              <button key={k} type="button" onClick={() => setKind(k)} aria-pressed={kind === k}
+                className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-[13px] font-bold transition
+                  ${kind === k ? "bg-au-cyan/15 text-ink shadow-[inset_0_0_0_1px_rgb(143_233_255/0.45)]"
+                               : "text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:text-ink"}`}>
+                <Icon name={ic} size={15} />{bi(ar, en)}
+              </button>
+            ))}
+          </div>
+          <input type="hidden" name="kind" value={kind} />
+          <Field label={bi("العنوان", "Subject")}>
+            <Input name="subject" maxLength={120}
+                   placeholder={bi("مثال: البوت مش بيرد على العملاء", "e.g. My bot isn't replying")} />
+          </Field>
+          <div className="mt-4">
+            <Field label={bi("التفاصيل", "Details")}>
+              <Textarea name="body" required minLength={10} maxLength={3000} className="min-h-[130px]"
+                placeholder={kind === "payment"
+                  ? bi("رقم الدفعة، المبلغ، وسيلة الدفع، واللي حصل…", "Payment #, amount, method, and what happened…")
+                  : bi("اشرح اللي حصل بالتفصيل…", "Describe what happened…")} />
+            </Field>
+          </div>
+          <div className="mt-5"><Btn icon="chat" type="submit">{bi("ابعت", "Send")}</Btn></div>
+        </Form>
+      </Card>
+
+      <SectionTitle icon="inbox">{bi("رسائلك", "Your tickets")}</SectionTitle>
+      {tickets.length ? tickets.map((tk) => (
+        <Card key={tk.id} id={`t${tk.id}`} className="mb-4">
+          <TicketHead tk={tk} />
+          <TicketThread tk={tk} />
+          <Form action={`/support/${tk.id}/reply`} className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-end">
+            <Textarea name="body" required minLength={2} maxLength={3000} className="min-h-[52px] flex-1"
+              placeholder={tk.status === "closed"
+                ? bi("اكتب لو المشكلة رجعت — التذكرة هتتفتح تاني", "Write if it's back — the ticket reopens")
+                : bi("اكتب ردّك…", "Write a reply…")} />
+            <Btn sm icon="chat" type="submit">{bi("رد", "Reply")}</Btn>
+          </Form>
+        </Card>
+      )) : <Card className="mb-6"><Empty icon="chat" title={bi("مفيش رسائل لسه", "No tickets yet")} /></Card>}
+
+      <div className="mt-6"><ContactButtons plat={plat} /></div>
+    </>
+  );
+}
+
 /* ------------------------------------------------------------- حسابي */
 export function Account() {
   const me = P.me || {};

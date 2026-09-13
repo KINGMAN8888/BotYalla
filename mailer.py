@@ -284,6 +284,34 @@ def receipt_email(row, status, lang="ar"):
     return subject, html, text
 
 
+def ticket_reply_email(t, body, lang="ar", link=None):
+    """(subject, html, text) لرد فريق الدعم على تذكرة."""
+    en = lang == "en"
+    subject = f"Reply to your ticket #T{t['id']}" if en else f"رد على تذكرتك #T{t['id']}"
+    intro = (f"Our team replied to “{t['subject']}”:" if en else f"فريقنا ردّ على «{t['subject']}»:")
+    html = _layout(lang, subject,
+                   f"<p>{escape(intro)}</p><p style=\"white-space:pre-wrap;background:#F6F7FA;"
+                   f"padding:12px 14px;border-radius:10px;\">{escape(body)}</p>"
+                   + (_button(link, "Open support" if en else "افتح صفحة الدعم") if link else ""))
+    text = f"{intro}\n\n{body}" + (f"\n\n{link}" if link else "")
+    return subject, html, text
+
+
+def send_ticket_reply(t, body, lang="ar"):
+    """best-effort: الرد محفوظ ويظهر في صفحة الدعم أياً كان مصير الإيميل.
+    True لو أُرسل للإرسال (SMTP مضبوط وللعميل إيميل)."""
+    try:
+        u = db.get_user(t["user_id"])
+        if not configured() or not u or not u.get("email"):
+            return False
+        base = (os.getenv("PUBLIC_URL") or "").strip().rstrip("/")
+        link = f"{base}/support" if base.startswith("https://") else None   # AGENTS.md §14
+        return bool(send_async(u["email"], *ticket_reply_email(t, body, lang, link)))
+    except Exception as e:
+        log.error("ticket reply mail failed for #T%s: %s", t.get("id"), e)
+        return False
+
+
 def send_payment_receipt(row, status):
     """إيصال بعد `finalize_payment` — من الويب ومن زرّ تليجرام معاً.
     **خارج المعاملة الذرّية:** يُستدعى بعد أن ثبتت التسوية، وفشله لا يمسّها."""

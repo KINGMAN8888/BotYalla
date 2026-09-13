@@ -12,6 +12,9 @@ set -u
 cd "$(dirname "$0")"
 
 PY="${PYTHON:-python3}"
+# نتائج الاختبارات لا تتغيّر بوجود tesseract على الجهاز: القراءة مطفأة، واختبارات
+# المحرك (test_receipts_support.py) تستبدل payments.read_text بنص جاهز.
+export BOTYALLA_OCR="${BOTYALLA_OCR:-0}"
 pass=0; fail=0; failed=()
 
 run() {

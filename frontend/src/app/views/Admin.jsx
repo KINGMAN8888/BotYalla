@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  BY, P, t, bi, Icon, Card, Btn, Field, Input, Select, Form, Grid, Stat,
+  BY, P, t, bi, Icon, Card, Btn, Field, Input, Select, Textarea, Form, Grid, Stat,
   Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate, daysLeft,
 } from "../kit.jsx";
+import { TicketHead, TicketThread } from "./Account.jsx";
 
 /* رسم Chart.js — المكتبة محمّلة من القالب عند الحاجة فقط.
    `enabled` إلزامي: بدونه يُستدعى build() قبل وصول البيانات من fetch
@@ -176,6 +177,67 @@ export function AdminUsers() {
 }
 
 /* -------------------------------------------------------------- المدفوعات */
+const OCR_OFF = {
+  no_module: ["مكتبة قراءة الإيصالات مش متثبّتة على السيرفر.", "The receipt-reading library isn't installed on the server."],
+  no_binary: ["برنامج tesseract مش متاح للخدمة على السيرفر.", "tesseract isn't available to the service on the server."],
+  no_lang:   ["لغات القراءة (عربي/إنجليزي) مش متثبّتة.", "The OCR languages (Arabic/English) aren't installed."],
+  disabled:  ["القراءة متوقفة بالإعداد BOTYALLA_OCR=0.", "Reading is disabled by BOTYALLA_OCR=0."],
+};
+const REFUSED = {
+  not_receipt:     ["مش إيصال", "Not a receipt"],
+  duplicate:       ["إيصال مستخدم", "Reused receipt"],
+  wrong_recipient: ["مستلم تاني", "Wrong recipient"],
+  amount_mismatch: ["مبلغ مختلف", "Wrong amount"],
+};
+
+/* حالة الفحص الآلي: بدون قراءة الإيصالات لا يُرفض شيء آلياً — فالسبب والحل ظاهران */
+function ReceiptEngine({ ocr = {}, refused24 = 0, refusals = [] }) {
+  return (
+    <>
+      {!ocr.ok && (
+        <Card className="mb-5 bg-[linear-gradient(120deg,rgb(248_113_113/0.14),transparent)]">
+          <SectionTitle icon="ban">{bi("الفحص الآلي للإيصالات متوقف", "Automatic receipt checks are off")}</SectionTitle>
+          <p className="m-0 text-[13px] leading-relaxed text-ink-2">
+            {OCR_OFF[ocr.reason] ? bi(...OCR_OFF[ocr.reason]) + " " : ""}
+            {bi("من غيره مفيش رفض آلي — كل صورة بتستنى مراجعتك. الحل على السيرفر:",
+                "Without it nothing is refused automatically — every image waits for you. Fix it on the server:")}
+          </p>
+          <code dir="ltr" className="mt-3 block overflow-x-auto rounded-lg bg-black/40 px-3 py-2 text-[12.5px] text-ink">
+            sudo bash /opt/botyalla/deploy/hostinger_deploy.sh --update
+          </code>
+        </Card>
+      )}
+      <Card className="mb-5">
+        <SectionTitle icon="shield"
+          extra={ocr.ok ? <Pill tone="on" dot>{bi("الفحص الآلي شغّال", "Auto-check on")}</Pill>
+                        : <Pill tone="off">{bi("الفحص الآلي متوقف", "Auto-check off")}</Pill>}>
+          {bi("رفض آلي — آخر 24 ساعة:", "Auto-refused — last 24h:")} <span className="tnum">{num(refused24)}</span>
+        </SectionTitle>
+        <p className="mt-0 mb-3 text-[12.5px] leading-relaxed text-ink-3">
+          {bi("الصور اللي مش إيصال، أو إيصال لتحويل على رقم تاني أو بمبلغ تاني، أو إيصال مستخدم قبل كده — بتترفض قبل ما توصلك، والعميل بيعرف السبب فوراً. اللي بيعدّي بيستنى موافقتك دايماً.",
+              "Images that aren't receipts, receipts for another account or amount, and reused receipts are refused before they reach you — the customer sees why at once. Whatever passes still waits for your approval.")}
+          {ocr.ok && ocr.reason === "no_ara" && (
+            <span className="mt-1 block text-yellow-300">
+              {bi("القراءة شغّالة بالإنجليزي بس — ثبّت tesseract-ocr-ara عشان الكلمات العربية.",
+                  "Reading works in English only — install tesseract-ocr-ara for Arabic words.")}
+            </span>
+          )}
+        </p>
+        {refusals.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {refusals.map((r) => (
+              <span key={r.id} className="rounded-lg bg-white/[0.04] px-2.5 py-1 text-[12px] text-ink-3">
+                <b className="text-ink-2">{r.username || "?"}</b> · {REFUSED[r.reason] ? bi(...REFUSED[r.reason]) : r.reason}
+                {" · "}<span className="tnum">{fmtDate(r.created_at)}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </Card>
+    </>
+  );
+}
+
 export function AdminPayments() {
   const { pays = [], names = {} } = P;
   const isAdmin = BY.user.role === "admin";
@@ -186,6 +248,8 @@ export function AdminPayments() {
     <>
       <PageHead icon="card" title={t("admin_payments_t")}
         actions={<Btn variant="ghost" sm icon="back" href="/admin">{t("back")}</Btn>} />
+
+      <ReceiptEngine ocr={P.ocr} refused24={P.refused24} refusals={P.refusals} />
 
       <Card>
         <p className="mt-0 mb-5 text-[13px] text-ink-3">
@@ -295,6 +359,54 @@ export function AdminRequests() {
   );
 }
 
+/* ---------------------------------------------------------- تذاكر الدعم */
+export function AdminTickets() {
+  const tickets = P.tickets || [];
+  const [show, setShow] = useState("open");
+  const open = tickets.filter((x) => x.status !== "closed");
+  const list = show === "open" ? open : show === "closed" ? tickets.filter((x) => x.status === "closed") : tickets;
+  const tabs = [["open", bi("مفتوحة", "Open"), open.length],
+                ["closed", bi("مقفولة", "Closed"), tickets.length - open.length],
+                ["all", bi("الكل", "All"), tickets.length]];
+  return (
+    <>
+      <PageHead icon="chat" title={t("nav_tickets")}
+        sub={bi("كل تذكرة بتوصلك على بوت المنصة لحظة إرسالها — ردّ عليها بـ Reply في تليجرام أو من هنا.",
+                "Every ticket reaches you on the platform bot the moment it's sent — answer with Reply in Telegram or here.")}
+        actions={<Btn variant="ghost" sm icon="back" href="/admin">{t("back")}</Btn>} />
+      <div className="mb-5 flex flex-wrap gap-2">
+        {tabs.map(([k, l, n]) => (
+          <button key={k} type="button" onClick={() => setShow(k)} aria-pressed={show === k}
+            className={`rounded-xl px-3.5 py-2 text-[13px] font-bold transition
+              ${show === k ? "bg-au-cyan/15 text-ink shadow-[inset_0_0_0_1px_rgb(143_233_255/0.45)]"
+                           : "text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:text-ink"}`}>
+            {l} <span className="tnum opacity-70">{n}</span>
+          </button>
+        ))}
+      </div>
+      {list.length ? list.map((tk) => (
+        <Card key={tk.id} id={`t${tk.id}`} className="mb-4">
+          <TicketHead tk={tk} who />
+          <TicketThread tk={tk} staffView />
+          <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end">
+            <Form action={`/admin/tickets/${tk.id}/reply`} className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-end">
+              <Textarea name="body" required minLength={2} maxLength={3000} className="min-h-[52px] flex-1"
+                        placeholder={bi("اكتب ردّك للعميل…", "Write your reply…")} />
+              <Btn sm icon="chat" type="submit">{bi("رد", "Reply")}</Btn>
+            </Form>
+            <Form action={`/admin/tickets/${tk.id}/${tk.status === "closed" ? "open" : "close"}`} className="inline">
+              <Btn sm variant={tk.status === "closed" ? "ghost" : "green"}
+                   icon={tk.status === "closed" ? "refresh" : "check"} type="submit">
+                {tk.status === "closed" ? bi("افتحها تاني", "Reopen") : bi("تم الحل", "Resolve")}
+              </Btn>
+            </Form>
+          </div>
+        </Card>
+      )) : <Card><Empty icon="chat" title={bi("مفيش تذاكر هنا", "No tickets here")} /></Card>}
+    </>
+  );
+}
+
 /* -------------------------------------------------------------- المنصة */
 export function AdminPlatform() {
   const { plat = {}, running, capacity = null, managed = {} } = P;
@@ -303,7 +415,11 @@ export function AdminPlatform() {
   );
   return (
     <>
-      <PageHead icon="shield" title={t("platform_title")} sub={t("platform_sub")} />
+      {/* خارج نموذج الحفظ — لا نماذج متداخلة */}
+      <PageHead icon="shield" title={t("platform_title")} sub={t("platform_sub")}
+        actions={<Form action="/admin/platform/test-notify" className="inline">
+                   <Btn sm variant="ghost" icon="bolt" type="submit">{t("plat_test_btn")}</Btn>
+                 </Form>} />
       <Form action="">
         <Card className="mb-5">
           <SectionTitle icon="wallet">{t("plat_payment")}</SectionTitle>

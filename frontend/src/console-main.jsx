@@ -6,8 +6,8 @@ import "./index.css";
 
 import Dashboard from "./app/views/Dashboard.jsx";
 import BotDetail from "./app/views/BotDetail.jsx";
-import { Account, Settings, Billing, Pricing, Subscribe, RequestBot } from "./app/views/Account.jsx";
-import { AdminOverview, AdminUsers, AdminPayments, AdminRequests, AdminPlatform } from "./app/views/Admin.jsx";
+import { Account, Settings, Billing, Pricing, Subscribe, RequestBot, Support } from "./app/views/Account.jsx";
+import { AdminOverview, AdminUsers, AdminPayments, AdminRequests, AdminTickets, AdminPlatform } from "./app/views/Admin.jsx";
 import { FlowBuilder, Broadcast, Analytics, Auth, Recover } from "./app/views/Tools.jsx";
 import { AdminPricing, AdminPromos, AdminAffiliates, Affiliate } from "./app/views/Revenue.jsx";
 import { Terms, Privacy } from "./app/views/Legal.jsx";
@@ -29,10 +29,12 @@ const VIEWS = {
   pricing:        Pricing,
   subscribe:      Subscribe,
   request_bot:    RequestBot,
+  support:        Support,
   admin_overview: AdminOverview,
   admin_users:    AdminUsers,
   admin_payments: AdminPayments,
   admin_requests: AdminRequests,
+  admin_tickets:  AdminTickets,
   admin_platform: AdminPlatform,
   admin_pricing:    AdminPricing,
   admin_promos:     AdminPromos,

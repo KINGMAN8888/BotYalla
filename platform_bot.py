@@ -3,12 +3,13 @@
 import json, logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
-                          TypeHandler)
+                          MessageHandler, TypeHandler, filters)
 import database as db
 import managed_bots
 import plans
 import i18n
 import mailer
+import support_desk
 
 log = logging.getLogger("platform_bot")
 
@@ -47,13 +48,62 @@ def build_caption(payment, username, auto_verdict):
     )
 
 async def _send_alert_async(app, admin_id, payment, username, caption, screenshot_path):
+    # تعليق الصورة حدّه 1024 حرفاً في تليجرام — تجاوزه يُسقط التنبيه كله
     with open(screenshot_path, "rb") as f:
-        msg = await app.bot.send_photo(int(admin_id), InputFile(f), caption=caption, reply_markup=_kb(payment["id"]))
+        msg = await app.bot.send_photo(int(admin_id), InputFile(f), caption=caption[:1024],
+                                       reply_markup=_kb(payment["id"]))
     return msg.message_id
 
 
 def _is_admin(uid):
     return str(uid) in db.admin_chat_ids()
+
+
+# ---------------------------------------------------------------- تذاكر الدعم
+async def on_ticket_close(update, ctx):
+    """زرّ «✅ تم الحل» تحت تنبيه التذكرة — للأدمن وحده."""
+    q = update.callback_query
+    if not _is_admin(q.from_user.id):
+        await q.answer("غير مصرّح / Not authorized", show_alert=True)
+        return
+    await q.answer()
+    try:
+        tid = int(q.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return
+    if db.set_ticket_status(tid, "closed"):
+        try:
+            await q.edit_message_text((q.message.text or "") + "\n\n✅ اتقفلت / Resolved")
+        except Exception:
+            pass
+
+
+async def on_admin_reply(update, ctx):
+    """Reply من الأدمن على تنبيه تذكرة (#T<id>) ← يُحفظ ويصل للعميل."""
+    msg = update.message
+    if (msg is None or msg.from_user is None or msg.reply_to_message is None
+            or not _is_admin(msg.from_user.id)):
+        return
+    ref = msg.reply_to_message
+    tid = support_desk.ticket_id_from(ref.text or ref.caption)
+    body = (msg.text or "").strip()[:support_desk.BODY_MAX]
+    if not tid or not body:
+        return
+    res = support_desk.record_staff_reply(tid, body, "telegram")
+    if not res:
+        await msg.reply_text(f"⚠️ التذكرة #T{tid} مش موجودة.")
+        return
+    via = []
+    if res["chat"]:
+        try:
+            await ctx.bot.send_message(int(res["chat"]), res["text"])
+            via.append("تليجرام")
+        except Exception:
+            log.warning("ticket #T%s reply to the customer's Telegram failed", tid)
+    if res["emailed"]:
+        via.append("الإيميل")
+    await msg.reply_text(f"✅ ردّك اتسجّل على #T{tid} وظهر للعميل في صفحة الدعم"
+                         + (f" + {' و'.join(via)}" if via else "") + ".")
 
 def stats_text():
     st = db.platform_stats()
@@ -167,6 +217,8 @@ def register(app: Application):
             pass
         # إشعار المستخدم عبر بوتاته غير متاح هنا؛ الحالة تظهر في لوحته.
     app.add_handler(CallbackQueryHandler(on_decision, pattern=r"^pay_(approve|reject):"))
+    app.add_handler(CallbackQueryHandler(on_ticket_close, pattern=r"^tk_close:\d+$"))
+    app.add_handler(MessageHandler(filters.TEXT & filters.REPLY & ~filters.COMMAND, on_admin_reply))
     register_admin_commands(app)
     # تحديثات managed_bot (ورسالة managed_bot_created) — مجموعة -1 مستقلة: المعالج
     # يطابق كل تحديث ويتجاهل ما ليس إنشاء بوت، فلا يحجب الأوامر في المجموعة 0.
