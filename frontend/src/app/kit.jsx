@@ -76,6 +76,18 @@ export function Card({ children, className = "", spot = false, as: As = "div", .
   );
 }
 
+/* صورة الحساب أو أول حرف من الاسم على تدرّج العلامة — في الهيدر والقائمة و«حسابي» */
+export function Avatar({ src, name = "", size = 36, className = "" }) {
+  const letter = (name || "?").trim().charAt(0).toUpperCase();
+  const style = { width: size, height: size, fontSize: Math.round(size * 0.42) };
+  return src
+    ? <img src={src} alt="" style={style}
+           className={`shrink-0 rounded-full object-cover shadow-[0_0_0_2px_rgb(255_255_255/0.12)] ${className}`} />
+    : <span style={style}
+            className={`grid shrink-0 place-items-center rounded-full font-extrabold text-[#07090F]
+                        bg-[linear-gradient(135deg,#8FE9FF,#B9AFFF)] ${className}`}>{letter}</span>;
+}
+
 /* ---------------------------------------------------------------- عناوين */
 export function PageHead({ icon, title, sub, actions }) {
   return (

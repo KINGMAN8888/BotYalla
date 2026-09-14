@@ -321,6 +321,30 @@ class OAuthTests(unittest.TestCase):
         self.assertIn("/account", r.headers["Location"])
         self.assertEqual(db.list_identities(uid), ["facebook"])
 
+    def test_unlinking_never_locks_the_owner_out_and_sticks(self):
+        c = _client()
+        self._go(c, "google", {"sub": "g-solo", "email": "solo@gmail.com", "email_verified": True, "name": "Solo"})
+        form = signup("solo_user")
+        for k in ("email", "password", "password2"):
+            form.pop(k)
+        c.post("/register/complete", data=form)
+        uid = db.get_user_by_name("solo_user")["id"]
+        c.post("/account/unlink/google", data={"csrf_token": "tk"})
+        self.assertEqual(db.list_identities(uid), ["google"], "آخر طريقة دخول لحساب بلا كلمة مرور لا تُفك")
+        db.set_setting(uid, "pw_set", "1")                              # ضبط كلمة مرور بـ«نسيت كلمة المرور»
+        c.post("/account/unlink/google", data={"csrf_token": "tk"})
+        self.assertEqual(db.list_identities(uid), [])
+        # الدخول بنفس جوجل بعد الفك لا يعيد الربط بصمت بالبريد
+        r = self._go(_client(), "google", {"sub": "g-solo", "email": "solo@gmail.com", "email_verified": True, "name": "S"})
+        self.assertIn("/login", r.headers["Location"])
+        self.assertEqual(db.list_identities(uid), [])
+        # الربط الصريح من «حسابي» يرجعه
+        r = self._go(c, "google", {"sub": "g-solo", "email": "solo@gmail.com", "email_verified": True, "name": "S"},
+                     link=True)
+        self.assertEqual(db.list_identities(uid), ["google"])
+        self.assertEqual(c.post("/account/unlink/facebook", data={"csrf_token": "tk"}).status_code, 302,
+                         "فك ما ليس مربوطاً يرجع برسالة لا خطأ")
+
     def test_buttons_hide_without_keys(self):
         os.environ["GOOGLE_CLIENT_ID"] = ""
         try:
@@ -430,6 +454,67 @@ class PasswordEverywhereTests(unittest.TestCase):
         adm.post("/admin/users/add", data={"username": "staff_new", "password": "Staff#2026x", "role": "support",
                                            "csrf_token": "tk"})
         self.assertIsNotNone(db.get_user_by_name("staff_new"))
+
+
+class AvatarTests(unittest.TestCase):
+    """الصورة الشخصية/اللوجو: تُعاد رسمها، وتُقدَّم لصاحبها والفريق وحدهم، وتُحذف من القرص."""
+
+    @classmethod
+    def setUpClass(cls):
+        _boot()
+
+    def setUp(self):
+        _fresh()
+
+    @staticmethod
+    def _png(w=600, h=300):
+        import io
+        from PIL import Image
+        b = io.BytesIO()
+        Image.new("RGB", (w, h), (120, 80, 200)).save(b, "PNG")
+        return b.getvalue()
+
+    def _up(self, c, data, fname="me.png"):
+        import io
+        return c.post("/account/avatar", data={"avatar": (io.BytesIO(data), fname), "csrf_token": "tk"},
+                      content_type="multipart/form-data")
+
+    def test_upload_is_redrawn_served_privately_and_removable(self):
+        import io
+        from PIL import Image
+        uid = db.create_user("pic_user", auth.hash_password(STRONG_PW), email="pic@x.co")
+        c = _client()
+        c.post("/login", data={"username": "pic_user", "password": STRONG_PW, "csrf_token": "tk"})
+        self._up(c, self._png())
+        name = db.get_setting(uid, "avatar")
+        self.assertTrue(name and name.endswith(".webp"))
+        r = c.get(f"/u/{uid}/avatar")
+        self.assertEqual(r.status_code, 200)
+        im = Image.open(io.BytesIO(r.data))
+        self.assertEqual((im.format, im.size), ("WEBP", (256, 256)), "مربع نظيف لا الملف الأصلي")
+        self.assertIn("private", r.headers["Cache-Control"])
+        r.close()                      # ويندوز لا يحذف ملفاً ما زال مفتوحاً في الاستجابة
+        self.assertIn(f"/u/{uid}/avatar", c.get("/account").get_data(as_text=True), "الصورة في حمولة الهيدر")
+        db.create_user("pic_other", auth.hash_password(STRONG_PW))
+        o = _client()
+        o.post("/login", data={"username": "pic_other", "password": STRONG_PW, "csrf_token": "tk"})
+        self.assertEqual(o.get(f"/u/{uid}/avatar").status_code, 404, "صورة غيرك ليست لك")
+        self._up(c, b"<svg onload=alert(1)></svg>", "evil.png")
+        self.assertEqual(db.get_setting(uid, "avatar"), name, "ملف ليس صورة يُرفض ولا يمسّ الحالية")
+        self._up(c, self._png(), "new.png")
+        self.assertFalse(os.path.exists(os.path.join(web.AVATAR_DIR, name)), "الصورة القديمة تُحذف من القرص")
+        c.post("/account/avatar/remove", data={"csrf_token": "tk"})
+        self.assertFalse(db.get_setting(uid, "avatar"))
+        self.assertEqual(c.get(f"/u/{uid}/avatar").status_code, 404)
+
+    def test_the_admin_can_see_a_customers_picture(self):
+        uid = db.create_user("pic_cust", auth.hash_password(STRONG_PW))
+        c = _client()
+        c.post("/login", data={"username": "pic_cust", "password": STRONG_PW, "csrf_token": "tk"})
+        self._up(c, self._png(200, 200))
+        adm = _client()
+        adm.post("/login", data={"username": "admin", "password": ADMIN_PW, "csrf_token": "tk"})
+        self.assertEqual(adm.get(f"/u/{uid}/avatar").status_code, 200)
 
 
 if __name__ == "__main__":

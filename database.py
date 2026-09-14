@@ -1107,6 +1107,12 @@ def list_identities(user_id):
         return [r[0] for r in c.execute("SELECT provider FROM user_identities WHERE user_id=?",
                                         (user_id,)).fetchall()]
 
+def remove_identity(user_id, provider):
+    """فك ربط هوية خارجية. يرجّع عدد ما حُذف (0 = لم تكن مربوطة)."""
+    with get_conn() as c:
+        return c.execute("DELETE FROM user_identities WHERE user_id=? AND provider=?",
+                         (user_id, provider)).rowcount
+
 # ---------- users ----------
 def create_user(username, pw_hash, email=None):
     with get_conn() as c:

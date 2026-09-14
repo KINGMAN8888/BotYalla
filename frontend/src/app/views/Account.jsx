@@ -1,9 +1,10 @@
 import { useState } from "react";
 import {
   BY, P, t, bi, Icon, Card, Btn, Field, Input, Select, Textarea, Form, Grid, Stat,
-  Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate, daysLeft,
+  Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate, daysLeft, Avatar,
 } from "../kit.jsx";
-import { UsernameField, PasswordField, PhoneField, EntityPicker, SocialButtons, splitPhone } from "../auth.jsx";
+import { UsernameField, PasswordField, PhoneField, EntityPicker, splitPhone, entityLabel,
+         GoogleG, FacebookF } from "../auth.jsx";
 
 /* ------------------------------------------------- تذاكر الدعم (مشتركة مع الأدمن) */
 export const TICKET_KIND = {
@@ -143,15 +144,70 @@ export function Support() {
   );
 }
 
-/* ------------------------------------------------------------- حسابي */
+/* ------------------------------------------------------------- حسابي
+   ملف شخصي أعلى الصفحة (الهوية + التحقق + اكتمال الحساب)، ثم عمودان بمسافات ثابتة:
+   النماذج (الدخول والأمان · بيانات النشاط) والحالة (التحقق · طرق الدخول · التنبيهات ·
+   البريد) — ويصيران عموداً واحداً على الشاشات الأصغر. */
+const ROW = "flex flex-wrap items-center gap-3 rounded-xl bg-white/[0.03] px-3.5 py-3 " +
+            "shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]";
+const NOTE = "m-0 text-[12.5px] leading-relaxed text-ink-3";
+
+/* الصورة الشخصية / اللوجو: الملف يُرسل فور اختياره، والخادم يعيد رسمه مربعاً نظيفاً (Pillow) */
+function AvatarUpload({ name, entity }) {
+  const src = BY.user.avatar;
+  const biz = entity === "company" || entity === "institution";
+  const hint = biz ? bi("ارفع لوجو شركتك", "Upload your company logo") : bi("ارفع صورتك الشخصية", "Upload your photo");
+  return (
+    <div className="flex shrink-0 flex-col items-center gap-1.5">
+      <Form action="/account/avatar" encType="multipart/form-data" className="group relative">
+        <label className="relative block cursor-pointer" title={`${hint} — JPG · PNG · WebP (3MB)`}>
+          <Avatar src={src} name={name} size={80}
+                  className="!rounded-2xl shadow-[0_12px_30px_-12px_rgb(124_108_246/0.9)] transition-[filter] group-hover:brightness-90" />
+          <span className="absolute -bottom-1.5 -end-1.5 grid size-8 place-items-center rounded-full bg-[#0B1020] text-au-cyan
+                           shadow-[0_0_0_2px_rgb(124_108_246/0.6)] transition-transform duration-300 group-hover:scale-110">
+            <Icon name="camera" size={15} />
+          </span>
+          <input type="file" name="avatar" accept="image/png,image/jpeg,image/webp" className="sr-only"
+                 aria-label={hint} onChange={(e) => e.target.files?.length && e.target.form.requestSubmit()} />
+        </label>
+      </Form>
+      {src ? (
+        <Form action="/account/avatar/remove" confirm={bi("حذف الصورة؟", "Remove the picture?")}>
+          <button type="submit" className="cursor-pointer border-0 bg-transparent p-0 text-[11.5px] text-ink-3 hover:text-red-300">
+            {bi("حذف الصورة", "Remove")}
+          </button>
+        </Form>
+      ) : <span className="text-[11px] text-ink-3">{biz ? bi("لوجو الشركة", "Company logo") : bi("صورتك", "Your photo")}</span>}
+    </div>
+  );
+}
+
+function VerifyBadge({ ok }) {
+  return ok ? <Pill tone="on" dot>{bi("مؤكَّد", "Verified")}</Pill>
+            : <Pill tone="warn">{bi("غير مؤكَّد", "Not verified")}</Pill>;
+}
+
 export function Account() {
   const me = P.me || {};
   const [link, setLink] = useState(null);
   const [err, setErr] = useState(null);
   const [phoneLink, setPhoneLink] = useState(null);
   const [phoneErr, setPhoneErr] = useState(null);
+  const [changePw, setChangePw] = useState(false);
   const [pcc, pnum] = splitPhone(me.phone, P.countries);
   const oauthOn = P.oauth && (P.oauth.google || P.oauth.facebook);
+  const ids = P.identities || [];
+  const lastMethod = P.pwSet === false && ids.length <= 1;   // آخر طريقة دخول — لا تُفك
+
+  /* اكتمال الحساب: كل خطوة ناقصة رابط لمكانها في الصفحة */
+  const steps = [
+    [!!me.email_verified_at, bi("أكّد بريدك", "Verify your email"), "#verify"],
+    [!!me.phone, bi("أضف رقم موبايلك", "Add your mobile"), "#business"],
+    [!!me.phone_verified_at, bi("أكّد رقمك", "Verify your number"), "#verify"],
+    [!!(me.entity_type && me.age), bi("أكمل بيانات النشاط", "Complete business details"), "#business"],
+    [!!P.tgLinked, bi("اربط تليجرام للتنبيهات", "Link Telegram alerts"), "#alerts"],
+  ];
+  const pct = Math.round((steps.filter((s) => s[0]).length / steps.length) * 100);
 
   /* تأكيد الهاتف مجاناً: رابط لبوت المنصة، والعميل يضغط «شارك رقمي» */
   async function verifyPhone() {
@@ -176,148 +232,279 @@ export function Account() {
 
   return (
     <>
-      <PageHead icon="settings" title={t("account_title")} />
-      <Card className="max-w-[560px]">
-        <Pill tone="mute"><Icon name="shield" size={13} />{t("role_" + (me.role || "user"))}</Pill>
-        <Form action="" className="mt-5">
-          <div className="mb-4"><UsernameField defaultValue={me.username} current={me.username} /></div>
-          <Field label={t("email")} className="mb-4"
-                 hint={me.email ? (me.email_verified_at ? null : bi("تغيير البريد يرسل كود تأكيد للبريد الجديد.", "Changing it sends a code to the new address.")) : t("email_hint")}>
-            <Input type="email" name="email" defaultValue={me.email || ""} autoComplete="email" dir="ltr" />
-          </Field>
-          <div className="mb-5">
-            <PasswordField name="new_password" confirmName="new_password2" label={t("new_password")} optional
-                           username={me.username} email={me.email || ""} />
-          </div>
-          {P.pwSet === false && (
-            <p className="mb-4 mt-0 rounded-xl bg-white/[0.04] px-3.5 py-3 text-[12.5px] leading-relaxed text-ink-2">
-              {bi("حسابك مسجّل بجوجل/فيسبوك ولسه ملوش كلمة مرور. عشان تعدّل البيانات دي اضبط واحدة من ",
-                  "You signed up with Google/Facebook and have no password yet. To edit these, set one via ")}
-              <a href={BY.urls.forgot} className="font-bold text-au-cyan">{t("forgot_link")}</a>.
-            </p>
-          )}
-          <div className="my-5 h-px bg-white/10" />
-          <Field label={t("current_password")}
-                 hint={bi("مطلوبة لتأكيد أي تعديل.", "Required to confirm any change.")}>
-            <Input type="password" name="current_password" required autoComplete="current-password" />
-          </Field>
-          <div className="mt-6"><Btn icon="check" type="submit">{t("update_account")}</Btn></div>
-        </Form>
-      </Card>
+      <PageHead icon="settings" title={t("account_title")}
+        sub={bi("بياناتك، وأمان حسابك، وطرق وصولنا ليك — في مكان واحد.",
+                "Your details, account security and how we reach you — in one place.")} />
 
-      {/* التحقق: البريد بكود، والهاتف مجاناً عبر تليجرام */}
-      <Card className="max-w-[560px]">
-        <SectionTitle icon="shield">{bi("التحقق من الحساب", "Account verification")}</SectionTitle>
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-3 rounded-xl bg-white/[0.03] px-3.5 py-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
-            <Icon name="mail" size={17} className="text-au-cyan" />
-            <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink" dir="ltr">{me.email || bi("لا يوجد بريد", "No email")}</span>
-            {me.email && (me.email_verified_at
-              ? <Pill tone="on" dot>{bi("مؤكَّد", "Verified")}</Pill>
-              : <Form action="/verify-email/resend" className="inline"><Btn sm variant="ghost" icon="mail" type="submit">{bi("أكّد البريد", "Verify email")}</Btn></Form>)}
+      {/* ------------------------------------------------ الملف الشخصي */}
+      <Card className="mb-5">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-4">
+            <AvatarUpload name={me.username} entity={me.entity_type} />
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="m-0 truncate text-[21px] font-extrabold tracking-tight text-ink" dir="auto">{me.username}</h2>
+                <Pill tone="mute"><Icon name="shield" size={12} />{t("role_" + (me.role || "user"))}</Pill>
+                {me.entity_type && <Pill tone="mute">{entityLabel(me.entity_type)}</Pill>}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 text-[13px] text-ink-3">
+                <span className="inline-flex min-w-0 items-center gap-1.5">
+                  <Icon name="mail" size={14} />
+                  <span className="truncate" dir="ltr">{me.email || bi("بلا بريد", "No email")}</span>
+                  {me.email_verified_at && <Icon name="check" size={13} className="text-au-teal" />}
+                </span>
+                {me.phone && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Icon name="phone" size={14} /><span dir="ltr">{me.phone}</span>
+                    {me.phone_verified_at && <Icon name="check" size={13} className="text-au-teal" />}
+                  </span>
+                )}
+                {me.created_at && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Icon name="clock" size={14} />{bi("عضو منذ", "Member since")} <span className="tnum">{fmtDate(me.created_at)}</span>
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3 rounded-xl bg-white/[0.03] px-3.5 py-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
-            <Icon name="phone" size={17} className="text-au-cyan" />
-            <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink" dir="ltr">{me.phone || bi("أضف رقمك في «بيانات النشاط» تحت", "Add your number under “Business details”")}</span>
-            {me.phone && (me.phone_verified_at
-              ? <Pill tone="on" dot>{bi("مؤكَّد", "Verified")}</Pill>
-              : phoneLink
-                ? <Btn sm variant="green" icon="play" href={phoneLink} target="_blank" rel="noopener">{bi("افتح تليجرام وشارك رقمك", "Open Telegram and share")}</Btn>
-                : <Btn sm variant="ghost" icon="phone" type="button" onClick={verifyPhone} disabled={!P.hasPlatformBot}>{bi("أكّد عن طريق تليجرام", "Verify via Telegram")}</Btn>)}
+
+          <div className="w-full lg:w-[320px]">
+            <div className="mb-2 flex items-baseline justify-between gap-3 text-[13px]">
+              <span className="font-bold text-ink-2">{bi("اكتمال الحساب", "Account completion")}</span>
+              <span className={`tnum text-[16px] font-extrabold ${pct === 100 ? "text-au-teal" : "text-ink"}`}>{pct}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-white/[0.08]">
+              <div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)] transition-[width] duration-700"
+                   style={{ width: `${pct}%` }} />
+            </div>
+            {pct < 100 ? (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {steps.filter((s) => !s[0]).map(([, label, href]) => (
+                  <a key={label} href={href}
+                     className="rounded-full bg-white/[0.05] px-2.5 py-1 text-[11.5px] font-bold text-ink-2 no-underline
+                                transition-colors hover:bg-au-violet/25 hover:text-ink">+ {label}</a>
+                ))}
+              </div>
+            ) : (
+              <p className="mb-0 mt-3 text-[12.5px] font-bold text-au-teal">
+                {bi("حسابك مكتمل وموثَّق ✓", "Your account is complete and verified ✓")}
+              </p>
+            )}
           </div>
-          {phoneErr && <p className="m-0 text-[12.5px] text-red-300">{phoneErr}</p>}
-          <p className="m-0 text-[12px] leading-relaxed text-ink-3">
-            {bi("تأكيد الهاتف مجاني: بتضغط «شارك رقمي» في بوت المنصة على تليجرام، وتليجرام بيبعت رقم حسابك نفسه — لازم يكون نفس الرقم المسجّل هنا. ومعاه بيتربط تليجرام لتنبيهات اشتراكك.",
-                "Phone verification is free: tap “Share my number” in the platform bot on Telegram, which sends your own account's number — it must match the one here. It also links Telegram for your subscription alerts.")}
-          </p>
         </div>
       </Card>
 
-      {/* بيانات النشاط — بلا كلمة مرور: ليست بيانات دخول */}
-      <Card className="max-w-[560px]">
-        <SectionTitle icon="user">{bi("بيانات النشاط", "Business details")}</SectionTitle>
-        <Form action="/account/profile" className="flex flex-col gap-5">
-          <EntityPicker defaultValue={me.entity_type || ""} />
-          <div className="grid gap-5 sm:grid-cols-[120px_1fr]">
-            <Field label={bi("السن", "Age")}>
-              <Input type="number" name="age" required min="18" max="100" inputMode="numeric" dir="ltr" defaultValue={me.age || ""} />
-            </Field>
-            <PhoneField cc={pcc} value={pnum}
-                        hint={me.phone_verified_at ? bi("تغيير الرقم يلغي تأكيده.", "Changing the number removes its verification.") : null} />
-          </div>
-          <div><Btn icon="check" type="submit">{t("save")}</Btn></div>
-        </Form>
-      </Card>
-
-      {oauthOn && (
-        <Card className="max-w-[560px]">
-          <SectionTitle icon="link">{bi("طرق الدخول", "Sign-in methods")}</SectionTitle>
-          <div className="flex flex-col gap-2.5">
-            {["google", "facebook"].filter((p) => P.oauth[p]).map((p) => (
-              <div key={p} className="flex items-center gap-3 rounded-xl bg-white/[0.03] px-3.5 py-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
-                <b className="flex-1 text-[13.5px] text-ink">{p === "google" ? "Google" : "Facebook"}</b>
-                {(P.identities || []).includes(p)
-                  ? <Pill tone="on" dot>{bi("مربوط", "Linked")}</Pill>
-                  : <Btn sm variant="ghost" icon="link" href={`/auth/${p}?link=1`}>{bi("اربط", "Link")}</Btn>}
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+        {/* ============================================ العمود الأول: النماذج */}
+        <div className="flex min-w-0 flex-col gap-5">
+          <Card id="login" className="scroll-mt-24">
+            <SectionTitle icon="key">{bi("بيانات الدخول والأمان", "Sign-in & security")}</SectionTitle>
+            <Form action="">
+              <div className="grid gap-5 md:grid-cols-2">
+                <UsernameField defaultValue={me.username} current={me.username} />
+                <Field label={
+                  <span className="flex items-center justify-between gap-2">
+                    {t("email")}{me.email && <VerifyBadge ok={!!me.email_verified_at} />}
+                  </span>}
+                  hint={me.email ? bi("تغيير البريد يرسل كود تأكيد للبريد الجديد.", "Changing it sends a code to the new address.")
+                                 : t("email_hint")}>
+                  <Input type="email" name="email" defaultValue={me.email || ""} autoComplete="email" dir="ltr" />
+                </Field>
               </div>
-            ))}
-          </div>
-          <p className="mb-0 mt-3 text-[12px] leading-relaxed text-ink-3">
-            {bi("بعد الربط تقدر تدخل بضغطة من غير كلمة المرور.", "Once linked, you can sign in with one tap — no password needed.")}
-          </p>
-        </Card>
-      )}
 
-      {/* أخبار وعروض بالبريد — موافقة صريحة، ورسائل الحساب المهمة لا تتأثر */}
-      <Card className="max-w-[560px]">
-        <SectionTitle icon="mail"
-          extra={P.emailNews ? <Pill tone="on" dot>{bi("مفعّلة", "On")}</Pill> : <Pill tone="mute">{bi("متوقفة", "Off")}</Pill>}>
-          {bi("أخبار وعروض بالبريد", "News & offers by email")}
-        </SectionTitle>
-        <p className="mt-0 mb-4 text-[13px] leading-relaxed text-ink-3">
-          {bi("ميزات جديدة وعروض خصم ونصائح لبوتك — مرة أو اثنتين في الشهر على الأكثر. رسائل حسابك المهمة (الإيصالات، استرجاع كلمة المرور، تذكير الاشتراك) تصلك في كل الأحوال.",
-              "New features, discounts and tips for your bot — once or twice a month at most. Important account emails (receipts, password reset, renewal reminders) reach you either way.")}
-        </p>
-        <Form action="/account/email-prefs">
-          <input type="hidden" name="email_news" value={P.emailNews ? "0" : "1"} />
-          <Btn variant={P.emailNews ? "ghost" : "primary"} icon="mail" type="submit" disabled={!me.email && !P.emailNews}>
-            {P.emailNews ? bi("أوقف الأخبار والعروض", "Turn off news & offers") : bi("فعّل الأخبار والعروض", "Turn on news & offers")}
-          </Btn>
-        </Form>
-        {!me.email && (
-          <p className="mb-0 mt-2 text-[12px] text-ink-3">{bi("أضف إيميلك في النموذج فوق أولاً.", "Add your email in the form above first.")}</p>
-        )}
-      </Card>
+              <div className="mt-5 rounded-2xl bg-white/[0.025] p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+                {changePw ? (
+                  <>
+                    <PasswordField name="new_password" confirmName="new_password2" label={t("new_password")} optional
+                                   username={me.username} email={me.email || ""} />
+                    <button type="button" onClick={() => setChangePw(false)}
+                      className="mt-4 cursor-pointer border-0 bg-transparent p-0 text-[12.5px] text-ink-3 hover:text-ink">
+                      {bi("إلغاء تغيير كلمة المرور", "Cancel password change")}
+                    </button>
+                  </>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-au-violet/15 text-au-cyan">
+                      <Icon name="lock" size={18} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <b className="block text-[14px] text-ink">{t("password")}</b>
+                      <span className="text-[12.5px] text-ink-3">
+                        {P.pwSet === false
+                          ? bi("حسابك مسجّل بجوجل/فيسبوك ولسه ملوش كلمة مرور.", "You signed up with Google/Facebook and have no password yet.")
+                          : bi("8+ أحرف فيها حرف كبير وصغير ورقم ورمز.", "8+ characters with upper, lower, a number and a symbol.")}
+                      </span>
+                    </div>
+                    {P.pwSet === false
+                      ? <Btn sm variant="ghost" icon="key" href={BY.urls.forgot}>{bi("اضبط كلمة مرور", "Set a password")}</Btn>
+                      : <Btn sm variant="ghost" icon="key" type="button" onClick={() => setChangePw(true)}>{bi("تغيير كلمة المرور", "Change password")}</Btn>}
+                  </div>
+                )}
+              </div>
 
-      {/* قناة تنبيهات الاشتراك — بدونها لا يعلم العميل بانتهاء اشتراكه */}
-      <Card className="max-w-[560px]">
-        <SectionTitle icon="bot"
-          extra={P.tgLinked ? <Pill tone="on" dot>{t("tg_link_ok")}</Pill>
-               : P.tgFallback ? <Pill tone="warn">{t("aff_active")}</Pill>
-               : <Pill tone="off">{t("tg_not_synced")}</Pill>}>
-          {t("tg_link_title")}
-        </SectionTitle>
-        <p className="mt-0 mb-4 text-[13px] leading-relaxed text-ink-3">
-          {P.tgLinked ? t("tg_link_desc")
-            : P.tgFallback ? t("tg_link_via_bot")
-            : t("tg_link_none")}
-        </p>
-        {!P.tgLinked && (
-          link ? (
-            <Btn variant="green" icon="play" href={link} target="_blank" rel="noopener">
-              {t("tg_link_open")}
-            </Btn>
-          ) : (
-            <Btn icon="link" type="button" onClick={linkTelegram} disabled={!P.hasPlatformBot}>
-              {t("tg_link_btn")}
-            </Btn>
-          )
-        )}
-        {!P.hasPlatformBot && (
-          <p className="mt-3 mb-0 text-[12.5px] text-ink-3">{t("tg_link_no_bot")}</p>
-        )}
-        {err && <p className="mt-3 mb-0 text-[13px] font-bold text-red-300">{err}</p>}
-      </Card>
+              {P.pwSet === false ? (
+                <p className={`${NOTE} mt-4`}>
+                  {bi("عشان تعدّل اسم المستخدم أو البريد، اضبط كلمة مرور الأول من ", "To edit your username or email, first set a password via ")}
+                  <a href={BY.urls.forgot} className="font-bold text-au-cyan">{t("forgot_link")}</a>.
+                </p>
+              ) : (
+                <div className="mt-5 border-t border-white/10 pt-5">
+                  <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <Field label={t("current_password")}>
+                      <Input type="password" name="current_password" required autoComplete="current-password" />
+                    </Field>
+                    <Btn icon="check" type="submit">{t("update_account")}</Btn>
+                  </div>
+                  <p className={`${NOTE} mt-2`}>{bi("مطلوبة لتأكيد أي تعديل في البيانات دي.", "Required to confirm any change here.")}</p>
+                </div>
+              )}
+            </Form>
+          </Card>
+
+          {/* بيانات النشاط — بلا كلمة مرور: ليست بيانات دخول */}
+          <Card id="business" className="scroll-mt-24">
+            <SectionTitle icon="user">{bi("بيانات النشاط", "Business details")}</SectionTitle>
+            <Form action="/account/profile" className="flex flex-col gap-5">
+              <EntityPicker defaultValue={me.entity_type || ""} />
+              <div className="grid gap-5 md:grid-cols-[130px_minmax(0,1fr)]">
+                <Field label={bi("السن", "Age")}>
+                  <Input type="number" name="age" required min="18" max="100" inputMode="numeric" dir="ltr"
+                         defaultValue={me.age || ""} />
+                </Field>
+                <PhoneField cc={pcc} value={pnum}
+                            hint={me.phone_verified_at ? bi("تغيير الرقم يلغي تأكيده.", "Changing the number removes its verification.") : null} />
+              </div>
+              <div><Btn icon="check" type="submit">{t("save")}</Btn></div>
+            </Form>
+          </Card>
+        </div>
+
+        {/* ============================================ العمود الثاني: الحالة والتواصل */}
+        <div className="flex min-w-0 flex-col gap-5">
+          <Card id="verify" className="scroll-mt-24">
+            <SectionTitle icon="shield">{bi("التحقق من الحساب", "Account verification")}</SectionTitle>
+            <div className="flex flex-col gap-2.5">
+              <div className={ROW}>
+                <Icon name="mail" size={17} className="text-au-cyan" />
+                <span className="min-w-0 flex-1">
+                  <b className="block text-[13px] text-ink">{t("email")}</b>
+                  <span className="block truncate text-[12.5px] text-ink-3" dir="ltr">{me.email || "—"}</span>
+                </span>
+                {me.email && (me.email_verified_at
+                  ? <VerifyBadge ok />
+                  : <Form action="/verify-email/resend" className="inline">
+                      <Btn sm variant="ghost" icon="mail" type="submit">{bi("أكّد البريد", "Verify")}</Btn>
+                    </Form>)}
+              </div>
+              <div className={ROW}>
+                <Icon name="phone" size={17} className="text-au-cyan" />
+                <span className="min-w-0 flex-1">
+                  <b className="block text-[13px] text-ink">{bi("رقم الموبايل", "Mobile number")}</b>
+                  <span className="block truncate text-[12.5px] text-ink-3" dir="ltr">{me.phone || "—"}</span>
+                </span>
+                {!me.phone ? (
+                  <Btn sm variant="ghost" icon="plus" href="#business">{bi("أضف رقمك", "Add number")}</Btn>
+                ) : me.phone_verified_at ? <VerifyBadge ok /> : phoneLink ? (
+                  <Btn sm variant="green" icon="play" href={phoneLink} target="_blank" rel="noopener">{bi("افتح تليجرام", "Open Telegram")}</Btn>
+                ) : (
+                  <Btn sm variant="ghost" icon="phone" type="button" onClick={verifyPhone} disabled={!P.hasPlatformBot}>
+                    {bi("أكّد عبر تليجرام", "Verify via Telegram")}
+                  </Btn>
+                )}
+              </div>
+            </div>
+            {phoneErr && <p className="mb-0 mt-3 text-[12.5px] text-red-300">{phoneErr}</p>}
+            {phoneLink && !me.phone_verified_at && (
+              <p className="mb-0 mt-3 text-[12.5px] leading-relaxed text-au-teal">
+                {bi("في البوت اضغط «شارك رقمي» — وبعدها حدّث الصفحة.", "In the bot tap “Share my number”, then refresh this page.")}
+              </p>
+            )}
+            <p className={`${NOTE} mt-3`}>
+              {bi("تأكيد الهاتف مجاني: بتضغط «شارك رقمي» في بوت المنصة، وتليجرام بيبعت رقم حسابك نفسه — لازم يطابق الرقم المسجّل.",
+                  "Phone verification is free: tap “Share my number” in the platform bot — Telegram sends your own number, which must match the one here.")}
+            </p>
+          </Card>
+
+          {oauthOn && (
+            <Card id="signin" className="scroll-mt-24">
+              <SectionTitle icon="link">{bi("طرق الدخول", "Sign-in methods")}</SectionTitle>
+              <div className="flex flex-col gap-2.5">
+                {["google", "facebook"].filter((p) => P.oauth[p]).map((p) => {
+                  const name = p === "google" ? "Google" : "Facebook";
+                  const linked = ids.includes(p);
+                  return (
+                    <div key={p} className={ROW}>
+                      <span className={`grid size-9 shrink-0 place-items-center rounded-xl ${p === "google" ? "bg-white" : "bg-[#1877F2]"}`}>
+                        {p === "google" ? <GoogleG /> : <FacebookF />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <b className="block text-[13.5px] text-ink">{name}</b>
+                        <span className="text-[12px] text-ink-3">
+                          {linked ? bi("تقدر تدخل بيه بضغطة", "One-tap sign-in is on") : bi("غير مربوط", "Not linked")}
+                        </span>
+                      </span>
+                      {linked ? (
+                        <Form action={`/account/unlink/${p}`} className="inline"
+                              confirm={bi(`فك ربط ${name}؟ مش هتقدر تدخل بيه لحد ما تربطه تاني.`,
+                                          `Unlink ${name}? You won't be able to sign in with it until you link it again.`)}>
+                          <Btn sm variant="ghost" icon="close" type="submit" disabled={lastMethod}>{bi("فك الربط", "Unlink")}</Btn>
+                        </Form>
+                      ) : <Btn sm variant="ghost" icon="link" href={`/auth/${p}?link=1`}>{bi("اربط", "Link")}</Btn>}
+                    </div>
+                  );
+                })}
+              </div>
+              {lastMethod && ids.length > 0 && (
+                <p className="mb-0 mt-3 text-[12.5px] leading-relaxed text-amber-200">
+                  {bi("ده طريق الدخول الوحيد لحسابك — اضبط كلمة مرور الأول عشان تقدر تفك الربط.",
+                      "This is your only way to sign in — set a password first to unlink it.")}
+                </p>
+              )}
+            </Card>
+          )}
+
+          {/* قناة تنبيهات الاشتراك — بدونها لا يعلم العميل بانتهاء اشتراكه */}
+          <Card id="alerts" className="scroll-mt-24">
+            <SectionTitle icon="bot"
+              extra={P.tgLinked ? <Pill tone="on" dot>{t("tg_link_ok")}</Pill>
+                   : P.tgFallback ? <Pill tone="warn">{t("aff_active")}</Pill>
+                   : <Pill tone="off">{t("tg_not_synced")}</Pill>}>
+              {t("tg_link_title")}
+            </SectionTitle>
+            <p className={`${NOTE} mb-4`}>
+              {P.tgLinked ? t("tg_link_desc") : P.tgFallback ? t("tg_link_via_bot") : t("tg_link_none")}
+            </p>
+            {!P.tgLinked && (
+              link ? (
+                <Btn variant="green" icon="play" href={link} target="_blank" rel="noopener">{t("tg_link_open")}</Btn>
+              ) : (
+                <Btn icon="link" type="button" onClick={linkTelegram} disabled={!P.hasPlatformBot}>{t("tg_link_btn")}</Btn>
+              )
+            )}
+            {!P.hasPlatformBot && <p className={`${NOTE} mt-3`}>{t("tg_link_no_bot")}</p>}
+            {err && <p className="mb-0 mt-3 text-[13px] font-bold text-red-300">{err}</p>}
+          </Card>
+
+          {/* أخبار وعروض بالبريد — موافقة صريحة، ورسائل الحساب المهمة لا تتأثر */}
+          <Card id="news" className="scroll-mt-24">
+            <SectionTitle icon="mail"
+              extra={P.emailNews ? <Pill tone="on" dot>{bi("مفعّلة", "On")}</Pill> : <Pill tone="mute">{bi("متوقفة", "Off")}</Pill>}>
+              {bi("أخبار وعروض بالبريد", "News & offers by email")}
+            </SectionTitle>
+            <p className={`${NOTE} mb-4`}>
+              {bi("ميزات جديدة وعروض خصم ونصائح لبوتك — مرة أو اثنتين في الشهر على الأكثر. رسائل حسابك المهمة (الإيصالات، استرجاع كلمة المرور، تذكير الاشتراك) تصلك في كل الأحوال.",
+                  "New features, discounts and tips for your bot — once or twice a month at most. Important account emails (receipts, password reset, renewal reminders) reach you either way.")}
+            </p>
+            <Form action="/account/email-prefs">
+              <input type="hidden" name="email_news" value={P.emailNews ? "0" : "1"} />
+              <Btn variant={P.emailNews ? "ghost" : "primary"} icon="mail" type="submit" disabled={!me.email && !P.emailNews}>
+                {P.emailNews ? bi("أوقف الأخبار والعروض", "Turn off news & offers") : bi("فعّل الأخبار والعروض", "Turn on news & offers")}
+              </Btn>
+            </Form>
+            {!me.email && <p className={`${NOTE} mt-2`}>{bi("أضف بريدك في «بيانات الدخول» أولاً.", "Add your email under “Sign-in” first.")}</p>}
+          </Card>
+        </div>
+      </div>
     </>
   );
 }

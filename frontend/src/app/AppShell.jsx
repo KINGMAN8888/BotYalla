@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { BY, t, Icon, bi } from "./kit.jsx";
+import { BY, t, Icon, bi, Avatar } from "./kit.jsx";
 import Backdrop from "../Backdrop.jsx";
 
 /* ============================================================================
@@ -54,10 +54,12 @@ function SideContent({ view }) {
 
       <div className="mt-auto flex flex-col gap-1 pt-5 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
         <a href={BY.urls.account}
-           className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-bold text-ink-2
-                      no-underline transition-colors hover:bg-white/[0.06] hover:text-ink">
-          <Icon name="users" size={18} className="text-ink-3" />
-          <span className="truncate">{BY.user.name}</span>
+           className="flex items-center gap-3 rounded-xl px-2.5 py-2 no-underline transition-colors hover:bg-white/[0.06]">
+          <Avatar src={BY.user.avatar} name={BY.user.name} size={34} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14px] font-bold text-ink" dir="auto">{BY.user.name}</span>
+            <span className="block truncate text-[11.5px] text-ink-3">{t("account_title")}</span>
+          </span>
         </a>
         {/* الخروج POST مع CSRF: رابط GET كان يُخرج المستخدم من أي موقع بـ <img src=".../logout"> */}
         <form method="post" action={BY.urls.logout} className="m-0">
@@ -202,11 +204,13 @@ export default function AppShell({ view, children }) {
                               transition-colors hover:text-au-cyan">
                   <Icon name="globe" size={15} />{BY.lang === "ar" ? "EN" : "ع"}
                 </a>
-                <a href={BY.urls.account}
-                   className="hidden items-center gap-2 rounded-full bg-white/[0.05] px-3.5 py-2 text-[13px]
+                {/* صورة الحساب في الشريط العلوي — تظهر على الموبايل أيضاً (الاسم من sm فأعلى) */}
+                <a href={BY.urls.account} title={BY.user.name}
+                   className="inline-flex items-center gap-2 rounded-full bg-white/[0.05] py-1 pe-1 ps-1 text-[13px]
                               font-bold text-ink-2 no-underline shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
-                              transition-colors hover:text-ink sm:inline-flex">
-                  <Icon name="users" size={14} className="text-au-cyan" />{BY.user.name}
+                              transition-colors hover:text-ink sm:pe-3.5">
+                  <Avatar src={BY.user.avatar} name={BY.user.name} size={30} />
+                  <span className="hidden max-w-[160px] truncate sm:inline" dir="auto">{BY.user.name}</span>
                 </a>
               </nav>
             </div>

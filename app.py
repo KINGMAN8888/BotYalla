@@ -866,6 +866,7 @@ def oauth_callback(provider):
                   else f"That {name} account is linked to another BotYalla account.", "error")
         else:
             db.add_identity(provider, prof["sub"], uid(), prof["email"])
+            db.set_setting(uid(), f"oauth_off_{provider}", "0")          # ربط صريح يلغي «فكّيته»
             flash(f"✅ اتربط {name} بحسابك — تقدر تدخل بيه من دلوقتي." if lang != "en"
                   else f"✅ {name} is linked — you can sign in with it now.", "ok")
         return redirect(url_for("account"))
@@ -874,7 +875,9 @@ def oauth_callback(provider):
     if prof["email"]:
         ex = db.get_user_by_email(prof["email"])
         if ex:
-            if ex.get("email_verified_at") and prof["email_verified"]:
+            # ومن فكّ الربط بنفسه لا يُعاد ربطه بصمت بالبريد — يربط صراحةً من «حسابي»
+            if (ex.get("email_verified_at") and prof["email_verified"]
+                    and db.get_setting(ex["id"], f"oauth_off_{provider}") != "1"):
                 db.add_identity(provider, prof["sub"], ex["id"], prof["email"])
                 return _oauth_login(ex, lang)
             flash(f"فيه حساب بالبريد ده — ادخل بكلمة المرور وأكّد بريدك، وبعدين اربط {name} من «حسابي»."
@@ -2873,6 +2876,108 @@ def account_profile():
         flash("تم حفظ بياناتك ✅" if lang != "en" else "Details saved ✅", "ok")
     return redirect(url_for("account"))
 
+@app.route("/account/unlink/<any(google,facebook):provider>", methods=["POST"])
+@login_required
+def account_unlink(provider):
+    """فك ربط جوجل/فيسبوك. **لا تُفك آخر طريقة دخول:** حساب بلا كلمة مرور (pw_set=0) بهوية
+    واحدة كان سيُقفل على صاحبه — يضبط كلمة مرور أولاً من «نسيت كلمة المرور». بعد الفك لا
+    يُعاد الربط تلقائياً بالبريد عند الدخول بنفس الحساب (oauth_off_<provider>)."""
+    lang = session.get("lang", i18n.DEFAULT)
+    name = _OAUTH_NAME[provider][1 if lang == "en" else 0]
+    ids = db.list_identities(uid())
+    if provider not in ids:
+        flash(f"{name} مش مربوط بحسابك." if lang != "en" else f"{name} isn't linked to your account.", "error")
+    elif db.get_setting(uid(), "pw_set", "1") == "0" and len(ids) == 1:
+        flash(f"{name} هو طريقة الدخول الوحيدة لحسابك — اضبط كلمة مرور الأول من «نسيت كلمة المرور»، "
+              f"وبعدين فك الربط." if lang != "en" else
+              f"{name} is your only way to sign in — set a password first via “Forgot password”, then unlink.",
+              "error")
+    else:
+        db.remove_identity(uid(), provider)
+        db.set_setting(uid(), f"oauth_off_{provider}", "1")
+        log.info("identity %s unlinked user=%s", provider, uid())
+        flash(f"تم فك ربط {name} ✅ — تقدر تربطه تاني في أي وقت." if lang != "en"
+              else f"{name} unlinked ✅ — you can link it again anytime.", "ok")
+    return redirect(url_for("account"))
+
+# ---------- الصورة الشخصية / لوجو النشاط ----------
+AVATAR_DIR = os.path.join(UPLOAD_DIR, "avatars")
+AVATAR_MAX = 3 * 1024 * 1024          # 3MB قبل إعادة الرسم
+AVATAR_PX = 256
+
+def _avatar_url(user_id):
+    """رابط الصورة بنسخة (?v=) تتغيّر مع كل رفع — فالتخزين المؤقت لا يعرض القديمة."""
+    name = db.get_setting(user_id, "avatar") if user_id else None
+    return url_for("user_avatar", user_id=user_id, v=name.rsplit("_", 1)[-1].split(".")[0]) if name else None
+
+def _drop_avatar(user_id):
+    old = db.get_setting(user_id, "avatar")
+    if old:
+        try:
+            os.remove(os.path.join(AVATAR_DIR, secure_filename(old)))
+        except OSError:
+            pass
+        db.set_setting(user_id, "avatar", "")
+
+@app.route("/account/avatar", methods=["POST"])
+@login_required
+def account_avatar():
+    """صورة شخصية أو لوجو الشركة. تُعاد رسمها بـ Pillow: مربع 256px WebP بلا بيانات EXIF (موقع GPS
+    في صور الموبايل) ولا بايت واحد من الملف الأصلي — ما يُحفظ صورة نظيفة لا الملف المرفوع."""
+    lang = session.get("lang", i18n.DEFAULT)
+    L = lambda a, e: e if lang == "en" else a
+    if _rate_limited(f"u{uid()}", limit=20, window=3600, bucket="avatar"):
+        flash(i18n.t("ai_rate", lang), "error")
+        return redirect(url_for("account"))
+    f = request.files.get("avatar")
+    data = f.read(AVATAR_MAX + 1) if f else b""
+    if not data:
+        flash(L("اختار صورة الأول.", "Choose an image first."), "error")
+        return redirect(url_for("account"))
+    if len(data) > AVATAR_MAX:
+        flash(L("الصورة أكبر من 3MB — اختار صورة أصغر.", "The image is over 3MB — pick a smaller one."), "error")
+        return redirect(url_for("account"))
+    try:
+        from PIL import Image, ImageOps
+        im = Image.open(io.BytesIO(data))
+        # الأبعاد تُفحص قبل فكّ البكسلات: صورة «قنبلة» صغيرة الحجم ضخمة الأبعاد تستهلك الذاكرة
+        if im.format not in ("JPEG", "PNG", "WEBP") or im.width * im.height > 40_000_000:
+            raise ValueError(f"refused {im.format} {im.size}")
+        im.load()
+        im = ImageOps.fit(ImageOps.exif_transpose(im).convert("RGBA"), (AVATAR_PX, AVATAR_PX), Image.LANCZOS)
+        os.makedirs(AVATAR_DIR, exist_ok=True)
+        name = f"{uid()}_{_secrets.token_hex(6)}.webp"
+        im.save(os.path.join(AVATAR_DIR, name), "WEBP", quality=88, method=4)
+    except Exception:
+        log.info("avatar refused for user=%s", uid(), exc_info=True)
+        flash(L("الملف مش صورة صالحة — استخدم JPG أو PNG أو WebP.", "That isn't a valid image — use JPG, PNG or WebP."),
+              "error")
+        return redirect(url_for("account"))
+    _drop_avatar(uid())
+    db.set_setting(uid(), "avatar", name)
+    flash(L("تم تحديث الصورة ✅", "Picture updated ✅"), "ok")
+    return redirect(url_for("account"))
+
+@app.route("/account/avatar/remove", methods=["POST"])
+@login_required
+def account_avatar_remove():
+    _drop_avatar(uid())
+    flash("تم حذف الصورة." if session.get("lang") != "en" else "Picture removed.", "ok")
+    return redirect(url_for("account"))
+
+@app.route("/u/<int:user_id>/avatar")
+@login_required
+def user_avatar(user_id):
+    """صاحب الحساب وفريق المنصة فقط — الصورة بيانات شخصية لا ملف عام (ليست في static/)."""
+    if user_id != uid() and current_role() not in ("admin", "support"):
+        abort(404)
+    name = secure_filename(db.get_setting(user_id, "avatar") or "")
+    if not name or not os.path.exists(os.path.join(AVATAR_DIR, name)):
+        abort(404)
+    resp = send_from_directory(AVATAR_DIR, name, mimetype="image/webp", max_age=86400)
+    resp.headers["Cache-Control"] = "private, max-age=86400"
+    return resp
+
 @app.route("/account/verify-phone", methods=["POST"])
 @login_required
 def account_verify_phone():
@@ -3601,7 +3706,8 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
         "user": {"name": session.get("uname"), "role": role,
                  # لمطالبة لطيفة بإضافة إيميل — بدونه لا استرجاع للحساب
                  "hasEmail": bool((getattr(g, "user", None) or {}).get("email")),
-                 "emailVerified": bool((getattr(g, "user", None) or {}).get("email_verified_at"))},
+                 "emailVerified": bool((getattr(g, "user", None) or {}).get("email_verified_at")),
+                 "avatar": _avatar_url(session.get("uid"))},
         "t": {k: i18n.t(k, lang) for k in i18n.T},
         "icons": {n: _icon_svg(n) for n in icons._P},
         "nav": nav, "adminNav": admin_nav,
