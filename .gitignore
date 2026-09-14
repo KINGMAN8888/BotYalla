@@ -17,3 +17,5 @@ node_modules/
 *.log
 logs/
 .DS_Store
+local_backups/
+deploy/local_backups/
