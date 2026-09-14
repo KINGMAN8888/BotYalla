@@ -320,4 +320,4 @@ send_mail(to, subject, html, text=None) -> bool   # best-effort، لا يرمي 
 ---
 
 **إعداد:** فحص الكود الحيّ على الجهاز + تشغيل كامل للاختبارات (164/164 ناجحة)، 11 سبتمبر 2026.
-**المالك:** يوسف الشريف · info@youssefalsherief.tech
+**المالك:** يوسف الشريف · info@botyalla.com

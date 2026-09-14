@@ -702,7 +702,7 @@ export function AdminPlatform() {
         <Card>
           <SectionTitle icon="phone">{t("plat_contact")}</SectionTitle>
           <div className="grid gap-4 sm:grid-cols-3">
-            <F name="support_email" label={t("plat_email")} ph="info@youssefalsherief.tech" />
+            <F name="support_email" label={t("plat_email")} ph="info@botyalla.com" />
             <F name="support_whatsapp" label={t("plat_whatsapp")} ph="201097585951" />
             <F name="support_telegram" label={t("plat_telegram")} ph="username" />
           </div>

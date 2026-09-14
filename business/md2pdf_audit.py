@@ -250,13 +250,13 @@ if __name__ == "__main__":
             ctitle="مراجعة الإطلاق<br>الشاملة",
             csub="الموقع المنشور · الكود كاملاً · مستندات المشروع<br>خطة الـ72 ساعة · خطة التسويق والاقتصاديات",
             cbadge="14 سبتمبر 2026 · كل رقم مُتحقَّق منه مباشرةً",
-            cmeta="يوسف الشريف<br>botyalla.com<br>info@youssefalsherief.tech")),
+            cmeta="يوسف الشريف<br>botyalla.com<br>info@botyalla.com")),
         ("LAUNCH_AUDIT_EN.md", "BotYalla_Launch_Audit_EN.pdf", dict(
             lang="en", dir="ltr", title="BotYalla — Launch Audit",
             ctitle="Full Launch<br>Audit",
             csub="The deployed site · the complete codebase · project documents<br>The 72-hour plan · marketing plan and unit economics",
             cbadge="14 September 2026 · every figure verified directly",
-            cmeta="Youssef Alsherief<br>botyalla.com<br>info@youssefalsherief.tech")),
+            cmeta="Youssef Alsherief<br>botyalla.com<br>info@botyalla.com")),
     ]
     for md, pdf, cov in JOBS:
         asyncio.run(render(build(md, pdf, cov), pdf))

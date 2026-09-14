@@ -183,6 +183,27 @@ export function Account() {
         </Form>
       </Card>
 
+      {/* أخبار وعروض بالبريد — موافقة صريحة، ورسائل الحساب المهمة لا تتأثر */}
+      <Card className="max-w-[560px]">
+        <SectionTitle icon="mail"
+          extra={P.emailNews ? <Pill tone="on" dot>{bi("مفعّلة", "On")}</Pill> : <Pill tone="mute">{bi("متوقفة", "Off")}</Pill>}>
+          {bi("أخبار وعروض بالبريد", "News & offers by email")}
+        </SectionTitle>
+        <p className="mt-0 mb-4 text-[13px] leading-relaxed text-ink-3">
+          {bi("ميزات جديدة وعروض خصم ونصائح لبوتك — مرة أو اثنتين في الشهر على الأكثر. رسائل حسابك المهمة (الإيصالات، استرجاع كلمة المرور، تذكير الاشتراك) تصلك في كل الأحوال.",
+              "New features, discounts and tips for your bot — once or twice a month at most. Important account emails (receipts, password reset, renewal reminders) reach you either way.")}
+        </p>
+        <Form action="/account/email-prefs">
+          <input type="hidden" name="email_news" value={P.emailNews ? "0" : "1"} />
+          <Btn variant={P.emailNews ? "ghost" : "primary"} icon="mail" type="submit" disabled={!me.email && !P.emailNews}>
+            {P.emailNews ? bi("أوقف الأخبار والعروض", "Turn off news & offers") : bi("فعّل الأخبار والعروض", "Turn on news & offers")}
+          </Btn>
+        </Form>
+        {!me.email && (
+          <p className="mb-0 mt-2 text-[12px] text-ink-3">{bi("أضف إيميلك في النموذج فوق أولاً.", "Add your email in the form above first.")}</p>
+        )}
+      </Card>
+
       {/* قناة تنبيهات الاشتراك — بدونها لا يعلم العميل بانتهاء اشتراكه */}
       <Card className="max-w-[560px]">
         <SectionTitle icon="bot"

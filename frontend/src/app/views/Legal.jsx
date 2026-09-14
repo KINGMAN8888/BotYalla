@@ -33,7 +33,7 @@ function LegalPage({ titleKey, introKey, sections, email }) {
 }
 
 export function Terms() {
-  const email = P.email || "info@youssefalsherief.tech";
+  const email = P.email || "info@botyalla.com";
   return (
     <LegalPage
       titleKey="terms_title"
@@ -53,7 +53,7 @@ export function Terms() {
 }
 
 export function Privacy() {
-  const email = P.email || "info@youssefalsherief.tech";
+  const email = P.email || "info@botyalla.com";
   return (
     <LegalPage
       titleKey="privacy_title"

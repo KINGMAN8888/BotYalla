@@ -657,6 +657,7 @@ def init_db():
         _hot_indexes(c)
         _analytics_tables(c)
         _customer_pay_tables(c)
+        _email_tables(c)
 
 def _hot_indexes(c):
     """فهارس الاستعلامات الساخنة. EXPLAIN QUERY PLAN كان يُظهر مسحاً كاملاً لـ events و
@@ -733,6 +734,160 @@ def _customer_pay_tables(c):
         CREATE INDEX IF NOT EXISTS ix_bp_bot ON bot_payments(bot_id, status, created_at);
         CREATE INDEX IF NOT EXISTS ix_bp_img ON bot_payments(bot_id, img_hash);
     """)
+
+def _email_tables(c):
+    """حملات البريد من لوحة الأدمن (email_campaigns.py).
+    email_campaigns: الحملة ومحتواها (JSON بالعربية واختيارياً الإنجليزية) وجمهورها.
+    email_sends: مستلم واحد لكل (حملة، مستخدم) — المفتاح هو ما يمنع تكرار رسالة لأحد عند
+    الاستئناف بعد إيقاف أو إعادة تشغيل. الموافقة على الأخبار في settings (email_news)."""
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS email_campaigns(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,                   -- news (للموافقين فقط) | service (إشعار خدمة)
+            audience TEXT NOT NULL,               -- all | paid | free | expiring | lapsed | no_bot | plan:<id>
+            content TEXT NOT NULL,                -- JSON: {ar:{subject,preheader,title,body,cta}, en, url, code}
+            status TEXT NOT NULL DEFAULT 'sending',   -- sending | stopped | done
+            note TEXT,                            -- cap_wait | smtp_error | no_public_url | error
+            total INTEGER NOT NULL DEFAULT 0,
+            created_by INTEGER,
+            created_at INTEGER NOT NULL,
+            finished_at INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS email_sends(
+            campaign_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            status TEXT NOT NULL,                 -- sent | failed | skipped
+            sent_at INTEGER NOT NULL,
+            PRIMARY KEY(campaign_id, user_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_es_day ON email_sends(sent_at);
+    """)
+
+# ---------- حملات البريد (email_campaigns.py) ----------
+EMAIL_AUDIENCES = ("all", "paid", "free", "expiring", "lapsed", "no_bot")
+_PAID_SQL = ("(s.plan IS NOT NULL AND s.plan<>'free' AND s.status='active' "
+             "AND (s.expires_at IS NULL OR s.expires_at>:now))")
+
+def _audience_sql(audience, kind):
+    """(شرط SQL، معاملات) لجمهور حملة — (None, None) لجمهور غير معروف.
+    الأخبار (news) لمن وافق صراحةً فقط؛ المحظور لا يصله شيء."""
+    now = int(time.time())
+    p = {"now": now, "soon": now + 7 * 86400}
+    where = ["u.email IS NOT NULL", "u.email<>''", "u.is_blocked=0"]
+    if audience == "all":
+        pass
+    elif audience == "paid":
+        where.append(_PAID_SQL)
+    elif audience == "free":
+        where.append("NOT " + _PAID_SQL)
+    elif audience == "expiring":                              # مدفوع ينتهي خلال 7 أيام
+        where += [_PAID_SQL, "s.expires_at IS NOT NULL", "s.expires_at<=:soon"]
+    elif audience == "lapsed":                                # كان مدفوعاً وانتهى
+        where += ["s.plan IS NOT NULL", "s.plan<>'free'", "s.expires_at IS NOT NULL", "s.expires_at<=:now"]
+    elif audience == "no_bot":                                # سجّل ولم ينشئ بوتاً
+        where.append("NOT EXISTS(SELECT 1 FROM bots b WHERE b.owner_id=u.id)")
+    elif audience.startswith("plan:") and audience[5:]:
+        where += [_PAID_SQL, "s.plan=:plan"]
+        p["plan"] = audience[5:]
+    else:
+        return None, None
+    if kind == "news":
+        where.append("EXISTS(SELECT 1 FROM settings st WHERE st.user_id=u.id "
+                     "AND st.key='email_news' AND st.value='1')")
+    return " AND ".join(where), p
+
+def email_audience(audience, kind):
+    """مستلمو حملة: [{id, username, email, lang}] مرتّبين بالمعرّف."""
+    cond, p = _audience_sql(audience, kind)
+    if cond is None:
+        return []
+    with get_conn() as c:
+        rows = c.execute(f"""SELECT u.id, u.username, u.email,
+                   COALESCE((SELECT value FROM settings WHERE user_id=u.id AND key='lang'),'ar') AS lang
+                   FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id
+                   WHERE {cond} ORDER BY u.id""", p).fetchall()
+        return [dict(r) for r in rows]
+
+def email_audience_count(audience, kind):
+    cond, p = _audience_sql(audience, kind)
+    if cond is None:
+        return 0
+    with get_conn() as c:
+        return c.execute(f"SELECT COUNT(*) FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id "
+                         f"WHERE {cond}", p).fetchone()[0]
+
+def email_reach():
+    """{with_email, opted_in}: من يمكن مراسلته أصلاً، ومن وافق على الأخبار."""
+    return {"with_email": email_audience_count("all", "service"),
+            "opted_in": email_audience_count("all", "news")}
+
+def create_email_campaign(kind, audience, content, created_by):
+    with get_conn() as c:
+        return c.execute("INSERT INTO email_campaigns(kind,audience,content,status,created_by,created_at) "
+                         "VALUES(?,?,?,'sending',?,?)",
+                         (kind, audience, content, created_by, int(time.time()))).lastrowid
+
+_EC_COUNTS = """(SELECT COUNT(*) FROM email_sends e WHERE e.campaign_id=c.id AND e.status='sent') AS sent,
+                (SELECT COUNT(*) FROM email_sends e WHERE e.campaign_id=c.id AND e.status='failed') AS failed,
+                (SELECT COUNT(*) FROM email_sends e WHERE e.campaign_id=c.id AND e.status='skipped') AS skipped"""
+
+def get_email_campaign(cid):
+    with get_conn() as c:
+        r = c.execute(f"SELECT c.*, {_EC_COUNTS} FROM email_campaigns c WHERE c.id=?", (cid,)).fetchone()
+        return dict(r) if r else None
+
+def list_email_campaigns(status=None, limit=30):
+    with get_conn() as c:
+        q = f"SELECT c.*, {_EC_COUNTS} FROM email_campaigns c"
+        args = []
+        if status:
+            q += " WHERE c.status=?"
+            args.append(status)
+        q += " ORDER BY c.id DESC LIMIT ?"
+        return [dict(r) for r in c.execute(q, (*args, limit)).fetchall()]
+
+def set_email_campaign(cid, **kw):
+    cols = {k: v for k, v in kw.items() if k in ("status", "note", "total", "finished_at")}
+    if not cols:
+        return
+    with get_conn() as c:
+        c.execute(f"UPDATE email_campaigns SET {', '.join(k + '=?' for k in cols)} WHERE id=?",
+                  (*cols.values(), cid))
+
+def email_done_ids(cid):
+    """من انتهى أمرهم في الحملة (أُرسل أو تُخطّي). الفاشل يُعاد عند الاستئناف."""
+    with get_conn() as c:
+        return {r[0] for r in c.execute("SELECT user_id FROM email_sends WHERE campaign_id=? "
+                                        "AND status IN ('sent','skipped')", (cid,)).fetchall()}
+
+def record_email_send(cid, user_id, status):
+    """مستلم واحد لكل (حملة، مستخدم). الفاشل وحده يُحدَّث — المُرسَل لا يُكتب فوقه."""
+    with get_conn() as c:
+        c.execute("INSERT INTO email_sends(campaign_id,user_id,status,sent_at) VALUES(?,?,?,?) "
+                  "ON CONFLICT(campaign_id,user_id) DO UPDATE SET status=excluded.status, "
+                  "sent_at=excluded.sent_at WHERE email_sends.status='failed'",
+                  (cid, user_id, status, int(time.time())))
+
+def email_sends_today():
+    """رسائل حملات أُرسلت منذ منتصف الليل (توقيت الخادم) — للسقف اليومي."""
+    midnight = int(time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1)))
+    with get_conn() as c:
+        return c.execute("SELECT COUNT(*) FROM email_sends WHERE status='sent' AND sent_at>=?",
+                         (midnight,)).fetchone()[0]
+
+def email_news_on(user_id):
+    return get_setting(user_id, "email_news") == "1"
+
+def set_email_news(user_id, on):
+    """موافقة الأخبار والعروض بالبريد + وقتها (إثبات الموافقة)."""
+    set_setting(user_id, "email_news", "1" if on else "0")
+    set_setting(user_id, "email_news_at", str(int(time.time())))
+
+def platform_setdefault(key, value):
+    """يكتب القيمة فقط لو المفتاح غير موجود، ويرجّع المحفوظ — ذرّي بين الخيوط."""
+    with get_conn() as c:
+        c.execute("INSERT OR IGNORE INTO platform(key,value) VALUES(?,?)", (key, value))
+        return c.execute("SELECT value FROM platform WHERE key=?", (key,)).fetchone()[0]
 
 # ---------- users ----------
 def create_user(username, pw_hash, email=None):
@@ -1714,7 +1869,7 @@ def expiring_subscriptions(within_days=3):
     cutoff = now + within_days * 86400
     with get_conn() as c:
         rows = c.execute("""
-            SELECT s.user_id, u.username, s.plan, s.expires_at,
+            SELECT s.user_id, u.username, u.email, s.plan, s.expires_at,
 COALESCE(
                      (SELECT st.value FROM settings st
                        WHERE st.user_id=s.user_id AND st.key='tg_chat_id'),
@@ -1736,7 +1891,7 @@ def recently_expired_subscriptions():
     since = now - 48 * 3600
     with get_conn() as c:
         rows = c.execute("""
-            SELECT s.user_id, u.username, s.plan, s.expires_at,
+            SELECT s.user_id, u.username, u.email, s.plan, s.expires_at,
 COALESCE(
                      (SELECT st.value FROM settings st
                        WHERE st.user_id=s.user_id AND st.key='tg_chat_id'),

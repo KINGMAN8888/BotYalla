@@ -11,6 +11,13 @@ DEST="${BACKUP_DIR:-/var/backups/botyalla}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
 STAMP="$(date +%F_%H%M)"
 
+# تحميل متغيرات البيئة بآمان لتفادي أخطاء صياغة Bash
+if [[ -f "$APP_DIR/.env" ]]; then
+  export RCLONE_REMOTE=$(grep '^RCLONE_REMOTE=' "$APP_DIR/.env" | cut -d= -f2- | tr -d '"' | tr -d "'")
+  export ALERT_BOT_TOKEN=$(grep '^ALERT_BOT_TOKEN=' "$APP_DIR/.env" | cut -d= -f2- | tr -d '"' | tr -d "'")
+  export ALERT_CHAT_ID=$(grep '^ALERT_CHAT_ID=' "$APP_DIR/.env" | cut -d= -f2- | tr -d '"' | tr -d "'")
+fi
+
 mkdir -p "$DEST"
 
 # ---- التنبيه عند الفشل ------------------------------------------------------

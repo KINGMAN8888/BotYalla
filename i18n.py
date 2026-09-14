@@ -249,6 +249,8 @@ T = {
  "bc_mode_tpl":      {"ar": "قالب معتمد", "en": "Approved template"},
  "bc_mode_direct":   {"ar": "إرسال مباشر (Direct Send)", "en": "Direct Send"},
  "adm_analytics":    {"ar": "إحصائيات الزوار", "en": "Visitor analytics"},
+ "adm_emails":       {"ar": "رسائل البريد", "en": "Email campaigns"},
+ "unsub_title":      {"ar": "اشتراك البريد", "en": "Email preferences"},
  "addon_pay_title":  {"ar": "إضافة تحصيل المدفوعات", "en": "Payments add-on"},
  "addon_pay_label":  {"ar": "إضافة تحصيل المدفوعات — بوت #{id}", "en": "Payments add-on — bot #{id}"},
  "bc_window_note":   {"ar": "النص الحر يصل فقط لمن راسل البوت خلال 24 ساعة. للباقين استخدم قالباً معتمداً.",

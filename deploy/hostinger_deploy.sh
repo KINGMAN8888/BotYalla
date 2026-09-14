@@ -188,7 +188,7 @@ if [[ -n "$DOMAIN" && "$DOMAIN" != "_" ]]; then
   
   # Re-issue and configure Nginx automatically
   echo "  Securing $DOMAIN with Let's Encrypt..."
-  certbot --nginx -d "$DOMAIN" -d "www.$DOMAIN" --non-interactive --agree-tos -m "info@youssefalsherief.tech" --redirect >/dev/null 2>&1 || warn "SSL setup failed. Run certbot manually."
+  certbot --nginx -d "$DOMAIN" -d "www.$DOMAIN" --non-interactive --agree-tos -m "info@botyalla.com" --redirect >/dev/null 2>&1 || warn "SSL setup failed. Run certbot manually."
 fi
 
 echo ""

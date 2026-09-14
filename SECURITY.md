@@ -80,7 +80,7 @@ We take the security of BotYalla and its users seriously. If you discover a pote
 
 1. **Do not create a public GitHub issue** or disclose the vulnerability publicly before it has been addressed.
 2. Send a detailed report directly to the security maintainer:
-   - **Email**: info@youssefalsherief.tech
+   - **Email**: info@botyalla.com
    - **Subject Line**: `[SECURITY] BotYalla Vulnerability Report`
 3. Please include:
    - A description of the vulnerability and its potential impact.

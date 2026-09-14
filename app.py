@@ -49,6 +49,7 @@ import plans
 import payments as pay
 import platform_bot as PB
 import mailer
+import email_campaigns as EC
 import legal_content as LEGAL
 from xml.sax.saxutils import escape as _xesc
 import time as _time
@@ -132,6 +133,10 @@ _login_attempts = {}   # ip -> (count, first_ts)
 def _csrf_protect():
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
         if request.path == "/wh/whatsapp":
+            return
+        # إلغاء اشتراك البريد بضغطة (RFC 8058): Gmail/Yahoo يرسلان POST من خوادمهما بلا
+        # جلسة. الحارس هنا توكن HMAC في الرابط نفسه (mailer.check_unsub) + حدّ للطلبات.
+        if request.path.startswith("/email/unsubscribe/"):
             return
         token = session.get("_csrf")
         sent = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
@@ -498,6 +503,9 @@ def register():
         else:
             user_id = db.create_user(u, auth.hash_password(p), email=email or None)
             db.track("signup", user_id)
+            # أخبار وعروض بالبريد: موافقة صريحة فقط — المربع غير محدد افتراضياً
+            if email and request.form.get("email_news") == "1":
+                db.set_email_news(user_id, True)
             src = session.pop("src", None)           # أول مصدر وصل منه (_count_view)
             if src:
                 db.set_setting(user_id, "signup_src", src)
@@ -540,6 +548,28 @@ def login():
 def logout():
     """POST فقط (يمرّ بفحص CSRF): بـ GET كان أي موقع يُخرج زائرك بـ <img src=".../logout">."""
     session.clear(); return redirect(url_for("login"))
+
+# ---------- إلغاء اشتراك البريد (أخبار وعروض) ----------
+@app.route("/email/unsubscribe/<int:user_id>/<token>", methods=["GET", "POST"])
+def email_unsubscribe(user_id, token):
+    """رابط الإلغاء في كل رسالة أخبار. GET يعرض صفحة بزرّ — ماسحات الروابط في برامج البريد
+    تفتح الروابط تلقائياً، فالفتح وحده لا يلغي شيئاً. POST يلغي: من زرّ الصفحة، أو من
+    Gmail/Yahoo مباشرة (List-Unsubscribe=One-Click, RFC 8058). مستثنى من CSRF: التوكن
+    (HMAC لكل مستخدم) هو الحارس، ولا يغيّر إلا تفضيل الأخبار لصاحبه."""
+    if not mailer.check_unsub(user_id, token) or not db.get_user(user_id):
+        abort(404)
+    if request.method == "POST":
+        if _rate_limited(request.remote_addr or "?", limit=30, window=3600, bucket="unsub"):
+            abort(429)
+        on = request.form.get("on") == "1"
+        db.set_email_news(user_id, on)
+        log.info("email news %s for user=%s", "on" if on else "off", user_id)
+        if request.form.get("List-Unsubscribe") == "One-Click":
+            return "", 200
+        return redirect(url_for("email_unsubscribe", user_id=user_id, token=token,
+                                done="on" if on else "off"))
+    return react_page("unsubscribe", "unsub_title",
+                      {"on": db.email_news_on(user_id), "done": request.args.get("done", "")[:3]})
 
 # ---------- استرجاع كلمة المرور ----------
 RESET_TTL = 3600          # ساعة واحدة، واستخدام مرة واحدة
@@ -1817,7 +1847,8 @@ def admin_platform():
             flash("تم الحفظ." if session.get("lang")!="en" else "Saved.", "ok")
         return redirect(url_for("admin_platform"))
     return react_page("admin_platform", "platform_title",
-                      {"plat": dict(db.all_platform(), mkt_msg_price_egp=f"{mkt_price() / 100:g}",
+                      {"plat": dict({k: v for k, v in db.all_platform().items() if k != "email_unsub_key"},
+                                    mkt_msg_price_egp=f"{mkt_price() / 100:g}",
                                     ai_reply_price_egp=f"{FE.ai_reply_price() / 100:g}"),
                        "running": manager.platform_running(),
                        # هل يستطيع بوت المنصة إنشاء بوتات بضغطة (Bot Management Mode)؟
@@ -1854,6 +1885,193 @@ def admin_analytics():
     days = request.args.get("days", "30")
     days = int(days) if days in ("7", "30", "90") else 30
     return react_page("admin_analytics", "adm_analytics", {"a": db.analytics_summary(days)})
+
+# ---------- رسائل البريد: حملات الأدمن (email_campaigns.py) ----------
+_EMAIL_PARTS = (("subject", 150), ("preheader", 150), ("title", 150), ("body", 6000), ("cta", 40))
+
+def _email_audience_ok(a):
+    return a in db.EMAIL_AUDIENCES or (a.startswith("plan:") and a[5:] in plans.PLANS and a[5:] != "free")
+
+def _email_content(d):
+    """مسودة حملة من JSON اللوحة ⇒ محتوى مُطبَّع (بلا تحقق — المعاينة تعمل وأنت تكتب).
+    المسار الداخلي (/pricing) يصير رابطاً مطلقاً من PUBLIC_URL وحدها (§14)."""
+    def part(p):
+        p = p if isinstance(p, dict) else {}
+        return {k: str(p.get(k) or "").strip()[:n] for k, n in _EMAIL_PARTS}
+    ar, en = part(d.get("ar")), part(d.get("en"))
+    url = str(d.get("url") or "").strip()[:500]
+    base = mailer.site_base()
+    if base and url.startswith("/") and not url.startswith("//"):
+        url = base + url
+    code = _re.sub(r"\s+", "", str(d.get("code") or ""))[:32].upper()
+    return {"ar": ar, "en": en if (en["subject"] or en["body"]) else None, "url": url, "code": code}
+
+def _email_errors(content, kind, audience, lang):
+    L = lambda a, e: e if lang == "en" else a
+    ar, en, url = content["ar"], content["en"], content["url"]
+    if kind not in ("news", "service"):
+        return L("اختر نوع الرسالة.", "Pick a message type.")
+    if not _email_audience_ok(audience):
+        return L("الجمهور غير معروف.", "Unknown audience.")
+    if len(ar["subject"]) < 3 or len(ar["body"]) < 10:
+        return L("اكتب عنوان الرسالة (3 أحرف على الأقل) ونصها (10 أحرف على الأقل).",
+                 "Write the Arabic subject (3+ chars) and body (10+ chars).")
+    if en and (len(en["subject"]) < 3 or len(en["body"]) < 10):
+        return L("النسخة الإنجليزية ناقصة: اكتب عنوانها ونصها أو امسحهما.",
+                 "The English version is incomplete: fill its subject and body, or clear both.")
+    base = mailer.site_base()
+    if url and not (_re.match(r"^https://[^\s<>\"']+$", url) or (base and url.startswith(base + "/"))):
+        return L("رابط الزر لازم يبدأ بـ https:// — أو مسار داخلي مثل /pricing بعد ضبط PUBLIC_URL.",
+                 "The button link must start with https:// — or an internal path like /pricing once PUBLIC_URL is set.")
+    if content["code"] and not _re.match(r"^[A-Z0-9_-]{2,32}$", content["code"]):
+        return L("كود الخصم حروف إنجليزية وأرقام فقط.", "The promo code must be letters and digits only.")
+    if kind == "news" and not base:
+        return L("رسائل الأخبار تحتاج PUBLIC_URL لرابط إلغاء الاشتراك — اضبطه في .env أولاً.",
+                 "News emails need PUBLIC_URL for the unsubscribe link — set it in .env first.")
+    return None
+
+def _email_json():
+    d = request.get_json(silent=True) or {}
+    kind = d.get("kind") if d.get("kind") in ("news", "service") else "news"
+    return d, kind, str(d.get("audience") or "all")[:40], _email_content(d)
+
+def _emails_state():
+    rows = []
+    for c in db.list_email_campaigns():
+        try:
+            content = json.loads(c["content"] or "{}")
+        except ValueError:
+            content = {}
+        rows.append(dict(c, content=content, running=EC.running(c["id"])))
+    return {"campaigns": rows, "today": db.email_sends_today(), "cap": EC.daily_cap()}
+
+@app.route("/admin/emails")
+@require_roles("admin")
+def admin_emails():
+    """حملات البريد للمالك وحده: أخبار وعروض للموافقين، وإشعارات خدمة لكل من له إيميل."""
+    from email.utils import parseaddr
+    lang = session.get("lang", i18n.DEFAULT)
+    me = db.get_user(uid()) or {}
+    paid = [p for p in plans.ORDER if p != "free"]
+    auds = (*db.EMAIL_AUDIENCES, *(f"plan:{p}" for p in paid))
+    name, addr = parseaddr(os.getenv("SMTP_FROM", ""))
+    return react_page("admin_emails", "adm_emails", dict(
+        _emails_state(), reach=db.email_reach(),
+        counts={k: {a: db.email_audience_count(a, k) for a in auds} for k in ("news", "service")},
+        plans=[{"id": p, "name": plans.plan_name(p, lang)} for p in paid],
+        smtp=mailer.configured(), publicUrl=bool(mailer.site_base()),
+        myEmail=me.get("email") or "", sender={"name": name or "BotYalla", "addr": addr}))
+
+@app.route("/admin/emails/status")
+@require_roles("admin")
+def admin_emails_status():
+    return jsonify(_emails_state())
+
+@app.route("/admin/emails/preview", methods=["POST"])
+@require_roles("admin")
+def admin_emails_preview():
+    """الرسالة كما ستصل. الشعار data: بدل cid: (المتصفح لا يفهم cid، و data مسموح في CSP)."""
+    import base64
+    d, kind, audience, content = _email_json()
+    lang = "en" if d.get("lang") == "en" else "ar"
+    ar = content["ar"]
+    ar["subject"] = ar["subject"] or "عنوان رسالتك"
+    ar["body"] = ar["body"] or "اكتب نص رسالتك وسيظهر هنا كما يصل للمشترك تماماً."
+    if content["en"]:
+        content["en"]["subject"] = content["en"]["subject"] or "Your subject"
+        content["en"]["body"] = content["en"]["body"] or "Write your message — it shows here exactly as subscribers get it."
+    me = db.get_user(uid()) or {}
+    unsub = (mailer.unsub_url(uid()) or "#") if kind == "news" else None
+    subject, html, _ = mailer.campaign_email(content, lang, me.get("username", ""), kind, unsub=unsub)
+    mark = "data:image/png;base64," + base64.b64encode(mailer._mark()).decode()
+    html = html.replace(f"cid:{mailer.MARK_CID}", mark).replace("<head>", '<head><base target="_blank">', 1)
+    part = content["en"] if (lang == "en" and content["en"]) else ar
+    return jsonify({"html": html, "subject": subject, "preheader": part["preheader"],
+                    "count": db.email_audience_count(audience, kind) if _email_audience_ok(audience) else 0})
+
+@app.route("/admin/emails/test", methods=["POST"])
+@require_roles("admin")
+def admin_emails_test():
+    """نسخة تجربة لإيميل الأدمن نفسه — قبل أن تصل المئات."""
+    lang = session.get("lang", i18n.DEFAULT)
+    L = lambda a, e: e if lang == "en" else a
+    if _rate_limited(f"u{uid()}", limit=10, window=3600, bucket="mail_test"):
+        return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)})
+    d, kind, audience, content = _email_json()
+    me = db.get_user(uid()) or {}
+    err = _email_errors(content, kind, audience, lang)
+    if not err and not mailer.configured():
+        err = L("SMTP غير مضبوط على الخادم — راجع docs/EMAIL_DNS.md.", "SMTP is not configured — see docs/EMAIL_DNS.md.")
+    if not err and not me.get("email"):
+        err = L("أضف إيميلك من صفحة «حسابي» لتصلك رسالة التجربة.", "Add your email on the Account page to receive the test.")
+    if err:
+        return jsonify({"ok": False, "error": err})
+    mlang = "en" if d.get("lang") == "en" else "ar"
+    unsub = mailer.unsub_url(uid()) if kind == "news" else None
+    subject, html, text = mailer.campaign_email(content, mlang, me["username"], kind, unsub=unsub)
+    mailer.send_async(me["email"], ("[TEST] " if mlang == "en" else "[تجربة] ") + subject, html, text)
+    return jsonify({"ok": True, "to": mailer._mask(me["email"])})
+
+@app.route("/admin/emails/send", methods=["POST"])
+@require_roles("admin")
+def admin_emails_send():
+    lang = session.get("lang", i18n.DEFAULT)
+    L = lambda a, e: e if lang == "en" else a
+    d, kind, audience, content = _email_json()
+    err = _email_errors(content, kind, audience, lang)
+    if not err and not mailer.configured():
+        err = L("SMTP غير مضبوط على الخادم — لا شيء سيُرسل. راجع docs/EMAIL_DNS.md.",
+                "SMTP is not configured — nothing would be sent. See docs/EMAIL_DNS.md.")
+    if not err and db.list_email_campaigns(status="sending"):
+        err = L("فيه حملة بتتبعت دلوقتي — استنى تخلص أو أوقفها الأول.",
+                "A campaign is already sending — wait for it or stop it first.")
+    n = 0 if err else db.email_audience_count(audience, kind)
+    if not err and not n:
+        err = L("مفيش مستلمين في الجمهور ده.", "Nobody matches this audience.")
+    if err:
+        return jsonify({"ok": False, "error": err})
+    cid = db.create_email_campaign(kind, audience, json.dumps(content, ensure_ascii=False), uid())
+    log.info("email campaign #%s started by user=%s kind=%s audience=%s recipients=%s",
+             cid, uid(), kind, audience, n)
+    EC.start(cid)
+    return jsonify(dict(_emails_state(), ok=True, id=cid))
+
+@app.route("/admin/emails/<int:cid>/<any(stop,resume):action>", methods=["POST"])
+@require_roles("admin")
+def admin_emails_action(cid, action):
+    lang = session.get("lang", i18n.DEFAULT)
+    L = lambda a, e: e if lang == "en" else a
+    camp = db.get_email_campaign(cid)
+    if not camp:
+        abort(404)
+    err = None
+    if action == "stop" and camp["status"] == "sending":
+        EC.stop(cid)
+    elif action == "resume" and camp["status"] == "stopped":
+        if db.list_email_campaigns(status="sending"):
+            err = L("فيه حملة تانية بتتبعت دلوقتي.", "Another campaign is sending right now.")
+        elif not mailer.configured():
+            err = L("SMTP غير مضبوط على الخادم.", "SMTP is not configured.")
+        elif camp["kind"] == "news" and not mailer.site_base():
+            err = L("رسائل الأخبار تحتاج PUBLIC_URL.", "News emails need PUBLIC_URL.")
+        else:
+            db.set_email_campaign(cid, status="sending", note=None)
+            EC.start(cid)
+    return jsonify(dict(_emails_state(), ok=not err, error=err))
+
+@app.route("/admin/emails/settings", methods=["POST"])
+@require_roles("admin")
+def admin_emails_settings():
+    """السقف اليومي لرسائل الحملات — تحت حدّ مزوّد SMTP (Brevo المجاني 300/يوم)."""
+    lang = session.get("lang", i18n.DEFAULT)
+    try:
+        cap = int((request.get_json(silent=True) or {}).get("cap"))
+    except (TypeError, ValueError):
+        cap = 0
+    if not 1 <= cap <= 100000:
+        return jsonify({"ok": False, "error": "1 – 100000"})
+    db.set_platform("email_daily_cap", str(cap))
+    return jsonify(dict(_emails_state(), ok=True))
 
 @app.route("/api/admin/stats")
 @require_roles("admin", "support")
@@ -2247,7 +2465,28 @@ def account():
         "tgLinked": bool(db.get_setting(uid(), "tg_chat_id")),
         "tgFallback": bool(db.user_tg_channel(uid())),
         "hasPlatformBot": bool(db.get_platform("platform_bot_token", "")),
+        "emailNews": db.email_news_on(uid()),
     })
+
+@app.route("/account/email-prefs", methods=["POST"])
+@login_required
+def account_email_prefs():
+    """أخبار وعروض بالبريد: موافقة صريحة يغيّرها صاحب الحساب وحده (بلا كلمة مرور —
+    ليست بيانات دخول). رسائل الحساب المهمة لا تتأثر بها."""
+    lang = session.get("lang", i18n.DEFAULT)
+    on = request.form.get("email_news") == "1"
+    me = db.get_user(uid()) or {}
+    if on and not me.get("email"):
+        flash("أضف إيميلك أولاً." if lang != "en" else "Add your email first.", "error")
+    else:
+        db.set_email_news(uid(), on)
+        flash((("✅ هتوصلك أخبار وعروض BotYalla على إيميلك." if on else
+                "تم إيقاف رسائل الأخبار والعروض. رسائل حسابك المهمة (الإيصالات والاسترجاع) مستمرة.")
+               if lang != "en" else
+               ("✅ You'll get BotYalla news and offers by email." if on else
+                "News and offers are off. Important account emails (receipts, password reset) continue.")),
+              "ok")
+    return redirect(url_for("account"))
 
 @app.route("/account/link-telegram", methods=["POST"])
 @login_required
@@ -2929,6 +3168,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
                 {"k": "admin_affiliates", "u": url_for("admin_affiliates"), "i": "users",    "l": i18n.t("adm_affiliates", lang)},
                 {"k": "settings",         "u": url_for("settings"),         "i": "sparkles", "l": i18n.t("nav_ai", lang)},
                 {"k": "admin_analytics",  "u": url_for("admin_analytics"),  "i": "chart",    "l": i18n.t("adm_analytics", lang)},
+                {"k": "admin_emails",     "u": url_for("admin_emails"),     "i": "mail",     "l": i18n.t("adm_emails", lang)},
                 {"k": "admin_platform",   "u": url_for("admin_platform"),   "i": "settings", "l": i18n.t("nav_platform", lang)},
             ]
 
@@ -3139,7 +3379,7 @@ def healthz():
 # ============================================================================
 
 # تاريخ آخر تعديل فعلي على النصوص القانونية — حدّثه عند تغيير أي وثيقة.
-LEGAL_UPDATED = "2026-09-12"
+LEGAL_UPDATED = "2026-09-14"
 # آخر تعديل جوهري على الصفحة الرئيسية (يظهر في sitemap.xml)
 SITE_UPDATED = "2026-09-12"
 
@@ -3155,7 +3395,7 @@ _PUBLIC_T_EXTRA = ("get_started_free", "login", "signin_link", "brand_tag", "dai
 # من يبحث «سعر بوت واتساب مصر» عميل جاهز يدفع.
 _NOINDEX_PATHS = ("/dashboard", "/admin", "/bot/", "/account", "/billing", "/wallet",
                   "/subscribe/", "/settings", "/api/", "/wh/", "/reset/",
-                  "/request-bot", "/affiliate")
+                  "/request-bot", "/affiliate", "/email/")
 
 _SITEMAP = (("home", "1.0", "weekly"), ("pricing", "0.8", "weekly"),
             ("register", "0.6", "monthly"), ("login", "0.3", "yearly"),
@@ -3174,7 +3414,7 @@ def _public_payload(page, lang):
     """الحمولة المشتركة لكل صفحات الموقع العام (window.BY في public.html)."""
     plat = db.all_platform()
     user = getattr(g, "user", None)
-    email = plat.get("support_email", "") or "info@youssefalsherief.tech"
+    email = plat.get("support_email", "") or "info@botyalla.com"
     wa = plat.get("support_whatsapp", "")
     contact = [{"l": email, "h": "mailto:" + email}]
     if wa:
@@ -3236,7 +3476,7 @@ def _home_jsonld(lang, plist, faq):
     الأسعار من الخادم نفسه — لا رقم يختلف عمّا يدفعه العميل."""
     base = _site_base()
     plat = db.all_platform()
-    email = plat.get("support_email", "") or "info@youssefalsherief.tech"
+    email = plat.get("support_email", "") or "info@botyalla.com"
     wa = plat.get("support_whatsapp", "")
     contact = {"@type": "ContactPoint", "contactType": "customer support", "email": email,
                "availableLanguage": ["ar", "en"], "areaServed": "EG"}
@@ -3389,7 +3629,7 @@ def webmanifest():
 @app.route("/.well-known/security.txt")
 def security_txt():
     """RFC 9116: أين يُبلَّغ عن ثغرة — الباحث الأمني لا يبحث في صفحة «تواصل معنا»."""
-    email = db.get_platform("support_email", "") or "info@youssefalsherief.tech"
+    email = db.get_platform("support_email", "") or "info@botyalla.com"
     exp = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=365)).strftime("%Y-%m-%dT00:00:00Z")
     body = (f"Contact: mailto:{email}\nExpires: {exp}\nPreferred-Languages: ar, en\n"
             f"Canonical: {_site_base()}/.well-known/security.txt\n")
@@ -3413,7 +3653,7 @@ def seed_platform_defaults():
     db.set_platform("bank_iban", "EG160046020400000059101546889")
     db.set_platform("platform_bot_token", "")
     db.set_platform("admin_chat_id", "")
-    db.set_platform("support_email", "info@youssefalsherief.tech")
+    db.set_platform("support_email", "info@botyalla.com")
     db.set_platform("support_whatsapp", "201097585951")
     db.set_platform("support_telegram", "")
     # سعر الرسالة التسويقية **بالقروش**. مصر: $0.0644 للرسالة بعد خفض Meta
@@ -3648,10 +3888,16 @@ def whatsapp_webhook():
         manager.process_wa_webhook(payload)
     return "OK", 200
 
+# إيميلات دعم افتراضية قديمة — تُستبدل بإيميل الدومين الرسمي عند الإقلاع.
+_OLD_SUPPORT_EMAILS = ("info@youssefalsherief.tech",)
+
 def contact_defaults():
-    """يضمن وجود بيانات التواصل حتى لو كانت القاعدة قديمة قبل هذه الإضافة."""
-    if not db.get_platform("support_email"):
-        db.set_platform("support_email", "info@youssefalsherief.tech")
+    """يضمن وجود بيانات التواصل حتى لو كانت القاعدة قديمة قبل هذه الإضافة.
+    القيمة الافتراضية القديمة (إيميل المالك الشخصي) تتحوّل لـ info@botyalla.com مرة واحدة؛
+    أي إيميل آخر كتبه الأدمن بنفسه في «إعدادات المنصة» لا يُلمس."""
+    cur = (db.get_platform("support_email") or "").strip().lower()
+    if not cur or cur in _OLD_SUPPORT_EMAILS:
+        db.set_platform("support_email", "info@botyalla.com")
     if not db.get_platform("support_whatsapp"):
         db.set_platform("support_whatsapp", "201097585951")
 
@@ -3682,6 +3928,7 @@ def bootstrap():
     setup_logging()
     db.init_db(); seed_platform_defaults(); contact_defaults(); seed_default_admin(); _migrate_ai_key()
     manager.start(); manager.resume_active_bots()
+    EC.resume_pending()          # حملة بريد قُطعت بإعادة التشغيل تكمل من حيث توقفت
     tok = db.get_platform("platform_bot_token", "")
     if tok and db.get_platform("admin_chat_id", ""):
         manager.start_platform_bot(tok)

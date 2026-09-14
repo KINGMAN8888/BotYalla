@@ -179,5 +179,5 @@
 
 ---
 
-**إعداد:** يوسف الشريف · info@youssefalsherief.tech · youssefalsherief.tech
+**إعداد:** يوسف الشريف · info@botyalla.com · youssefalsherief.tech
 **آخر تحديث:** سبتمبر 2026 · **الحالة:** نموذج قبل الإطلاق — يُستبدل ببيانات حقيقية بعد برنامج شركاء التصميم

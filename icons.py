@@ -49,6 +49,8 @@ _P = {
  "flow":       f'<circle cx="18" cy="12" r="2.6" {_D}/>'
                '<rect x="3.5" y="3.5" width="5" height="5" rx="1.6"/><rect x="3.5" y="15.5" width="5" height="5" rx="1.6"/>'
                '<circle cx="18" cy="12" r="2.6"/><path d="M8.5 6H10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8.5M12 12h3.4"/>',
+ "mail":       f'<rect x="3.5" y="5.5" width="17" height="13" rx="2.6" {_D}/>'
+               '<rect x="3.5" y="5.5" width="17" height="13" rx="2.6"/><path d="m4.5 7.5 7.5 5.5 7.5-5.5"/>',
  "megaphone":  f'<path d="M7 9l8-4.5v15L7 15z" {_D}/>'
                '<path d="M3.5 10.5v3A1.5 1.5 0 0 0 5 15h2l8 4.5v-15L7 9H5a1.5 1.5 0 0 0-1.5 1.5z"/>'
                '<path d="M7.2 15l.9 4.2a1.3 1.3 0 0 0 2.5-.5l-.3-2.1M18.3 9.2a4 4 0 0 1 0 5.6"/>',

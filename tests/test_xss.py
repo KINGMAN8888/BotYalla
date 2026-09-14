@@ -88,7 +88,7 @@ class ScriptInjectionTests(unittest.TestCase):
         db.set_platform("support_email", PAYLOAD)
         html = web.app.test_client().get("/").get_data(as_text=True)
         self.assertNotIn("</script><img", html)
-        db.set_platform("support_email", "info@youssefalsherief.tech")
+        db.set_platform("support_email", "info@botyalla.com")
 
     def test_the_escaping_keeps_the_payload_usable(self):
         """الهروب داخل السلاسل فقط: JSON يفكّ لنفس القيم، والأيقونات تبقى SVG."""

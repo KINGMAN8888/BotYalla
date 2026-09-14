@@ -12,6 +12,7 @@ import { AdminOverview, AdminUsers, AdminPayments, AdminRequests, AdminTickets, 
 import { FlowBuilder, Broadcast, Analytics, Auth, Recover } from "./app/views/Tools.jsx";
 import { AdminPricing, AdminPromos, AdminAffiliates, Affiliate } from "./app/views/Revenue.jsx";
 import { Terms, Privacy } from "./app/views/Legal.jsx";
+import { AdminEmails, Unsubscribe } from "./app/views/Emails.jsx";
 import WaTemplates from "./app/views/WaTemplates.jsx";
 import Wallet from "./app/views/Wallet.jsx";
 import Inbox from "./app/views/Inbox.jsx";
@@ -38,6 +39,7 @@ const VIEWS = {
   admin_tickets:  AdminTickets,
   admin_platform: AdminPlatform,
   admin_analytics: AdminAnalytics,
+  admin_emails:    AdminEmails,
   addon_pay:       AddonPay,
   admin_pricing:    AdminPricing,
   admin_promos:     AdminPromos,
@@ -57,6 +59,7 @@ const BARE = {
   register: () => <Auth mode="register" />,
   forgot:   () => <Recover mode="forgot" />,
   reset:    () => <Recover mode="reset" />,
+  unsubscribe: () => <Unsubscribe />,
 };
 
 /* حاجز أخطاء: خطأ في عرض واحد لا يجوز أن يترك الصفحة سوداء فارغة.

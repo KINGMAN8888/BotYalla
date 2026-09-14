@@ -294,6 +294,7 @@ The platform loads configuration values from `.env`. An annotated template is av
 | `SMTP_HOST` / `SMTP_PORT` | String / Integer | None / `587` | Outgoing mail server. Without `SMTP_HOST` and `SMTP_FROM` no email is sent (logged, never an error). |
 | `SMTP_USER` / `SMTP_PASS` | String | None | SMTP credentials. |
 | `SMTP_FROM` | String | None | Sender, e.g. `BotYalla <no-reply@yourdomain.com>`. |
+| `SMTP_REPLY_TO` | String | support email | Where customer replies go (the sender is no-reply). Defaults to the platform support email (`info@botyalla.com`). |
 | `SMTP_TLS` | String | `starttls` | `starttls` (587), `ssl` (465) or `none`. |
 | `GOOGLE_SITE_VERIFICATION` | String | None | Google Search Console verification token — rendered as a `google-site-verification` meta tag on public pages. |
 
@@ -460,5 +461,5 @@ Developed and maintained by **Youssef Alsherief**.
 | Channel | Details |
 |---|---|
 | **Website** | [youssefalsherief.tech](https://youssefalsherief.tech/) |
-| **Email** | info@youssefalsherief.tech |
+| **Email** | info@botyalla.com |
 | **Phone** | +20 109 758 5951 |

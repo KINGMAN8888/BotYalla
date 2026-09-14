@@ -628,20 +628,30 @@ class BotManager:
         المنصة متوقفاً فلا شيء يُسجَّل وتُعاد المحاولة في الدورة التالية —
         وإلا لأحرقت أول دورة كل التذكيرات نهائياً بسبب قيد UNIQUE.
         """
+        import mailer
         admin_ids = db.admin_chat_ids()
-        if not self.platform_running():
-            log.info("reminders skipped: platform bot not running")
+        tg_on, mail_on = self.platform_running(), mailer.configured()
+        if not tg_on and not mail_on:
+            log.info("reminders skipped: platform bot not running and SMTP not configured")
             return
 
         now = int(_time.time())
 
         def deliver(sub, kind, user_key, admin_key, **fmt):
-            """يرسل للعميل وللأدمن. يرجّع True لو وصلت رسالة واحدة على الأقل."""
+            """يرسل للعميل (تليجرام + إيميل) وللأدمن. True لو وصلت رسالة واحدة على الأقل.
+            الإيميل متزامن هنا عمداً: خيط التذكيرات ليس حلقة asyncio ولا داخل معاملة
+            (AGENTS.md §15)، ونحتاج نتيجته الحقيقية قبل التسجيل في reminder_log."""
             lang = db.user_lang(sub["user_id"])
             plan_name = plans.plan_name(sub["plan"], lang)
             delivered = False
 
-            tg_id = sub.get("tg_chat_id")
+            if mail_on and sub.get("email"):
+                date = fmt.get("date") or _dt.datetime.fromtimestamp(sub["expires_at"]).strftime("%Y-%m-%d")
+                if mailer.send_mail(sub["email"], *mailer.expiry_email(
+                        kind, plan_name, date, lang, mailer.site_url("/pricing"))):
+                    delivered = True
+
+            tg_id = sub.get("tg_chat_id") if tg_on else None
             if tg_id:
                 msg = i18n.t(user_key, lang).format(plan=plan_name, **fmt)
                 if self.notify_text(tg_id, msg):

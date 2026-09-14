@@ -533,6 +533,14 @@ export function Auth({ mode }) {
               <Input type="email" name="email" autoComplete="email" dir="ltr" />
             </Field>
           )}
+          {/* موافقة صريحة على الأخبار — غير محددة افتراضياً، ولا أثر لها بلا إيميل */}
+          {!isLogin && (
+            <label className="mb-4 flex cursor-pointer items-start gap-2.5 text-[12.5px] leading-relaxed text-ink-3">
+              <input type="checkbox" name="email_news" value="1" className="mt-1 size-4 shrink-0 accent-[#7C6CF6]" />
+              <span>{bi("ابعتولي أخبار BotYalla وعروضها على إيميلي — أقدر ألغيها في أي وقت.",
+                        "Email me BotYalla news and offers — I can unsubscribe anytime.")}</span>
+            </label>
+          )}
           <Field label={t("password")}
                  hint={isLogin ? undefined : t("pw_hint")}>
             <Input type="password" name="password" required minLength={isLogin ? undefined : 6}
