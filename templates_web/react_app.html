@@ -16,18 +16,119 @@
 <script nonce="{{ csp_nonce }}">window.BY = {{ by_json|safe }};</script>
 <style nonce="{{ csp_nonce }}">
   html{background:#05070D;}
-  body{font-family:{% if lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}
-  /* شاشة تحميل بسيطة تختفي فور تركيب React — لا وميض أبيض ولا قفزة */
-  #boot{min-height:100vh;display:grid;place-items:center;color:#7B87A8;font-size:14px;gap:14px;}
-  #boot i{width:26px;height:26px;border-radius:50%;border:2px solid rgba(255,255,255,.14);
-    border-top-color:#22D3EE;animation:sp .7s linear infinite;display:block;}
-  @keyframes sp{to{transform:rotate(360deg)}}
+  body{margin:0;font-family:{% if lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}
+  /* هيكل تحميل (skeleton) بشكل الصفحة الحقيقية — قشرة اللوحة أو بطاقة الدخول — يختفي فور
+     تركيب React (react-on). CSS داخلي بلا أي سكربت، ولمعة تتبع اتجاه القراءة وتتوقف مع
+     «تقليل الحركة». لا وميض أبيض ولا قفزة تخطيط عند ظهور الصفحة. */
+  #boot{min-height:100vh;display:flex;color:#7B87A8;}
+  .sk{position:relative;overflow:hidden;background:rgba(255,255,255,.055);border-radius:10px;}
+  .sk::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.075),transparent);
+    animation:sk 1.5s ease-in-out infinite;}
+  [dir=rtl] .sk::after{animation-name:skr;}
+  @keyframes sk{to{transform:translateX(100%)}}
+  @keyframes skr{from{transform:translateX(100%)}to{transform:translateX(-100%)}}
+  @media (prefers-reduced-motion:reduce){.sk::after{display:none}}
+  .skc{background:rgba(255,255,255,.025);border-radius:22px;padding:24px;box-sizing:border-box;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.07);display:flex;flex-direction:column;gap:12px;}
+  #boot aside{width:252px;flex-shrink:0;box-sizing:border-box;padding:16px;display:none;flex-direction:column;
+    gap:8px;background:rgba(0,0,0,.25);box-shadow:inset -1px 0 0 rgba(255,255,255,.07);}
+  [dir=rtl] #boot aside{box-shadow:inset 1px 0 0 rgba(255,255,255,.07);}
+  /* مسافة بعد «{» عمداً: «{» ملاصقة لـ«#» تبدأ تعليق Jinja فيسقط رسم كل الصفحات */
+  @media (min-width:1024px){ #boot aside{display:flex;}}
+  #boot .skmain{flex:1;min-width:0;display:flex;flex-direction:column;}
+  #boot .skbar{height:68px;flex-shrink:0;display:flex;align-items:center;gap:12px;padding:0 20px;
+    box-shadow:inset 0 -1px 0 rgba(255,255,255,.07);}
+  #boot .skpage{width:100%;max-width:1180px;margin:0 auto;padding:32px 20px;box-sizing:border-box;
+    display:flex;flex-direction:column;gap:20px;}
+  .skrow{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));}
+  .skcols{display:grid;gap:20px;grid-template-columns:1fr;}
+  @media (min-width:1024px){.skcols{grid-template-columns:1.25fr 1fr;}}
+  #boot.bare{align-items:center;justify-content:center;padding:56px 20px;box-sizing:border-box;}
+  .skvh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
   .react-on #boot{display:none;}
 </style>
 </head>
 <body>
-<div id="root" data-view="{{ view }}">
-  <div id="boot"><i></i><span>{{ page_title }}</span></div>
+<div id="root" data-view="{{ view }}" aria-busy="true">
+{% if view in ('login', 'register', 'forgot', 'reset', 'unsubscribe', 'verify_email', 'complete_profile') %}
+  <div id="boot" class="bare" role="status">
+    <span class="skvh">{{ page_title }}</span>
+    <div style="width:100%;max-width:{{ '540px' if view in ('register', 'complete_profile') else '440px' }};display:flex;flex-direction:column;align-items:center;gap:24px;">
+      <div class="sk" style="width:132px;height:42px;border-radius:12px;"></div>
+      <div class="skc" style="width:100%;padding:32px;gap:14px;">
+        <div class="sk" style="width:48%;height:26px;margin:0 auto;"></div>
+        <div class="sk" style="width:72%;height:13px;margin:0 auto 12px;"></div>
+        {% for _ in range(5 if view in ('register', 'complete_profile') else 2) %}
+        <div class="sk" style="width:30%;height:12px;"></div>
+        <div class="sk" style="height:44px;border-radius:12px;"></div>
+        {% endfor %}
+        <div class="sk" style="height:46px;border-radius:12px;margin-top:10px;background:rgba(143,233,255,.12);"></div>
+      </div>
+    </div>
+  </div>
+{% else %}
+  <div id="boot" role="status">
+    <span class="skvh">{{ page_title }}</span>
+    <aside>
+      <div class="sk" style="width:118px;height:34px;margin:0 8px 18px;"></div>
+      <div class="sk" style="width:34%;height:9px;margin:0 12px 6px;opacity:.7;"></div>
+      {% for w in (72, 60, 66, 54, 78, 62, 68, 56) %}
+      <div class="sk" style="height:38px;width:{{ w }}%;border-radius:12px;opacity:.8;"></div>
+      {% endfor %}
+      <div style="margin-top:auto;display:flex;align-items:center;gap:10px;padding:10px 8px 4px;
+                  box-shadow:inset 0 1px 0 rgba(255,255,255,.07);">
+        <div class="sk" style="width:34px;height:34px;border-radius:50%;flex-shrink:0;"></div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+          <div class="sk" style="width:70%;height:11px;"></div><div class="sk" style="width:45%;height:9px;"></div>
+        </div>
+      </div>
+    </aside>
+    <div class="skmain">
+      <div class="skbar">
+        <div class="sk" style="width:40px;height:40px;border-radius:12px;"></div>
+        <div style="margin-inline-start:auto;display:flex;align-items:center;gap:8px;">
+          <div class="sk" style="width:62px;height:36px;border-radius:999px;"></div>
+          <div class="sk" style="width:132px;height:38px;border-radius:999px;"></div>
+        </div>
+      </div>
+      <div class="skpage">
+        <div>
+          <div class="sk" style="width:250px;max-width:60%;height:30px;"></div>
+          <div class="sk" style="width:400px;max-width:85%;height:13px;margin-top:12px;"></div>
+        </div>
+        <div class="skrow">
+          {% for _ in range(4) %}
+          <div class="skc">
+            <div class="sk" style="width:22px;height:22px;border-radius:7px;"></div>
+            <div class="sk" style="width:50%;height:26px;margin-top:4px;"></div>
+            <div class="sk" style="width:72%;height:11px;"></div>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="skcols">
+          <div class="skc" style="gap:14px;">
+            <div class="sk" style="width:38%;height:18px;margin-bottom:6px;"></div>
+            {% for w in (100, 94, 88, 97, 70) %}<div class="sk" style="width:{{ w }}%;height:13px;"></div>{% endfor %}
+            <div class="sk" style="width:150px;height:42px;border-radius:12px;margin-top:8px;"></div>
+          </div>
+          <div class="skc" style="gap:10px;">
+            <div class="sk" style="width:46%;height:18px;margin-bottom:6px;"></div>
+            {% for _ in range(3) %}
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:14px;
+                        box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);">
+              <div class="sk" style="width:34px;height:34px;border-radius:10px;flex-shrink:0;"></div>
+              <div style="flex:1;display:flex;flex-direction:column;gap:7px;">
+                <div class="sk" style="width:58%;height:11px;"></div><div class="sk" style="width:36%;height:9px;"></div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endif %}
 </div>
 <noscript>
   <div style="padding:32px;color:#AEB9D4;font-size:15px;line-height:1.8;">

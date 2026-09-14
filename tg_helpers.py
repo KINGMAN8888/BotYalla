@@ -136,6 +136,43 @@ def configure_bot_profile(token, name=None, short_description=None,
     return result
 
 
+def _tg_multipart(token, method, fields, files, timeout=20):
+    """طلب multipart لرفع ملف (صورة البروفايل) — نفس شكل نتيجة `_tg_post`: (ok, وصف الخطأ)."""
+    boundary = "----BotYalla" + secrets.token_hex(12)
+    parts = []
+    for k, v in fields.items():
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode("utf-8"))
+    for k, (fname, data, ctype) in files.items():
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"; filename="{fname}"\r\n'
+                     f'Content-Type: {ctype}\r\n\r\n'.encode("utf-8") + data + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    req = urllib.request.Request(f"{TG_API}/bot{token}/{method}", data=b"".join(parts), method="POST",
+                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = _json.loads(resp.read().decode("utf-8"))
+            return bool(body.get("ok")), body.get("description", "")
+    except urllib.error.HTTPError as e:
+        try:
+            return False, _json.loads(e.read().decode("utf-8")).get("description", f"HTTP {e.code}")
+        except Exception:
+            return False, f"HTTP {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
+def set_bot_photo(token, jpeg):
+    """صورة بروفايل البوت نفسه (Bot API 9.4 · setMyProfilePhoto). الثابتة JPG فقط، ولا تُعاد
+    صورة سابقة — تُرفع ملفاً جديداً كل مرة (InputProfilePhotoStatic + attach://)."""
+    return _tg_multipart(token, "setMyProfilePhoto",
+                         {"photo": _json.dumps({"type": "static", "photo": "attach://botphoto"})},
+                         {"botphoto": ("photo.jpg", jpeg, "image/jpeg")})
+
+
+def remove_bot_photo(token):
+    return _tg_post(token, "removeMyProfilePhoto", {})
+
+
 def default_commands(template):
     """أوامر البوت الافتراضية حسب النوع (تظهر في قائمة الأوامر بتليجرام)."""
     cmds = [{"command": "start", "description": "ابدأ / Start"}]

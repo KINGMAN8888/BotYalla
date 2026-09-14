@@ -51,6 +51,47 @@ def verify_credentials(phone_id, token):
             "quality": data.get("quality_rating", "")}
 
 
+def _meta_err(r):
+    try:
+        return ((r.json() or {}).get("error") or {}).get("message") or f"HTTP {r.status_code}"
+    except Exception:
+        return f"HTTP {r.status_code}"
+
+
+def set_profile_photo(phone_id, token, jpeg, app_id=None):
+    """صورة بروفايل رقم واتساب للأعمال. ثلاث خطوات (Resumable Upload): جلسة رفع على التطبيق
+    `/{app-id}/uploads` ← رفع البايتات (ترويسة `OAuth` لا `Bearer` + `file_offset`) فيرجع handle
+    ← `/{phone-id}/whatsapp_business_profile` بـ `profile_picture_handle`.
+    App ID يُقرأ من `GET /app` بنفس التوكن ويُعاد للمستدعي ليخزّنه. متزامنة (تُستدعى من Flask).
+    يرجّع (ok, خطأ, app_id)."""
+    bearer = {"Authorization": f"Bearer {token}"}
+    try:
+        with httpx.Client(timeout=TIMEOUT) as c:
+            if not app_id:
+                r = c.get(f"{META_API}/app", headers=bearer)
+                app_id = str((r.json() or {}).get("id") or "") if r.status_code == 200 else ""
+                if not app_id:
+                    return False, "app_id", None
+            r = c.post(f"{META_API}/{app_id}/uploads", headers=bearer,
+                       params={"file_name": "profile.jpg", "file_length": len(jpeg), "file_type": "image/jpeg"})
+            sid = (r.json() or {}).get("id") if r.status_code == 200 else None
+            if not sid:
+                return False, _meta_err(r), app_id
+            r = c.post(f"{META_API}/{sid}", content=jpeg,
+                       headers={"Authorization": f"OAuth {token}", "file_offset": "0"})
+            h = (r.json() or {}).get("h") if r.status_code == 200 else None
+            if not h:
+                return False, _meta_err(r), app_id
+            r = c.post(f"{META_API}/{phone_id}/whatsapp_business_profile", headers=bearer,
+                       json={"messaging_product": "whatsapp", "profile_picture_handle": h})
+            if r.status_code == 200 and (r.json() or {}).get("success"):
+                return True, "", app_id
+            return False, _meta_err(r), app_id
+    except Exception as e:
+        log.warning("WhatsApp profile photo failed for %s", phone_id, exc_info=True)
+        return False, str(e)[:200], app_id
+
+
 class WhatsAppChannel(Channel):
     def __init__(self, phone_id, token, on_send=None):
         """on_send: دالة async تُستدعى قبل كل إرسال — تحجز رسالة من رصيد الباقة

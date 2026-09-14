@@ -35,6 +35,7 @@ from flow_engine import DEFAULT_CS_FLOW as _DEFAULT_FLOW
 import tg_helpers as tg
 from channels.whatsapp import verify_credentials as wa_verify
 import channels.wa_templates as WT
+import channels.whatsapp as WAC
 import media_store
 from bot_manager import WA_WINDOW
 import ai_agent as ai
@@ -435,6 +436,10 @@ def sync_bot_telegram(bot_row):
         cfg = {}
     prof = tg.build_profile_from_config(cfg, bot_row["template"])
     res = tg.configure_bot_profile(bot_row["token"], **prof)
+    # صورة لم تصل بعد (فشل سابق أو توكن جديد) تُعاد مع كل مزامنة حتى تنجح — والناجحة لا تُرفع
+    # ثانيةً مع كل حفظ للإعدادات (تليجرام لا يعيد استخدام الصور، فكل رفع ملف جديد)
+    if cfg.get("bot_photo") and not (cfg.get("bot_photo_sync") or {}).get("ok"):
+        _push_bot_photo(bot_row, cfg)
     cfg["tg_synced_at"] = int(_time.time())
     cfg["tg_sync_ok"] = bool(res.get("ok"))
     cfg["tg_sync_errors"] = res.get("errors", [])
@@ -1309,6 +1314,9 @@ def bot_config(bot_id):
                 return redirect(url_for("bot_detail", bot_id=bot_id))
             cfg["wa_token"] = new_tok
             cfg.pop("wa_limit_warned", None)
+        app_id = request.form.get("wa_app_id", "").strip()
+        if app_id.isdigit():                       # احتياطي لو تعذّر اكتشافه من التوكن
+            cfg["wa_app_id"] = app_id
     db.update_bot_config(bot_id, cfg)
     if manager.is_running(bot_id): manager.restart_bot(bot_id)
     if is_wa:
@@ -1317,6 +1325,147 @@ def bot_config(bot_id):
     try: sync_bot_telegram(db.get_bot(bot_id, uid()))
     except Exception: pass
     flash("تم حفظ الإعدادات ومزامنتها مع تليجرام ✅", "ok")
+    return redirect(url_for("bot_detail", bot_id=bot_id))
+
+# ---------- صورة بروفايل البوت: رفع واحد يُزامَن مع قناته (تليجرام أو واتساب) ----------
+BOT_PHOTO_DIR = os.path.join(UPLOAD_DIR, "bot_photos")
+BOT_PHOTO_MAX = 5 * 1024 * 1024
+BOT_PHOTO_PX = 640          # مربع 640: توصية واتساب، وتليجرام يقبله (JPG للصورة الثابتة)
+
+def _bot_photo_path(cfg):
+    name = secure_filename(cfg.get("bot_photo") or "")
+    path = os.path.join(BOT_PHOTO_DIR, name)
+    return path if name and os.path.exists(path) else None
+
+def _push_bot_photo(b, cfg):
+    """يرسل صورة البوت لقناته ويكتب النتيجة في cfg['bot_photo_sync'] (المستدعي يحفظ cfg). لا يرمي."""
+    path = _bot_photo_path(cfg)
+    if not path:
+        return None
+    with open(path, "rb") as f:
+        jpeg = f.read()
+    try:
+        if (b.get("channel") or "telegram") == "whatsapp":
+            ok, err, app_id = WAC.set_profile_photo(b["token"][3:], cfg.get("wa_token", ""), jpeg,
+                                                    cfg.get("wa_app_id"))
+            if app_id:
+                cfg["wa_app_id"] = app_id
+        else:
+            ok, err = tg.set_bot_photo(b["token"], jpeg)
+    except Exception as e:
+        ok, err = False, str(e)
+    cfg["bot_photo_sync"] = {"ok": bool(ok), "err": (err or "")[:200], "at": int(_time.time())}
+    if not ok:
+        log.warning("bot #%s photo sync failed: %s", b["id"], err)
+    return bool(ok)
+
+def _photo_flash(b, ok, cfg, lang):
+    ch = ("واتساب" if lang != "en" else "WhatsApp") if (b.get("channel") or "") == "whatsapp" else \
+         ("تليجرام" if lang != "en" else "Telegram")
+    if ok:
+        flash(f"✅ صورة البوت اتحدثت على {ch}." if lang != "en" else f"✅ Bot photo updated on {ch}.", "ok")
+        return
+    err = (cfg.get("bot_photo_sync") or {}).get("err", "")
+    if err == "app_id":
+        err = ("مقدرناش نعرف App ID من التوكن — اكتبه في إعدادات البوت وجرّب «إعادة المزامنة»."
+               if lang != "en" else "Couldn't read the App ID from the token — add it in the bot settings and sync again.")
+    flash((f"اتحفظت الصورة، لكن المزامنة مع {ch} فشلت: {err}" if lang != "en"
+           else f"Photo saved, but syncing to {ch} failed: {err}"), "error")
+
+@app.route("/bot/<int:bot_id>/photo", methods=["GET", "POST"])
+@login_required
+def bot_photo(bot_id):
+    """GET: معاينة لصاحب البوت. POST: رفع صورة جديدة ← Pillow (مربع 640 JPEG نظيف بلا EXIF)
+    ← مزامنة فورية مع قناة البوت. الشبكة داخل الطلب ⇒ حدّ طلبات (§40)."""
+    b = _owned(bot_id)
+    cfg = json.loads(b["config_json"] or "{}")
+    if request.method == "GET":
+        path = _bot_photo_path(cfg)
+        if not path:
+            abort(404)
+        resp = send_from_directory(BOT_PHOTO_DIR, os.path.basename(path), mimetype="image/jpeg", max_age=86400)
+        resp.headers["Cache-Control"] = "private, max-age=86400"
+        return resp
+    lang = session.get("lang", i18n.DEFAULT)
+    L = lambda a, e: e if lang == "en" else a
+    back = redirect(url_for("bot_detail", bot_id=bot_id))
+    if _rate_limited(f"u{uid()}", limit=10, window=3600, bucket="bot_photo"):
+        flash(i18n.t("ai_rate", lang), "error")
+        return back
+    f = request.files.get("photo")
+    data = f.read(BOT_PHOTO_MAX + 1) if f else b""
+    if not data or len(data) > BOT_PHOTO_MAX:
+        flash(L("اختار صورة حجمها أقل من 5MB.", "Choose an image under 5MB."), "error")
+        return back
+    try:
+        from PIL import Image, ImageOps
+        im = Image.open(io.BytesIO(data))
+        if im.format not in ("JPEG", "PNG", "WEBP") or im.width * im.height > 40_000_000:
+            raise ValueError(f"refused {im.format} {im.size}")
+        im.load()
+        im = ImageOps.exif_transpose(im).convert("RGBA")
+        bg = Image.new("RGBA", im.size, (255, 255, 255, 255))      # لوجو شفاف ← خلفية بيضاء (JPEG بلا شفافية)
+        im = ImageOps.fit(Image.alpha_composite(bg, im).convert("RGB"), (BOT_PHOTO_PX, BOT_PHOTO_PX), Image.LANCZOS)
+        os.makedirs(BOT_PHOTO_DIR, exist_ok=True)
+        name = f"{bot_id}_{_secrets.token_hex(6)}.jpg"
+        im.save(os.path.join(BOT_PHOTO_DIR, name), "JPEG", quality=90, optimize=True)
+    except Exception:
+        log.info("bot photo refused for bot #%s", bot_id, exc_info=True)
+        flash(L("الملف مش صورة صالحة — استخدم JPG أو PNG أو WebP.", "That isn't a valid image — use JPG, PNG or WebP."),
+              "error")
+        return back
+    old = _bot_photo_path(cfg)
+    cfg["bot_photo"] = name
+    if old:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    ok = _push_bot_photo(b, cfg)
+    db.update_bot_config(bot_id, cfg)
+    _photo_flash(b, ok, cfg, lang)
+    return back
+
+@app.route("/bot/<int:bot_id>/photo/sync", methods=["POST"])
+@login_required
+def bot_photo_sync(bot_id):
+    """إعادة إرسال الصورة الحالية (بعد تحديث توكن واتساب أو فشل سابق)."""
+    b = _owned(bot_id)
+    cfg = json.loads(b["config_json"] or "{}")
+    lang = session.get("lang", i18n.DEFAULT)
+    if _rate_limited(f"u{uid()}", limit=10, window=3600, bucket="bot_photo"):
+        flash(i18n.t("ai_rate", lang), "error")
+    elif _bot_photo_path(cfg):
+        ok = _push_bot_photo(b, cfg)
+        db.update_bot_config(bot_id, cfg)
+        _photo_flash(b, ok, cfg, lang)
+    return redirect(url_for("bot_detail", bot_id=bot_id))
+
+@app.route("/bot/<int:bot_id>/photo/remove", methods=["POST"])
+@login_required
+def bot_photo_remove(bot_id):
+    """تليجرام: removeMyProfilePhoto. واتساب لا يوفّر حذف صورة الرقم عبر الـ API — تبقى حتى تُستبدل."""
+    b = _owned(bot_id)
+    cfg = json.loads(b["config_json"] or "{}")
+    lang = session.get("lang", i18n.DEFAULT)
+    wa = (b.get("channel") or "") == "whatsapp"
+    if not wa:
+        ok, err = tg.remove_bot_photo(b["token"])
+        if not ok:
+            log.warning("bot #%s photo removal on Telegram failed: %s", bot_id, err)
+    path = _bot_photo_path(cfg)
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    cfg.pop("bot_photo", None)
+    cfg.pop("bot_photo_sync", None)
+    db.update_bot_config(bot_id, cfg)
+    flash(("تم حذف الصورة من المنصة. على واتساب تفضل الصورة الحالية لحد ما ترفع غيرها." if wa else
+           "تم حذف صورة البوت من المنصة وتليجرام.") if lang != "en" else
+          ("Removed from the platform. WhatsApp keeps the current photo until you upload another." if wa else
+           "Bot photo removed from the platform and Telegram."), "ok")
     return redirect(url_for("bot_detail", bot_id=bot_id))
 
 # ---------- باني الفلو No-Code ----------

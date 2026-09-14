@@ -585,6 +585,72 @@ function BookingEditor({ cfg }) {
 }
 
 /* -------------------------------------------------- ملف أرسله العميل */
+/* صورة بروفايل البوت: رفع واحد (الضغط على الصورة) يُزامَن فوراً مع قناة البوت */
+function BotPhotoCard({ bot, cfg, isWa }) {
+  const has = !!cfg.bot_photo;
+  const sync = cfg.bot_photo_sync || null;
+  const ver = has ? String(cfg.bot_photo).split("_").pop().split(".")[0] : "";
+  const ch = isWa ? "WhatsApp" : "Telegram";
+  return (
+    <Card className="mb-6">
+      <SectionTitle icon="camera"
+        extra={has ? (sync && sync.ok ? <Pill tone="on" dot>{bi(`متزامنة مع ${isWa ? "واتساب" : "تليجرام"}`, `Synced to ${ch}`)}</Pill>
+                                     : <Pill tone="warn">{bi("لم تُزامَن بعد", "Not synced yet")}</Pill>) : null}>
+        {bi("صورة البوت", "Bot profile photo")}
+      </SectionTitle>
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+        <Form action={`/bot/${bot.id}/photo`} encType="multipart/form-data" className="group relative shrink-0 self-center">
+          <label className="relative block cursor-pointer" title={bi("اضغط لرفع صورة جديدة", "Click to upload a new photo")}>
+            {has ? (
+              <img src={`/bot/${bot.id}/photo?v=${ver}`} alt=""
+                   className="size-24 rounded-full object-cover shadow-[0_0_0_3px_rgb(124_108_246/0.45),0_12px_30px_-12px_rgb(124_108_246/0.8)] transition-[filter] group-hover:brightness-90" />
+            ) : (
+              <span className="grid size-24 place-items-center rounded-full bg-white/[0.04] text-ink-3
+                               shadow-[inset_0_0_0_1.5px_rgb(255_255_255/0.14)] transition-colors group-hover:text-au-cyan">
+                <Icon name="camera" size={28} />
+              </span>
+            )}
+            <span className="absolute bottom-0 end-0 grid size-8 place-items-center rounded-full bg-[#0B1020] text-au-cyan
+                             shadow-[0_0_0_2px_rgb(124_108_246/0.6)] transition-transform duration-300 group-hover:scale-110">
+              <Icon name="upload" size={15} />
+            </span>
+            <input type="file" name="photo" accept="image/png,image/jpeg,image/webp" className="sr-only"
+                   aria-label={bi("رفع صورة البوت", "Upload bot photo")}
+                   onChange={(e) => e.target.files?.length && e.target.form.requestSubmit()} />
+          </label>
+        </Form>
+        <div className="min-w-0 flex-1">
+          <p className="m-0 text-[13.5px] leading-relaxed text-ink-2">
+            {isWa ? bi("الصورة اللي عملاؤك بيشوفوها على رقم واتساب للأعمال بتاعك.", "The picture your customers see on your WhatsApp Business number.")
+                  : bi("الصورة اللي بتظهر لعملائك في محادثة البوت وفي قائمة محادثات تليجرام.", "The picture customers see in the bot chat and their Telegram chat list.")}
+          </p>
+          <p className="mb-0 mt-1 text-[12px] leading-relaxed text-ink-3">
+            {bi(`اضغط على الصورة واختار صورة أو لوجو (JPG · PNG · WebP حتى 5MB) — بنقصّها مربعة ونظبطها، وبتتحدث على ${isWa ? "واتساب" : "تليجرام"} فوراً.`,
+                `Click the picture and pick a photo or logo (JPG · PNG · WebP up to 5MB) — we crop it square and it updates on ${ch} right away.`)}
+          </p>
+          {sync && !sync.ok && (
+            <p className="mb-0 mt-2 text-[12.5px] leading-relaxed text-amber-200">
+              {bi("آخر مزامنة فشلت:", "The last sync failed:")} <span dir="ltr">{sync.err === "app_id" ? "App ID" : sync.err}</span>
+            </p>
+          )}
+          {has && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Form action={`/bot/${bot.id}/photo/sync`} className="inline">
+                <Btn sm variant="ghost" icon="refresh" type="submit">{bi("إعادة المزامنة", "Sync again")}</Btn>
+              </Form>
+              <Form action={`/bot/${bot.id}/photo/remove`} className="inline"
+                    confirm={isWa ? bi("حذف الصورة من المنصة؟ (على واتساب تفضل لحد ما ترفع غيرها)", "Remove from the platform? (WhatsApp keeps it until you upload another)")
+                                  : bi("حذف صورة البوت من المنصة وتليجرام؟", "Remove the bot photo from the platform and Telegram?")}>
+                <Btn sm variant="ghost" icon="trash" type="submit">{bi("إزالة", "Remove")}</Btn>
+              </Form>
+            </div>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function MediaChip({ m, botId }) {
   const url = `/bot/${botId}/media/${m.id}`;
   const kb = m.size > 1024 * 1024
@@ -825,6 +891,8 @@ export default function BotDetail() {
         </div>
       )}
 
+      <BotPhotoCard bot={bot} cfg={cfg} isWa={isWa} />
+
       {/* الإعدادات */}
       <Card className="mb-6">
         <SectionTitle icon="settings">{t("settings_title")}</SectionTitle>
@@ -841,6 +909,11 @@ export default function BotDetail() {
                      hint={bi("توكنات Meta المؤقتة تنتهي خلال 24 ساعة — الصق توكناً جديداً هنا عند توقّف البوت. اتركه فارغاً للإبقاء على الحالي.",
                               "Meta temporary tokens expire in 24 hours — paste a new one here when the bot stops. Leave empty to keep the current one.")}>
                 <Input name="wa_token" defaultValue="" autoComplete="off" placeholder="EAAG…" />
+              </Field>
+              <Field label="WhatsApp App ID" className="mt-4"
+                     hint={bi("اختياري — بنعرفه تلقائياً من التوكن. محتاجينه بس لو مزامنة صورة البوت فشلت (Meta ← App settings ← Basic).",
+                              "Optional — we read it from the token. Only needed if the bot photo sync fails (Meta → App settings → Basic).")}>
+                <Input name="wa_app_id" defaultValue={cfg.wa_app_id || ""} inputMode="numeric" dir="ltr" placeholder="1234567890" />
               </Field>
             </div>
           )}
