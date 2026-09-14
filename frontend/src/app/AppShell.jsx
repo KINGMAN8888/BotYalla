@@ -59,12 +59,16 @@ function SideContent({ view }) {
           <Icon name="users" size={18} className="text-ink-3" />
           <span className="truncate">{BY.user.name}</span>
         </a>
-        <a href={BY.urls.logout}
-           className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-bold text-ink-2
-                      no-underline transition-colors hover:bg-white/[0.06] hover:text-ink">
-          <Icon name="logout" size={18} className="text-ink-3" />
-          {t("logout")}
-        </a>
+        {/* الخروج POST مع CSRF: رابط GET كان يُخرج المستخدم من أي موقع بـ <img src=".../logout"> */}
+        <form method="post" action={BY.urls.logout} className="m-0">
+          <input type="hidden" name="csrf_token" value={BY.csrf} />
+          <button type="submit"
+                  className="flex w-full cursor-pointer items-center gap-3 rounded-xl border-0 bg-transparent px-3 py-2.5
+                             text-start text-[14px] font-bold text-ink-2 transition-colors hover:bg-white/[0.06] hover:text-ink">
+            <Icon name="logout" size={18} className="text-ink-3" />
+            {t("logout")}
+          </button>
+        </form>
       </div>
     </>
   );

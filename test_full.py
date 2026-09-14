@@ -166,7 +166,7 @@ class BotYallaE2ETest(unittest.TestCase):
             pay_id = pay["id"]
         
         # الآن دخول كـ Admin للاعتماد
-        self.client.get("/logout")
+        self.client.post("/logout", data={"csrf_token": self._tk()})   # الخروج POST فقط
         self.client.post("/login", data={"username": ADMIN_USER, "password": ADMIN_PASS, "csrf_token": self._tk()})
         # تأكيد نجاح الدخول صراحةً: بدونه يفشل الاختبار لاحقاً عند فحص الباقة
         # برسالة مضلِّلة ('free' != 'merchant') بدل السبب الحقيقي — كلمة مرور خاطئة.

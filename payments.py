@@ -108,10 +108,36 @@ def _probe():
         return {"ok": False, "reason": "no_lang", "langs": ""}
     return {"ok": True, "reason": None if "ara" in use else "no_ara", "langs": "+".join(use)}
 
+import threading
+
+# قراءتان متزامنتان على الأكثر. gunicorn يشغّل 4 خيوط فقط وحلقة بوتات العملاء في العملية
+# نفسها: أربعة إيصالات معاً كانت تشغل الخيوط كلها فيتجمّد الموقع. من لا يجد مكاناً خلال
+# OCR_WAIT لا يُرفض — يرجع None فيذهب إيصاله للمراجعة اليدوية كما لو OCR غير متاح.
+_OCR_SLOTS = threading.BoundedSemaphore(2)
+OCR_WAIT, OCR_TIMEOUT = 8, 10          # لقطة موبايل تُقرأ في أقل من 3 ثوانٍ
+
+# إيصالات عملاء البوتات (إضافة «تحصيل المدفوعات») — في مجلد رفع إيصالات المنصة نفسه
+import time as _time
+UPLOAD_DIR = os.environ.get("BOTYALLA_UPLOADS",
+                            os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads"))
+_EXT = {"jpeg": ".jpg", "png": ".png", "webp": ".webp"}
+
+def save_receipt(data, prefix):
+    """يكتب إيصالاً اجتاز الفحص ويرجّع اسم ملفه (مولَّد داخلياً — لا اسم من المستخدم)."""
+    kind = validate_bytes(data).get("kind") or "jpeg"
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    fname = f"{prefix}_{int(_time.time())}_{os.urandom(3).hex()}{_EXT.get(kind, '.jpg')}"
+    with open(os.path.join(UPLOAD_DIR, fname), "wb") as f:
+        f.write(data)
+    return fname
+
 def read_text(data):
-    """نص الصورة بعد تجهيزها للقراءة، أو None لو OCR غير متاح أو فشل."""
+    """نص الصورة بعد تجهيزها للقراءة، أو None لو OCR غير متاح أو فشل أو مشغول."""
     st = ocr_status()
     if not st["ok"]:
+        return None
+    if not _OCR_SLOTS.acquire(timeout=OCR_WAIT):
+        log.warning("receipt OCR busy — this receipt goes to manual review")
         return None
     try:
         import pytesseract
@@ -126,10 +152,12 @@ def read_text(data):
         if ImageStat.Stat(g).mean[0] < 110:          # الوضع الليلي: نص فاتح على خلفية داكنة
             g = ImageOps.invert(g)
         g = ImageOps.autocontrast(g)
-        return pytesseract.image_to_string(g, lang=st["langs"], timeout=30) or ""
+        return pytesseract.image_to_string(g, lang=st["langs"], timeout=OCR_TIMEOUT) or ""
     except Exception:
         log.warning("receipt OCR failed", exc_info=True)
         return None
+    finally:
+        _OCR_SLOTS.release()
 
 
 # ------------------------------------------------------------------ التحليل

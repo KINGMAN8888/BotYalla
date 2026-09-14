@@ -213,7 +213,7 @@ class FirstVisitCsrfTests(unittest.TestCase):
         c = web.app.test_client()
         c.post("/login", data={"username": "visitor", "password": TEST_PW,
                                "csrf_token": self._page_token(c, "/login")})
-        c.get("/logout")                              # يمسح الجلسة كلها
+        c.post("/logout", data={"csrf_token": self._page_token(c, "/dashboard")})  # POST فقط · يمسح الجلسة
         r = c.post("/login", data={"username": "visitor", "password": TEST_PW,
                                    "csrf_token": self._page_token(c, "/login")})
         self.assertEqual(r.status_code, 302)

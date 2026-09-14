@@ -293,7 +293,7 @@ class CampaignAudienceTests(unittest.TestCase):
 
     def _campaign(self, outcome):
         """يرسل حملة ويرجّع ما خُصم فعلاً بالقروش. `outcome(peers) -> (sent, failed)`."""
-        def fake(bot_id, name, language, values=None, peers=None):
+        def fake(bot_id, name, language, values=None, peers=None, prog=None):
             self.seen.append(peers)
             return outcome(peers or [])
         web.manager.broadcast_template = fake
@@ -301,6 +301,7 @@ class CampaignAudienceTests(unittest.TestCase):
         c.post("/login", data={"username": "cmp_owner", "password": self.pw, "csrf_token": "tk"})
         c.post(self.path, data={"mode": "template", "template": "promo", "template_lang": "ar",
                                 "csrf_token": "tk"})
+        web.manager.join_campaigns()                  # الحملة تُرسل في الخلفية
         return 100000 - db.wallet_balance(self.u)
 
     def test_the_charge_covers_everyone_the_template_reaches(self):
@@ -355,7 +356,7 @@ class DirectSendBillingTests(unittest.TestCase):
         db.wallet_topup(self.u, balance)
         start = db.wallet_balance(self.u)
 
-        def fake(bot_id, text, category="utility", peers=None):
+        def fake(bot_id, text, category="utility", peers=None, prog=None):
             self.calls.append({"category": category, "peers": peers})
             return outcome(peers or [])
         web.manager.broadcast_direct = fake
@@ -363,23 +364,24 @@ class DirectSendBillingTests(unittest.TestCase):
         c.post("/login", data={"username": "ds_owner", "password": self.pw, "csrf_token": "tk"})
         c.post(self.path, data={"mode": "direct_send", "text": "طلبك اتشحن", "csrf_token": "tk",
                                 **form})
+        web.manager.join_campaigns()                  # الحملة تُرسل في الخلفية
         return start - db.wallet_balance(self.u)
 
-    def _flashes(self, cat):
-        with self.client.session_transaction() as s:
-            return [m for c, m in s.get("_flashes", []) if c == cat]
+    def _status(self):
+        return web.manager.campaign_status(self.bid) or {}
 
-    def test_a_rejected_send_tells_the_owner_why_and_that_all_was_refunded(self):
-        """أشهر سبب لرفض الكل: الحساب غير مفعّل لبيتا Meta — العميل يُبلَّغ بذلك وبالردّ."""
+    def test_a_rejected_send_is_reported_with_its_full_refund(self):
+        """أشهر سبب لرفض الكل: الحساب غير مفعّل لبيتا Meta. «آخر حملة» تعرض ذلك (mode=direct
+        و sent=0 — الصفحة تشرح السبب) ومبلغ الردّ الكامل."""
         self.assertEqual(self._send(lambda peers: (0, len(peers))), 0)
-        errs = self._flashes("error")
-        self.assertTrue(any("تجريبية" in m and "كاملاً" in m and "قالب معتمد" in m for m in errs),
-                        errs)
+        st = self._status()
+        self.assertEqual((st.get("mode"), st.get("sent"), st.get("charged")), ("direct", 0, 0))
+        self.assertEqual(st.get("refunded"), 6 * web.mkt_price())
 
-    def test_a_partial_send_says_how_much_came_back(self):
+    def test_a_partial_send_reports_how_much_came_back(self):
         self._send(lambda peers: (4, 2))
-        oks = self._flashes("ok")
-        self.assertTrue(any(f"عن 2 رسالة لم تصل" in m for m in oks), oks)
+        st = self._status()
+        self.assertEqual((st.get("sent"), st.get("refunded")), (4, 2 * web.mkt_price()))
 
     def test_everyone_reached_is_charged_at_the_message_price(self):
         self.assertEqual(self._send(), 6 * web.mkt_price())

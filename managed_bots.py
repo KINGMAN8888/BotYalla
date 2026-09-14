@@ -229,6 +229,8 @@ async def provision(pbot, creator_id, new_bot):
         log.exception("profile sync failed for managed bot #%s", bot_id)
 
     started, _ = await mgr.start_bot_async(bot_id)
+    if started:
+        db.track("bot_live", req["user_id"], bot_id)     # مرحلة القمع: البوت شغّال
     uname = info["username"] or ""
     await _say(pbot, creator_id,
                i18n.t("mb_tg_done" if started else "mb_tg_done_stopped", lang).format(u=uname),

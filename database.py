@@ -163,6 +163,11 @@ def _migrate(c):
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email) WHERE email IS NOT NULL")
     # أول مستخدم = admin دائماً
     c.execute("UPDATE users SET role='admin' WHERE id=1 AND role<>'admin'")
+    # تحصيل مدفوعات عملاء البوت (إضافة لكل بوت): حالة دفع الطلب
+    # NULL = بلا تحصيل · awaiting (ينتظر الإيصال) · pending (للمراجعة) · paid · rejected
+    ocols = {r[1] for r in c.execute("PRAGMA table_info(orders)").fetchall()}
+    if "pay_status" not in ocols:
+        c.execute("ALTER TABLE orders ADD COLUMN pay_status TEXT")
 
     pcols = {r[1] for r in c.execute("PRAGMA table_info(payments)").fetchall()}
     if "promo_id" not in pcols:                   # الكود المستخدم وقيمة الخصم وقت الدفع
@@ -649,6 +654,85 @@ def init_db():
         );
         """)
         _migrate(c)
+        _hot_indexes(c)
+        _analytics_tables(c)
+        _customer_pay_tables(c)
+
+def _hot_indexes(c):
+    """فهارس الاستعلامات الساخنة. EXPLAIN QUERY PLAN كان يُظهر مسحاً كاملاً لـ events و
+    leads و orders و payments و bots — ومع workers=1 أي بطء يصيب كل المستخدمين.
+    بعد `_migrate` لأن بعض الأعمدة يضيفها الترحيل في القواعد القديمة. (حجوزات البوت
+    يغطيها فهرس UNIQUE(bot_id, slot) أصلاً.)"""
+    for sql in ("CREATE INDEX IF NOT EXISTS ix_events_bot_day ON events(bot_id, day)",
+                "CREATE INDEX IF NOT EXISTS ix_events_created ON events(created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_leads_bot ON leads(bot_id, created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_orders_bot ON orders(bot_id, created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_payments_user ON payments(user_id, created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_payments_status ON payments(status, created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_payments_img ON payments(img_hash)",
+                "CREATE INDEX IF NOT EXISTS ix_bots_owner ON bots(owner_id)"):
+        try:
+            c.execute(sql)
+        except sqlite3.OperationalError:
+            log.warning("index skipped: %s", sql, exc_info=True)
+
+def _analytics_tables(c):
+    """قياس الزوار داخل المنصة — بلا سكربت خارجي (CSP يبقى 'self') ولا كوكي تتبّع.
+    page_views: زيارة صفحة عامة. `vid` بصمة يومية تُعدّ الزوار الفريدين بلا تخزين IP.
+    funnel: أول مرة فقط لكل (مرحلة، مستخدم، بوت) — مراحل قمع لا عدّاد نقرات."""
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS page_views(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day TEXT NOT NULL,
+            path TEXT NOT NULL,
+            ref TEXT,                             -- دومين المُحيل الخارجي
+            src TEXT,                             -- utm_source أو ref (أفيليت)
+            device TEXT,                          -- mobile | desktop
+            vid TEXT,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_pv_day ON page_views(day);
+        CREATE TABLE IF NOT EXISTS funnel(
+            kind TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY(kind, user_id, bot_id)
+        );
+    """)
+
+def _customer_pay_tables(c):
+    """إضافة «تحصيل المدفوعات» (مدفوعة لكل بوت): عميل البوت يحوّل على حسابات صاحبه ويرسل
+    الإيصال للبوت، فيُفحص بنفس محرك إيصالات المنصة ويعتمده صاحب البوت.
+    bot_addons: صلاحية الإضافة لكل بوت. bot_payments: إيصالات عملاء البوت."""
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS bot_addons(
+            bot_id INTEGER NOT NULL,
+            addon TEXT NOT NULL,                  -- pay
+            expires_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY(bot_id, addon),
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS bot_payments(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            order_id INTEGER,
+            tg_user_id INTEGER,
+            customer TEXT,
+            amount REAL NOT NULL,
+            screenshot TEXT,                      -- اسم مولَّد داخلياً في مجلد الرفع
+            img_hash TEXT,
+            file_id TEXT,                         -- معرّف الصورة في تليجرام (لإعادة إرسالها للمالك)
+            auto_check TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | rejected
+            created_at INTEGER NOT NULL,
+            decided_at INTEGER,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_bp_bot ON bot_payments(bot_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS ix_bp_img ON bot_payments(bot_id, img_hash);
+    """)
 
 # ---------- users ----------
 def create_user(username, pw_hash, email=None):
@@ -769,10 +853,14 @@ def add_lead(bot_id, tg_user_id, data: dict):
     log_event(bot_id, "lead")
     return lead_id
 
-def list_leads(bot_id):
+def _lim(limit):
+    """حدّ الصفوف لقوائم اللوحة. None = الكل (التصدير) — LIMIT -1 في SQLite بلا حد."""
+    return -1 if limit is None else int(limit)
+
+def list_leads(bot_id, limit=300):
     with get_conn() as c:
-        rows = c.execute("SELECT * FROM leads WHERE bot_id=? ORDER BY created_at DESC, id DESC LIMIT 300",
-                         (bot_id,)).fetchall()
+        rows = c.execute("SELECT * FROM leads WHERE bot_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
+                         (bot_id, _lim(limit))).fetchall()
         out = []
         for r in rows:
             d = dict(r)
@@ -789,18 +877,21 @@ def list_leads(bot_id):
             d["media"] = by_lead.get(d["id"], [])
         return out
 
-def add_order(bot_id, tg_user_id, customer, phone, address, items, total):
+def add_order(bot_id, tg_user_id, customer, phone, address, items, total, pay_status=None):
+    """يرجّع رقم الطلب — تحصيل المدفوعات يربط به إيصال العميل."""
     with get_conn() as c:
-        c.execute("INSERT INTO orders(bot_id,tg_user_id,customer,phone,address,items_json,total,created_at)"
-                  " VALUES(?,?,?,?,?,?,?,?)",
-                  (bot_id, tg_user_id, customer, phone, address,
-                   json.dumps(items, ensure_ascii=False), total, int(time.time())))
+        cur = c.execute("INSERT INTO orders(bot_id,tg_user_id,customer,phone,address,items_json,total,"
+                        "created_at,pay_status) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (bot_id, tg_user_id, customer, phone, address,
+                         json.dumps(items, ensure_ascii=False), total, int(time.time()), pay_status))
+        order_id = cur.lastrowid
     log_event(bot_id, "order", total)
+    return order_id
 
-def list_orders(bot_id):
+def list_orders(bot_id, limit=300):
     with get_conn() as c:
-        rows = c.execute("SELECT * FROM orders WHERE bot_id=? ORDER BY created_at DESC, id DESC LIMIT 300",
-                         (bot_id,)).fetchall()
+        rows = c.execute("SELECT * FROM orders WHERE bot_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
+                         (bot_id, _lim(limit))).fetchall()
         out = []
         for r in rows:
             d = dict(r)
@@ -826,10 +917,10 @@ def taken_slots(bot_id):
         return set(r[0] for r in c.execute(
             "SELECT slot FROM bookings WHERE bot_id=? AND status='booked'", (bot_id,)).fetchall())
 
-def list_bookings(bot_id):
+def list_bookings(bot_id, limit=300):
     with get_conn() as c:
-        rows = c.execute("SELECT * FROM bookings WHERE bot_id=? ORDER BY slot DESC, id DESC LIMIT 300",
-                         (bot_id,)).fetchall()
+        rows = c.execute("SELECT * FROM bookings WHERE bot_id=? ORDER BY slot DESC, id DESC LIMIT ?",
+                         (bot_id, _lim(limit))).fetchall()
         return [dict(r) for r in rows]
 
 # ---------- analytics ----------
@@ -846,13 +937,14 @@ def stats_summary(bot_id):
 
 def stats_daily(bot_id, days=14):
     """سلاسل زمنية لآخر N يوم لكل نوع حدث."""
-    with get_conn() as c:
-        rows = c.execute(
-            "SELECT day, kind, COUNT(*) cnt, COALESCE(SUM(value),0) val "
-            "FROM events WHERE bot_id=? GROUP BY day, kind", (bot_id,)).fetchall()
     import datetime
     today = datetime.date.today()
     labels = [(today - datetime.timedelta(days=i)).isoformat() for i in range(days-1, -1, -1)]
+    # النافذة في SQL لا في بايثون: كان يسحب كل أحداث البوت منذ إنشائه ثم يصفّي 14 يوماً
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT day, kind, COUNT(*) cnt, COALESCE(SUM(value),0) val "
+            "FROM events WHERE bot_id=? AND day >= ? GROUP BY day, kind", (bot_id, labels[0])).fetchall()
     series = {k: {d: 0 for d in labels} for k in ("start", "lead", "order", "booking")}
     revenue = {d: 0 for d in labels}
     for r in rows:
@@ -1040,6 +1132,14 @@ def finalize_payment(pid, status):
             row["wallet_after"] = wallet_topup(
                 row["user_id"], int(round(float(row["amount"] or 0) * 100)),
                 ref=f"payment:{row['id']}", note="topup", conn=c)
+        elif status == "approved" and addon_bot_id(row["plan"]):
+            # إضافة «تحصيل المدفوعات» لبوت بعينه — 30 يوماً تُمدّ من انتهائها لو ما زالت
+            # سارية. داخل نفس المعاملة: لا دفعة معتمدة بلا إضافة مفعّلة.
+            bid = addon_bot_id(row["plan"])
+            if c.execute("SELECT 1 FROM bots WHERE id=?", (bid,)).fetchone():
+                row["addon_expires"] = extend_addon(bid, "pay", days=30, conn=c)
+            else:
+                log.warning("payment #%s approved for the add-on of deleted bot #%s", row["id"], bid)
         elif status == "approved":
             # تاريخ الانتهاء يُرجَع مع الصف لإيصال الإيميل (mailer.send_payment_receipt)
             # المدة من **دورة الدفعة نفسها** لا من افتراض ثابت — فدفعة سنوية
@@ -2225,6 +2325,218 @@ def ai_reply_allow(owner_id, allowance, price, ref=None):
         c.execute("UPDATE ai_usage SET replies=replies+1, paid=paid+1 WHERE owner_id=? AND month=?",
                   (owner_id, m))
         return "paid"
+
+
+def ai_reply_release(owner_id, grant, price, ref=None):
+    """يعكس حجز `ai_reply_allow` لرد لم يصل (نافذة الـ24 ساعة · خطأ Meta · حدّ الباقة ·
+    الشبكة): يعيد العدّاد، ويردّ ثمنه لو كان مدفوعاً — في معاملة واحدة. قبلها كانت
+    القروش تُخصم على ردود لم تصل أبداً، بصمت وبتكرار."""
+    if grant not in ("included", "paid"):
+        return
+    m = _month()
+    with get_conn() as c:
+        if grant == "paid":
+            c.execute("UPDATE ai_usage SET replies=MAX(replies-1,0), paid=MAX(paid-1,0) "
+                      "WHERE owner_id=? AND month=?", (owner_id, m))
+            if int(price or 0) > 0:
+                _wallet_move(owner_id, int(price), "refund", ref=ref,
+                             note="ai reply not delivered", conn=c)
+        else:
+            c.execute("UPDATE ai_usage SET replies=MAX(replies-1,0) WHERE owner_id=? AND month=?",
+                      (owner_id, m))
+
+
+def purge_old_events(max_age_seconds=365 * 24 * 3600):
+    """أحداث التحليلات (`start` مع كل /start لكل بوت) كانت تنمو بلا حد ولا يمسّها التنظيف.
+    نحتفظ بسنة — مدة الاحتفاظ المعلنة للمحادثات. التحليلات اليومية تعرض 14 يوماً."""
+    cutoff = int(time.time()) - max_age_seconds
+    with get_conn() as c:
+        return c.execute("DELETE FROM events WHERE created_at < ?", (cutoff,)).rowcount
+
+
+# ---------- قياس الزوار والقمع ----------
+def log_page_view(path, ref, src, device, vid):
+    with get_conn() as c:
+        c.execute("INSERT INTO page_views(day,path,ref,src,device,vid,created_at) VALUES(?,?,?,?,?,?,?)",
+                  (_day(), (path or "/")[:120], (ref or None) and ref[:80], (src or None) and src[:60],
+                   device, vid, int(time.time())))
+
+
+def track(kind, user_id, bot_id=0):
+    """مرحلة قمع — أول مرة فقط لكل (مرحلة، مستخدم، بوت)."""
+    if not user_id:
+        return
+    with get_conn() as c:
+        c.execute("INSERT OR IGNORE INTO funnel(kind,user_id,bot_id,created_at) VALUES(?,?,?,?)",
+                  (kind, int(user_id), int(bot_id or 0), int(time.time())))
+
+
+def purge_old_page_views(max_age_seconds=400 * 24 * 3600):
+    cutoff = int(time.time()) - max_age_seconds
+    with get_conn() as c:
+        return c.execute("DELETE FROM page_views WHERE created_at < ?", (cutoff,)).rowcount
+
+
+def analytics_summary(days=30):
+    """لوحة «إحصائيات الزوار»: الزوار ومصادرهم، وقمع التسجيل على **دفعة** من سجّلوا في
+    الفترة (cohort): من كل مسجّل كم وصل لكل مرحلة — لا أحداث متفرقة من أزمنة مختلفة.
+    النسبة الحاكمة: مسجّل ← بوت شغّال (تحت 40% المشكلة في المنتج لا في التسويق)."""
+    import datetime
+    days = max(1, int(days))
+    since_ts = int(time.time()) - days * 86400
+    since_day = (datetime.date.today() - datetime.timedelta(days=days - 1)).isoformat()
+    uv = "COUNT(DISTINCT day || '|' || vid)"        # الزائر الفريد يُعدّ مرة لكل يوم
+    cohort = "SELECT id FROM users WHERE created_at >= ? AND role = 'user'"
+    with get_conn() as c:
+        one = lambda q, *a: c.execute(q, a).fetchone()[0] or 0
+        rows = lambda q, *a: [dict(r) for r in c.execute(q, a).fetchall()]
+        out = {
+            "days": days,
+            "visitors": one(f"SELECT {uv} FROM page_views WHERE day >= ?", since_day),
+            "views": one("SELECT COUNT(*) FROM page_views WHERE day >= ?", since_day),
+            "pricing_visitors": one(f"SELECT {uv} FROM page_views WHERE day >= ? AND path = '/pricing'",
+                                    since_day),
+            "daily": rows(f"SELECT day, {uv} v, COUNT(*) n FROM page_views WHERE day >= ? "
+                          "GROUP BY day ORDER BY day", since_day),
+            "pages": rows(f"SELECT path k, {uv} v, COUNT(*) n FROM page_views WHERE day >= ? "
+                          "GROUP BY path ORDER BY v DESC LIMIT 10", since_day),
+            "sources": rows(f"SELECT COALESCE(src, ref, 'direct') k, {uv} v FROM page_views "
+                            "WHERE day >= ? GROUP BY k ORDER BY v DESC LIMIT 10", since_day),
+            "devices": rows(f"SELECT COALESCE(device, 'other') k, {uv} v FROM page_views "
+                            "WHERE day >= ? GROUP BY k ORDER BY v DESC", since_day),
+            "signup_sources": rows(
+                "SELECT COALESCE(s.value, 'direct') k, COUNT(*) v FROM users u LEFT JOIN settings s "
+                "ON s.user_id = u.id AND s.key = 'signup_src' WHERE u.created_at >= ? AND u.role = 'user' "
+                "GROUP BY k ORDER BY v DESC LIMIT 10", since_ts),
+            "funnel": {
+                "signup": one(f"SELECT COUNT(*) FROM ({cohort})", since_ts),
+                "bot_created": one(f"SELECT COUNT(DISTINCT owner_id) FROM bots WHERE owner_id IN ({cohort})",
+                                   since_ts),
+                "bot_live": one("SELECT COUNT(DISTINCT user_id) FROM funnel WHERE kind = 'bot_live' "
+                                f"AND user_id IN ({cohort})", since_ts),
+                "first_message": one("SELECT COUNT(DISTINCT b.owner_id) FROM bots b "
+                                     f"WHERE b.owner_id IN ({cohort}) AND EXISTS (SELECT 1 FROM messages m "
+                                     "WHERE m.bot_id = b.id AND m.direction = 'in')", since_ts),
+                "payment_sent": one("SELECT COUNT(DISTINCT user_id) FROM payments WHERE plan <> ? "
+                                    f"AND user_id IN ({cohort})", WALLET_PLAN, since_ts),
+                "paid": one("SELECT COUNT(DISTINCT user_id) FROM payments WHERE plan <> ? AND "
+                            f"status = 'approved' AND user_id IN ({cohort})", WALLET_PLAN, since_ts),
+            },
+        }
+    return out
+
+
+# ---------- تحصيل مدفوعات عملاء البوت (إضافة مدفوعة لكل بوت) ----------
+# شراء الإضافة دفعة منصة عادية (إيصال + موافقة الأدمن) بـ plan = __addon_pay__:<bot_id> —
+# كشحن المحفظة: `plans.is_sellable` ترفضه، و`finalize_payment` تفعّل الإضافة لذلك البوت.
+ADDON_PAY = "__addon_pay__"
+
+
+def addon_plan(bot_id):
+    return f"{ADDON_PAY}:{int(bot_id)}"
+
+
+def addon_bot_id(plan):
+    if isinstance(plan, str) and plan.startswith(ADDON_PAY + ":"):
+        try:
+            return int(plan.split(":", 1)[1])
+        except ValueError:
+            return None
+    return None
+
+
+def addon_plans_in_payments():
+    with get_conn() as c:
+        return [r[0] for r in c.execute("SELECT DISTINCT plan FROM payments WHERE substr(plan,1,?)=?",
+                                        (len(ADDON_PAY) + 1, ADDON_PAY + ":")).fetchall()]
+
+
+def addon_expires(bot_id, addon="pay"):
+    with get_conn() as c:
+        r = c.execute("SELECT expires_at FROM bot_addons WHERE bot_id=? AND addon=?",
+                      (bot_id, addon)).fetchone()
+        return r[0] if r else None
+
+
+def addon_active(bot_id, addon="pay"):
+    exp = addon_expires(bot_id, addon)
+    return bool(exp and exp > time.time())
+
+
+def extend_addon(bot_id, addon="pay", days=30, conn=None):
+    """يمدّ الإضافة `days` يوماً — من تاريخ انتهائها لو ما زالت سارية، فالتجديد المبكر لا يضيع."""
+    now = int(time.time())
+    with _conn_or(conn) as c:
+        r = c.execute("SELECT expires_at FROM bot_addons WHERE bot_id=? AND addon=?",
+                      (bot_id, addon)).fetchone()
+        exp = max(now, r[0] if r else now) + int(days) * 86400
+        c.execute("INSERT INTO bot_addons(bot_id,addon,expires_at,updated_at) VALUES(?,?,?,?) "
+                  "ON CONFLICT(bot_id,addon) DO UPDATE SET expires_at=excluded.expires_at, "
+                  "updated_at=excluded.updated_at", (bot_id, addon, exp, now))
+        return exp
+
+
+def set_order_pay_status(order_id, status):
+    with get_conn() as c:
+        c.execute("UPDATE orders SET pay_status=? WHERE id=?", (status, order_id))
+
+
+def bot_payment_hash_used(bot_id, img_hash):
+    """إيصال بنفس البصمة في دفعة معلّقة أو معتمدة لنفس البوت = إعادة استخدام."""
+    with get_conn() as c:
+        return c.execute("SELECT 1 FROM bot_payments WHERE bot_id=? AND img_hash=? "
+                         "AND status IN ('pending','approved') LIMIT 1",
+                         (bot_id, img_hash)).fetchone() is not None
+
+
+def create_bot_payment(bot_id, order_id, tg_user_id, customer, amount, screenshot, img_hash,
+                       file_id, auto_check):
+    """إيصال عميل اجتاز الفحص ← معلّق لصاحب البوت، والطلب «للمراجعة» في المعاملة نفسها."""
+    now = int(time.time())
+    with get_conn() as c:
+        pid = c.execute("INSERT INTO bot_payments(bot_id,order_id,tg_user_id,customer,amount,screenshot,"
+                        "img_hash,file_id,auto_check,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,'pending',?)",
+                        (bot_id, order_id, tg_user_id, customer, amount, screenshot, img_hash, file_id,
+                         auto_check, now)).lastrowid
+        if order_id:
+            c.execute("UPDATE orders SET pay_status='pending' WHERE id=? AND bot_id=?", (order_id, bot_id))
+        return pid
+
+
+def get_bot_payment(pid, bot_id=None):
+    with get_conn() as c:
+        if bot_id is None:
+            r = c.execute("SELECT * FROM bot_payments WHERE id=?", (pid,)).fetchone()
+        else:
+            r = c.execute("SELECT * FROM bot_payments WHERE id=? AND bot_id=?", (pid, bot_id)).fetchone()
+        return dict(r) if r else None
+
+
+def list_bot_payments(bot_id, limit=100):
+    """المعلّقة أولاً ثم الأحدث."""
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT id,order_id,tg_user_id,customer,amount,status,created_at,decided_at,auto_check "
+            "FROM bot_payments WHERE bot_id=? ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, "
+            "id DESC LIMIT ?", (bot_id, int(limit))).fetchall()]
+
+
+def decide_bot_payment(pid, bot_id, status):
+    """قرار صاحب البوت — ذرّي كقرار دفعات المنصة: التحديث المشروط (`status='pending'`) هو القفل،
+    فزرّ تليجرام واللوحة معاً لا ينجحان مرتين. حالة الطلب تتحدّث في المعاملة نفسها.
+    يرجّع صفّ الدفعة، أو None لو سبق البتّ فيها أو ليست لهذا البوت."""
+    if status not in ("approved", "rejected"):
+        return None
+    with get_conn() as c:
+        cur = c.execute("UPDATE bot_payments SET status=?, decided_at=? WHERE id=? AND bot_id=? "
+                        "AND status='pending'", (status, int(time.time()), pid, bot_id))
+        if cur.rowcount != 1:
+            return None
+        row = dict(c.execute("SELECT * FROM bot_payments WHERE id=?", (pid,)).fetchone())
+        if row.get("order_id"):
+            c.execute("UPDATE orders SET pay_status=? WHERE id=? AND bot_id=?",
+                      ("paid" if status == "approved" else "rejected", row["order_id"], bot_id))
+        return row
 
 
 def ai_usage_of(owner_id, month=None):

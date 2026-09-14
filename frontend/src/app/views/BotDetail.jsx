@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  BY, P, t, bi, Icon, Card, Btn, Field, Input, Textarea, Form, Grid, Stat,
+  BY, P, t, bi, Icon, Card, Btn, Field, Input, Textarea, Select, Form, Grid, Stat,
   Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate,
 } from "../kit.jsx";
 import { AssetPicker, postJSON } from "../media.jsx";
@@ -722,7 +722,7 @@ function ChatBtn({ botId, peer }) {
 /* --------------------------------------------------------------- الصفحة */
 export default function BotDetail() {
   const { bot, plan = {}, leads = [], orders = [], bookings = [], usage = null,
-          links = null, isNew = false, unread = 0, versions = [], ai = {} } = P;
+          links = null, isNew = false, unread = 0, versions = [], ai = {}, pay = null } = P;
   const cfg = bot.config || {};
   const meta = BY.templates.find((x) => x.k === bot.template) || { icon: "bot", label: bot.template };
   const isFlow = ["flow", "customer_service", "feedback", "support"].includes(bot.template);
@@ -879,12 +879,16 @@ export default function BotDetail() {
         </Form>
       </Card>
 
+      <PaymentsCard bot={bot} pay={pay} />
+
       {/* البيانات المُجمّعة — وبجانب كل عميل زرّ المحادثة */}
       {bot.template === "store" && (
         <DataCard icon="store" title={t("orders_h")} empty={t("no_orders")} rows={orders}
                   exportUrl={`/bot/${bot.id}/export/orders`}
-                  head={[t("col_customer"), t("col_phone"), t("col_address"), t("col_total"), t("col_date"), ""]}
-                  render={(o) => [o.customer, o.phone, o.address, `${num(o.total)} ${t("egp")}`, fmtDate(o.created_at),
+                  head={[t("col_customer"), t("col_phone"), t("col_address"), t("col_total"),
+                         bi("الدفع", "Payment"), t("col_date"), ""]}
+                  render={(o) => [o.customer, o.phone, o.address, `${num(o.total)} ${t("egp")}`,
+                                  <OrderPay s={o.pay_status} />, fmtDate(o.created_at),
                                   <ChatBtn botId={bot.id} peer={o.peer} />]} />
       )}
       {bot.template === "booking" && (
@@ -910,6 +914,209 @@ export default function BotDetail() {
                       {(l.media || []).map((m) => <MediaChip key={m.id} m={m} botId={bot.id} />)}
                     </div>, fmtDate(l.created_at), <ChatBtn botId={bot.id} peer={l.peer} />]} />
       )}
+    </>
+  );
+}
+
+/* ======================================================= تحصيل مدفوعات العملاء
+   إضافة مدفوعة لكل بوت (متجر تليجرام): بعد تأكيد الطلب يطلب البوت من العميل التحويل على
+   حسابات **صاحب البوت** ويستلم صورة الإيصال، فيفحصها بمحرك إيصالات المنصة ويرفض ما ليس
+   إيصالاً أو على حساب آخر أو بمبلغ آخر — وما يمرّ يصل هنا وعلى تليجرام بزرّي تأكيد/رفض. */
+const ORDER_PAY = {
+  awaiting: ["warn", "ينتظر الإيصال", "Awaiting receipt"],
+  pending:  ["warn", "إيصال للمراجعة", "Receipt to review"],
+  paid:     ["on",   "مدفوع", "Paid"],
+  rejected: ["off",  "مرفوض", "Rejected"],
+  cancelled: ["mute", "ألغاه العميل", "Cancelled by customer"],
+};
+const OrderPay = ({ s }) => {
+  const x = ORDER_PAY[s];
+  return x ? <Pill tone={x[0]}>{bi(x[1], x[2])}</Pill> : <span className="text-ink-3">—</span>;
+};
+const PAY_ROW = { pending: ["warn", "للمراجعة", "Pending"], approved: ["on", "مؤكدة", "Confirmed"],
+                  rejected: ["off", "مرفوضة", "Rejected"] };
+
+function PaymentsCard({ bot, pay }) {
+  if (!pay || !pay.eligible) return null;
+  const m = pay.methods || {};
+  const hasMethod = ["vodafone", "instapay", "bank_account", "bank_iban"].some((k) => m[k]);
+  const M = ({ k, label, ph, ltr = true }) => (
+    <Field label={label}>
+      <Input name={`pay_${k}`} defaultValue={m[k] || ""} placeholder={ph} autoComplete="off"
+             dir={ltr ? "ltr" : undefined} />
+    </Field>
+  );
+  return (
+    <Card className="mb-6" id="pay">
+      <SectionTitle icon="wallet"
+        extra={pay.active
+          ? <Pill tone="on" dot>{bi(`مفعّلة حتى ${fmtDate(pay.expires)}`, `Active until ${fmtDate(pay.expires)}`)}</Pill>
+          : <Pill tone="mute">{bi("غير مفعّلة", "Not active")}</Pill>}>
+        {bi("تحصيل مدفوعات العملاء", "Customer payments")}
+      </SectionTitle>
+      <p className="mt-0 mb-4 text-[13px] leading-relaxed text-ink-2">
+        {bi("بعد تأكيد الطلب يطلب البوت من العميل التحويل على حساباتك أنت (فودافون كاش · انستاباي · بنك) ويستلم صورة الإيصال. يفحصها آلياً ويرفض ما ليس إيصالاً أو على حساب آخر أو بمبلغ آخر، وما يمرّ يصلك هنا وعلى تليجرام بزرّي تأكيد/رفض — والعميل يُبلَّغ بقرارك.",
+            "After an order is confirmed, the bot asks the customer to transfer to your own accounts (Vodafone Cash · InstaPay · bank) and receives the receipt photo. It checks it automatically and refuses anything that isn't a receipt, went to another account or has another amount; the rest reaches you here and on Telegram with Confirm/Reject — and the customer is told your decision.")}
+      </p>
+      {!pay.active ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl p-4
+                        bg-[linear-gradient(120deg,rgb(124_108_246/0.18),rgb(34_211_238/0.06))]">
+          <div className="min-w-0 flex-1">
+            <b className="block tnum text-[15px] text-ink">
+              {bi(`${num(pay.price)} ج.م شهرياً لهذا البوت`, `${num(pay.price)} EGP / month for this bot`)}
+            </b>
+            <span className="text-[12.5px] text-ink-3">
+              {bi("إضافة منفصلة عن باقتك — تُدفع لكل بوت.", "Separate from your plan — paid per bot.")}
+            </span>
+          </div>
+          <Btn icon="card" href={`/bot/${bot.id}/addon/pay`}>{bi("فعّل الإضافة", "Activate the add-on")}</Btn>
+        </div>
+      ) : (
+        <>
+          <Form action={`/bot/${bot.id}/pay-settings`}>
+            <span className="mb-3 block text-[13px] font-bold text-ink-2">
+              {bi("حساباتك التي يحوّل عليها العملاء", "Your accounts customers pay into")}
+            </span>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <M k="vodafone" label={t("pay_vodafone")} ph="010xxxxxxxx" />
+              <M k="instapay" label={`${t("pay_instapay")} — ${t("pay_handle")}`} ph="name@instapay" />
+              <M k="instapay_link" label={`${t("pay_instapay")} — ${t("pay_open_link")}`} ph="https://ipn.eg/…" />
+              <M k="bank_holder" label={t("pay_holder")} ltr={false} />
+              <M k="bank_name" label={t("pay_bankname")} ltr={false} />
+              <M k="bank_account" label={t("pay_account")} />
+              <M k="bank_iban" label={t("pay_iban")} />
+            </div>
+            {!hasMethod && (
+              <p className="mt-3 mb-0 text-[12.5px] font-bold text-amber-200">
+                {bi("أضف وسيلة استلام واحدة على الأقل — بدونها لا يطلب البوت دفعاً من العملاء.",
+                    "Add at least one receiving method — without it the bot doesn't ask customers to pay.")}
+              </p>
+            )}
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <Btn sm icon="check" type="submit">{bi("احفظ الحسابات", "Save accounts")}</Btn>
+              <Btn sm variant="ghost" icon="card" href={`/bot/${bot.id}/addon/pay`}>{bi("جدّد الإضافة", "Renew the add-on")}</Btn>
+            </div>
+          </Form>
+          <div className="mt-6">
+            {(pay.payments || []).length ? (
+              <Table head={["#", t("col_customer"), bi("الطلب", "Order"), t("col_amount"), t("col_status"),
+                            t("col_date"), ""]}>
+                {pay.payments.map((x) => {
+                  const st = PAY_ROW[x.status] || ["mute", x.status, x.status];
+                  return (
+                    <Tr key={x.id}>
+                      <Td className="tnum">{x.id}</Td>
+                      <Td>{x.customer || "—"}</Td>
+                      <Td className="tnum">{x.order_id ? `#${x.order_id}` : "—"}</Td>
+                      <Td className="tnum font-bold">{num(x.amount)} {t("egp")}</Td>
+                      <Td><Pill tone={st[0]}>{bi(st[1], st[2])}</Pill></Td>
+                      <Td className="text-ink-3">{fmtDate(x.created_at)}</Td>
+                      <Td>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Btn sm variant="ghost" icon="image" href={`/bot/${bot.id}/payments/${x.id}/receipt`}
+                               target="_blank" rel="noopener">{bi("الإيصال", "Receipt")}</Btn>
+                          {x.status === "pending" && (
+                            <>
+                              <Form action={`/bot/${bot.id}/payments/${x.id}/approve`} className="inline">
+                                <Btn sm variant="green" icon="check" type="submit">{bi("تأكيد", "Confirm")}</Btn>
+                              </Form>
+                              <Form action={`/bot/${bot.id}/payments/${x.id}/reject`} className="inline"
+                                    confirm={bi("رفض الدفعة وإبلاغ العميل؟", "Reject and notify the customer?")}>
+                                <Btn sm variant="red" icon="close" type="submit">{bi("رفض", "Reject")}</Btn>
+                              </Form>
+                            </>
+                          )}
+                        </div>
+                      </Td>
+                    </Tr>
+                  );
+                })}
+              </Table>
+            ) : <Empty icon="wallet" title={bi("لا مدفوعات من العملاء بعد", "No customer payments yet")} />}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+/* شراء/تجديد إضافة «تحصيل المدفوعات» — نفس مسار الدفع للمنصة: إيصال ← فحص آلي ← موافقة الأدمن.
+   المبلغ يعرضه الخادم ويفرضه (لا يُرسل من هنا). */
+export function AddonPay() {
+  const { bot = {}, price = 0, expires = null, plat = {}, qr, action } = P;
+  const [copied, setCopied] = useState("");
+  const active = expires && expires * 1000 > Date.now();
+  const copy = (v, k) => {
+    navigator.clipboard?.writeText(v).then(() => { setCopied(k); setTimeout(() => setCopied(""), 1400); });
+  };
+  const CopyRow = ({ v, k }) => (
+    <div className="mt-2 flex items-center gap-2">
+      <code className="flex-1 overflow-x-auto rounded-lg bg-black/30 px-3 py-2 text-[13px] text-au-cyan
+                       shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">{v}</code>
+      <Btn variant="ghost" sm type="button" onClick={() => copy(v, k)} aria-label={t("copy")}>
+        <Icon name={copied === k ? "check" : "copy"} size={13} />
+      </Btn>
+    </div>
+  );
+  return (
+    <>
+      <PageHead icon="wallet" title={t("addon_pay_title")} sub={bot.name}
+        actions={<Btn variant="ghost" sm icon="back" href={`/bot/${bot.id}`}>{t("back")}</Btn>} />
+      <Card className="mb-6 bg-[linear-gradient(120deg,rgb(124_108_246/0.18),rgb(34_211_238/0.06))]">
+        <div className="text-[14px] text-ink-2">{t("pay_amount")}</div>
+        <div className="mt-1 tnum text-[32px] font-extrabold text-ink">
+          {num(price)} {t("egp")}<span className="ms-2 text-[15px] font-bold text-ink-3">{t("per_month")}</span>
+        </div>
+        <p className="mt-3 mb-0 max-w-[640px] text-[12.5px] leading-relaxed text-ink-3">
+          {bi(`تحصيل مدفوعات عملاء «${bot.name}» لمدة 30 يوماً — العملاء يحوّلون على حساباتك أنت، والبوت يفحص الإيصالات ويرسلها لك للتأكيد.`,
+              `Collect payments from «${bot.name}» customers for 30 days — they pay into your own accounts, and the bot checks receipts and sends them to you to confirm.`)}
+          {active && " " + bi(`مفعّلة حتى ${fmtDate(expires)} — الدفع الآن يمدّها 30 يوماً من هذا التاريخ.`,
+                              `Active until ${fmtDate(expires)} — paying now extends it by 30 days from that date.`)}
+        </p>
+      </Card>
+
+      <Card>
+        <SectionTitle icon="card">{t("pay_method")}</SectionTitle>
+        <div className="mb-5 grid gap-4 lg:grid-cols-3">
+          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+            <div className="flex items-center gap-2 font-extrabold text-[#FF6B6B]"><Icon name="phone" size={16} />{t("pay_vodafone")}</div>
+            <CopyRow v={plat.vodafone_number} k="vf" />
+          </div>
+          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+            <div className="flex items-center gap-2 font-extrabold text-au-violet"><Icon name="card" size={16} />{t("pay_instapay")}</div>
+            {qr && <img src={qr} alt="InstaPay QR" className="mx-auto my-3 w-[112px] rounded-xl bg-white p-1" />}
+            <CopyRow v={plat.instapay_handle} k="ip" />
+          </div>
+          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+            <div className="flex items-center gap-2 font-extrabold text-au-cyan"><Icon name="bank" size={16} />{t("pay_bank")}</div>
+            <CopyRow v={plat.bank_account} k="acc" />
+            <CopyRow v={plat.bank_iban} k="iban" />
+          </div>
+        </div>
+        <Form action={action} encType="multipart/form-data">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label={t("pay_method")}>
+              <Select name="method" defaultValue="vodafone">
+                <option value="vodafone">{t("pay_vodafone")}</option>
+                <option value="instapay">{t("pay_instapay")}</option>
+                <option value="bank">{t("pay_bank")}</option>
+              </Select>
+            </Field>
+            <Field label={t("pay_ref")}><Input name="ref" placeholder="#..." /></Field>
+          </div>
+          <div className="mt-4">
+            <Field label={t("pay_upload")}>
+              <input type="file" name="screenshot" accept="image/*" required
+                     className="w-full cursor-pointer rounded-xl bg-black/25 p-2.5 text-[13px] text-ink-3
+                                shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
+                                file:me-3 file:rounded-lg file:border-0 file:bg-au-violet/25
+                                file:px-3 file:py-1.5 file:text-[13px] file:font-bold file:text-white" />
+            </Field>
+          </div>
+          <div className="mt-3 text-[12.5px] text-ink-3">{t("pay_secure_note")}</div>
+          <div className="mt-5"><Btn icon="shield" type="submit">{t("pay_submit")}</Btn></div>
+        </Form>
+      </Card>
     </>
   );
 }

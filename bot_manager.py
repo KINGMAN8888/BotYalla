@@ -1,5 +1,5 @@
 """مدير BotYalla — يشغّل عدة بوتات في حلقة asyncio بخيط منفصل + بث جماعي."""
-import asyncio, json, threading, logging, time as _time, datetime as _dt
+import asyncio, concurrent.futures, json, threading, logging, time as _time, datetime as _dt
 from telegram import Bot
 from telegram.ext import Application
 import database as db
@@ -119,6 +119,8 @@ class BotManager:
         self._apps = {}; self._ready = threading.Event(); self._platform = None
         # يوزر بوت المنصة و«وضع إدارة البوتات» (can_manage_bots) — من getMe عند التشغيل
         self._platform_info = {}
+        # الحملات تعمل في خيوط خلفية، حملة واحدة لكل بوت (start_campaign)
+        self._campaigns = {}; self._campaign_lock = threading.Lock(); self._campaign_threads = []
 
     def start(self):
         if self._thread and self._thread.is_alive(): return
@@ -240,9 +242,43 @@ class BotManager:
     def restart_bot(self, bot_id):
         self.stop_bot(bot_id); return self.start_bot(bot_id)
 
-    def broadcast(self, bot_id, text, asset=None):
+    # ---- البث الجماعي ----
+    # كل حلقة إرسال تحدّث عدّاداً حيّاً (`prog`) بعد كل رسالة، ومنه وحده تُحسب النتيجة.
+    @staticmethod
+    def _progress(prog, total):
+        """يهيّئ العدّاد. حالة الحملة نفسها تُمرَّر هنا فتعرض الصفحة التقدّم أثناء الإرسال."""
+        p = prog if prog is not None else {}
+        p.update(sent=0, failed=0, total=total, stop=False)
+        return p
+
+    @staticmethod
+    def _tally(prog, ok):
+        prog["sent" if ok else "failed"] += 1
+
+    def _run_counted(self, coro, prog, total, timeout, what):
+        """يشغّل حلقة إرسال ويرجّع (وصل, لم يصل) من العدّاد الحيّ لا من نتيجتها.
+
+        `.result(timeout)` لا يلغي الكوروتين — يكفّ عن انتظاره فقط — فكانت المهلة تُعلن
+        «فشل الكل» فيُردّ ثمن الحملة كاملاً بينما الرسائل تُرسل فعلاً. الآن عند المهلة
+        نطلب التوقف (`stop`) فتتوقف الحلقة قبل الرسالة التالية، وننتظر الجارية حتى تكتمل
+        (مهلة الطلب الواحد 15ث)، ثم نقرأ العدّاد: ما وصل يُحاسَب وما بقي يُردّ."""
+        fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            fut.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            log.warning("%s: time budget reached at %s/%s — stopping", what, prog["sent"], total)
+            prog["stop"] = True
+            try:
+                fut.result(timeout=20)
+            except Exception:
+                fut.cancel()
+        except Exception:
+            log.exception(what)
+        return prog["sent"], total - prog["sent"]
+
+    def broadcast(self, bot_id, text, asset=None, prog=None):
         """إرسال رسالة لكل مشتركي البوت — مع صورة/فيديو من المكتبة اختيارياً
-        (والنص يصير تعليقه). يرجّع (تم, فشل)."""
+        (والنص يصير تعليقه). يرجّع (وصل, لم يصل)."""
         row = db.get_bot(bot_id)
         if not row: return 0, 0
         if (row.get("channel") or "telegram") == "whatsapp":
@@ -255,16 +291,14 @@ class BotManager:
         else:
             ids = db.list_bot_user_ids(bot_id)
         if not ids: return 0, 0
-        try:
-            per = 1.0 if asset else 0.5                # الوسائط أبطأ (أول رفع خصوصاً)
-            return self._submit(self._broadcast(row, ids, text, asset),
-                                timeout=max(30, len(ids) * per))
-        except Exception as e:
-            log.exception("broadcast"); return 0, len(ids)
+        prog = self._progress(prog, len(ids))
+        per = 2.0 if asset else 1.0                    # الوسائط أبطأ (أول رفع خصوصاً)
+        return self._run_counted(self._broadcast(row, ids, text, asset, prog), prog, len(ids),
+                                 max(60, len(ids) * per), "broadcast")
 
-    async def _broadcast(self, row, ids, text, asset=None):
+    async def _broadcast(self, row, ids, text, asset, prog):
         if (row.get("channel") or "telegram") == "whatsapp":
-            return await self._broadcast_wa(row, ids, text, asset)
+            return await self._broadcast_wa(row, ids, text, asset, prog)
 
         from channels.telegram import TelegramChannel
         app = self._apps.get(row["id"])
@@ -272,36 +306,38 @@ class BotManager:
         own = app is None
         if own: await bot.initialize()
         ch = TelegramChannel(bot) if asset else None
-        sent = failed = 0
-        for uid in ids:
-            try:
-                if ch:
-                    # أول إرسال يرفع الملف ويحفظ file_id — الباقي يعيد استعماله
-                    await ch.send_media(f"tg:{uid}", asset, row["id"], caption=text or None)
-                else:
-                    await bot.send_message(uid, text)
-                sent += 1
+        try:
+            for uid in ids:
+                if prog["stop"]:
+                    break
+                try:
+                    if ch:
+                        # أول إرسال يرفع الملف ويحفظ file_id — الباقي يعيد استعماله
+                        await ch.send_media(f"tg:{uid}", asset, row["id"], caption=text or None)
+                    else:
+                        await bot.send_message(uid, text)
+                    ok = True
+                except Exception:
+                    ok = False
+                self._tally(prog, ok)
                 await asyncio.sleep(0.05)   # احترام حدود المعدل
-            except Exception:
-                failed += 1
-        if own: await bot.shutdown()
-        return sent, failed
+        finally:
+            if own: await bot.shutdown()
 
-    async def _broadcast_wa(self, row, peers, text, asset=None):
+    async def _broadcast_wa(self, row, peers, text, asset, prog):
         channel = _wa_channel(row)
-        sent = failed = 0
         for peer in peers:
+            if prog["stop"]:
+                break
             try:
                 ok = await (channel.send_media(peer, asset, row["id"], caption=text or None)
                             if asset else channel.send_text(peer, text))
-                sent += 1 if ok else 0
-                failed += 0 if ok else 1
-                await asyncio.sleep(0.1)
             except Exception:
-                failed += 1
-        return sent, failed
+                ok = False
+            self._tally(prog, bool(ok))
+            await asyncio.sleep(0.1)
 
-    def broadcast_template(self, bot_id, name, language, values=None, peers=None):
+    def broadcast_template(self, bot_id, name, language, values=None, peers=None, prog=None):
         """بثّ بقالب معتمد. هذا هو ما يصل لمن خرج من نافذة الـ24 ساعة —
         النص الحر لا يصله، ومحاولة إرساله له تُقيّد الرقم.
 
@@ -314,29 +350,25 @@ class BotManager:
             peers = db.list_bot_peers(bot_id)
         if not peers:
             return 0, 0
-        try:
-            return self._submit(self._broadcast_template(row, peers, name, language, values),
-                                timeout=max(30, len(peers) * 0.6))
-        except Exception:
-            log.exception("broadcast_template")
-            return 0, len(peers)
+        prog = self._progress(prog, len(peers))
+        return self._run_counted(self._broadcast_template(row, peers, name, language, values, prog),
+                                 prog, len(peers), max(60, len(peers) * 2.0), "broadcast_template")
 
-    async def _broadcast_template(self, row, peers, name, language, values):
+    async def _broadcast_template(self, row, peers, name, language, values, prog):
         from channels.wa_templates import body_components
         channel = _wa_channel(row)
         comps = body_components(values)
-        sent = failed = 0
         for peer in peers:
+            if prog["stop"]:
+                break
             try:
                 ok = await channel.send_template(peer, name, language, comps)
-                sent += 1 if ok else 0
-                failed += 0 if ok else 1
-                await asyncio.sleep(0.1)
             except Exception:
-                failed += 1
-        return sent, failed
+                ok = False
+            self._tally(prog, bool(ok))
+            await asyncio.sleep(0.1)
 
-    def broadcast_direct(self, bot_id, text, category="utility", peers=None):
+    def broadcast_direct(self, bot_id, text, category="utility", peers=None, prog=None):
         """بثّ بـ Direct Send API — بدون قالب مسبق.
         يدعم فقط utility و authentication."""
         row = db.get_bot(bot_id)
@@ -346,26 +378,61 @@ class BotManager:
             peers = db.list_bot_peers(bot_id)
         if not peers:
             return 0, 0
-        try:
-            return self._submit(self._broadcast_direct(row, peers, text, category),
-                                timeout=max(30, len(peers) * 0.6))
-        except Exception:
-            log.exception("broadcast_direct")
-            return 0, len(peers)
+        prog = self._progress(prog, len(peers))
+        return self._run_counted(self._broadcast_direct(row, peers, text, category, prog),
+                                 prog, len(peers), max(60, len(peers) * 2.0), "broadcast_direct")
 
-    @staticmethod
-    async def _broadcast_direct(row, peers, text, category):
+    async def _broadcast_direct(self, row, peers, text, category, prog):
         channel = _wa_channel(row)
-        sent = failed = 0
         for peer in peers:
+            if prog["stop"]:
+                break
             try:
                 ok = await channel.send_direct(peer, text, category)
-                sent += 1 if ok else 0
-                failed += 0 if ok else 1
-                await asyncio.sleep(0.1)
             except Exception:
-                failed += 1
-        return sent, failed
+                ok = False
+            self._tally(prog, bool(ok))
+            await asyncio.sleep(0.1)
+
+    # ---- الحملات: في الخلفية، حملة واحدة لكل بوت ----
+    def start_campaign(self, bot_id, job):
+        """يشغّل `job(state)` في خيط خلفي، ويرجّع False لو حملة البوت نفسه ما زالت تعمل.
+
+        الإرسال داخل الطلب كان يتجاوز مهلة nginx (60ث) مع ~110 مشترك: يرى صاحب البوت
+        خطأً والخصم تمّ والإرسال مستمر، فيضغط «إرسال» ثانيةً — خصم مزدوج وحملة مكررة
+        لعملائه. `state` هو العدّاد الحيّ نفسه؛ ما يرجّعه `job` يُدمج فيه عند الانتهاء."""
+        with self._campaign_lock:
+            cur = self._campaigns.get(bot_id)
+            if cur and cur.get("state") == "running":
+                return False
+            state = {"state": "running", "sent": 0, "failed": 0, "total": 0,
+                     "started_at": int(_time.time())}
+            self._campaigns[bot_id] = state
+
+        def run():
+            try:
+                state.update(job(state) or {})
+            except Exception:
+                log.exception("campaign bot=%s", bot_id)
+                state["error"] = True
+            finally:
+                state["finished_at"] = int(_time.time())
+                state["state"] = "done"
+
+        t = threading.Thread(target=run, daemon=True, name=f"campaign-{bot_id}")
+        self._campaign_threads = [x for x in self._campaign_threads if x.is_alive()] + [t]
+        t.start()
+        return True
+
+    def campaign_status(self, bot_id):
+        """آخر حملة للبوت منذ التشغيل (جارية أو منتهية) — للعرض. None = لا حملة."""
+        cur = self._campaigns.get(bot_id)
+        return {k: v for k, v in cur.items() if k != "stop"} if cur else None
+
+    def join_campaigns(self, timeout=15):
+        """ينتظر انتهاء الحملات الجارية (للاختبارات)."""
+        for t in list(self._campaign_threads):
+            t.join(timeout)
 
     # ---- بوت المنصة (تنبيهات الدفع) ----
     def start_platform_bot(self, token):
@@ -487,6 +554,23 @@ class BotManager:
             log.warning("notify probe to %s failed: %s", chat_id, e)
             return False, f"{type(e).__name__}: {e}"[:300]
 
+    def bot_send(self, bot_id, chat_id, text):
+        """رسالة لعميل عبر بوته الشغّال (قرار دفع اتخذه صاحبه من اللوحة) — وتُسجَّل في صندوق
+        الوارد كأي رد. best-effort: البوت المتوقف لا يستطيع الإرسال."""
+        app = self._apps.get(bot_id)
+        if not app or isinstance(app, dict) or not chat_id:
+            return False
+        try:
+            self._submit(app.bot.send_message(int(chat_id), text), timeout=20)
+        except Exception:
+            log.exception("bot_send bot=%s", bot_id)
+            return False
+        try:
+            db.log_message(bot_id, f"tg:{int(chat_id)}", "out", "bot", text)
+        except Exception:
+            log.exception("bot_send log")
+        return True
+
     def send_payment_alert(self, admin_id, payment, username, caption, screenshot_path):
         if self._platform is None:
             return None
@@ -520,6 +604,12 @@ class BotManager:
                 n = db.purge_old_messages()
                 if n:
                     log.info("purged %s messages older than the retention period", n)
+                n = db.purge_old_events()
+                if n:
+                    log.info("purged %s analytics events older than a year", n)
+                n = db.purge_old_page_views()
+                if n:
+                    log.info("purged %s page views older than 400 days", n)
                 # ملفات محادثات لم تكتمل: لا lead يشير إليها، وتبقى على القرص للأبد
                 import media_store
                 orphans = db.orphan_media()

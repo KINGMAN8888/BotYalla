@@ -236,6 +236,8 @@ def receipt_email(row, status, lang="ar"):
     # إيصال دفع، لأن `plan_name` تُسقط أي معرّف مجهول إلى المجانية.
     if row.get("plan") == db.WALLET_PLAN:
         pname = "Marketing credit" if en else "رصيد الرسائل التسويقية"
+    elif db.addon_bot_id(row.get("plan")):
+        pname = "Customer payments add-on (30 days)" if en else "إضافة تحصيل المدفوعات (30 يوماً)"
     else:
         pname = plans.plan_name(row.get("plan"), "en" if en else "ar")
     amount = f"{float(row.get('amount') or 0):g} EGP"

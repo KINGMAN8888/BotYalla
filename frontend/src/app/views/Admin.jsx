@@ -483,6 +483,118 @@ export function AdminTickets() {
   );
 }
 
+/* ------------------------------------------------------ إحصائيات الزوار */
+/* قياس داخل المنصة (لا سكربت خارجي ولا كوكي تتبّع): زوار الصفحات العامة ومصادرهم، وقمع
+   التسجيل على دفعة من سجّلوا في الفترة. النسبة الحاكمة: مسجّل ← بوت شغّال — تحت 40% المشكلة
+   في المنتج لا في التسويق، وفوق 60% الإنفاق على الإعلان مبرَّر. */
+export function AdminAnalytics() {
+  const a = P.a || {};
+  const f = a.funnel || {};
+  const pct = (x, y) => (y ? Math.round((x / y) * 100) : 0);
+  const live = pct(f.bot_live || 0, f.signup || 0);
+  const tone = !f.signup ? "text-ink-3" : live < 40 ? "text-red-300" : live < 60 ? "text-amber-200" : "text-au-teal";
+  const maxDay = Math.max(1, ...(a.daily || []).map((d) => d.v));
+  const steps = [
+    ["signup", bi("سجّلوا", "Signed up")],
+    ["bot_created", bi("أنشأوا بوتاً", "Created a bot")],
+    ["bot_live", bi("شغّلوا البوت", "Bot is live")],
+    ["first_message", bi("وصلتهم أول رسالة من عميل", "Got a first customer message")],
+    ["payment_sent", bi("أرسلوا دفعة اشتراك", "Sent a subscription payment")],
+    ["paid", bi("اشتراك معتمد", "Paid subscription")],
+  ];
+  const Kpi = ({ label, value, hint, cls = "text-ink" }) => (
+    <Card className="!p-5">
+      <div className="text-[12.5px] font-bold text-ink-3">{label}</div>
+      <div className={`mt-1 tnum text-[26px] font-extrabold ${cls}`}>{value}</div>
+      {hint && <div className="mt-1 text-[12px] leading-relaxed text-ink-3">{hint}</div>}
+    </Card>
+  );
+  const List = ({ title, icon, items }) => (
+    <Card>
+      <SectionTitle icon={icon}>{title}</SectionTitle>
+      {items && items.length ? (
+        <div className="flex flex-col gap-2.5">
+          {items.map((x) => (
+            <div key={x.k} className="flex items-center gap-3 text-[13.5px]">
+              <span className="min-w-0 flex-1 truncate text-ink-2" dir="ltr">{x.k}</span>
+              <span className="tnum font-bold text-ink">{num(x.v)}</span>
+            </div>
+          ))}
+        </div>
+      ) : <Empty icon={icon} title={bi("لا بيانات بعد", "No data yet")} />}
+    </Card>
+  );
+  return (
+    <>
+      <PageHead icon="chart" title={t("adm_analytics")}
+        sub={bi("زوار الصفحات العامة ومصادرهم، وأين يتوقف المسجّلون — بلا كوكي تتبّع ولا سكربت خارجي.",
+                "Public-page visitors and their sources, and where signups stall — no tracking cookie, no third-party script.")}
+        actions={<div className="flex gap-2">{[7, 30, 90].map((d) => (
+          <Btn key={d} sm variant={a.days === d ? "primary" : "ghost"} href={`?days=${d}`}>
+            {bi(`${d} يوم`, `${d} days`)}
+          </Btn>))}</div>} />
+
+      <Grid cols={4} className="mb-6">
+        <Kpi label={bi("زوار فريدون", "Unique visitors")} value={num(a.visitors)}
+             hint={bi(`${num(a.views)} مشاهدة صفحة`, `${num(a.views)} page views`)} />
+        <Kpi label={bi("زاروا صفحة الأسعار", "Viewed pricing")} value={num(a.pricing_visitors)}
+             hint={bi(`${pct(a.pricing_visitors, a.visitors)}% من الزوار`, `${pct(a.pricing_visitors, a.visitors)}% of visitors`)} />
+        <Kpi label={bi("تسجيلات", "Signups")} value={num(f.signup)}
+             hint={bi(`${pct(f.signup, a.visitors)}% من الزوار`, `${pct(f.signup, a.visitors)}% of visitors`)} />
+        <Kpi label={bi("مسجّل ← بوت شغّال", "Signup → live bot")} value={`${live}%`} cls={tone}
+             hint={bi("تحت 40% راجع المنتج قبل الإعلان · فوق 60% الإعلان مبرَّر",
+                      "Under 40%: fix the product first · above 60%: ads are justified")} />
+      </Grid>
+
+      <Card className="mb-6">
+        <SectionTitle icon="users">{bi("القمع — من سجّلوا خلال الفترة", "Funnel — people who signed up in this period")}</SectionTitle>
+        <div className="flex flex-col gap-3">
+          {steps.map(([k, label], i) => {
+            const n = f[k] || 0;
+            const prev = i ? f[steps[i - 1][0]] || 0 : n;
+            return (
+              <div key={k}>
+                <div className="mb-1 flex flex-wrap items-center gap-2 text-[13px]">
+                  <span className="font-bold text-ink">{label}</span>
+                  <span className="ms-auto tnum text-ink-2">{num(n)}</span>
+                  {i > 0 && <span className="tnum text-[12px] text-ink-3">· {pct(n, prev)}% {bi("من السابقة", "of previous")}</span>}
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-white/[0.07]">
+                  <div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)]"
+                       style={{ width: `${pct(n, f.signup || 0)}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      <Card className="mb-6">
+        <SectionTitle icon="chart">{bi("الزوار يومياً", "Visitors per day")}</SectionTitle>
+        {(a.daily || []).length ? (
+          <div className="flex h-36 items-end gap-1" dir="ltr">
+            {a.daily.map((d) => (
+              <div key={d.day} title={`${d.day} · ${d.v}`} className="flex-1 rounded-t bg-au-cyan/60 hover:bg-au-cyan"
+                   style={{ height: `${Math.max(3, (d.v / maxDay) * 100)}%` }} />
+            ))}
+          </div>
+        ) : <Empty icon="chart" title={bi("لا زيارات بعد", "No visits yet")} />}
+      </Card>
+
+      <Grid cols={2} className="mb-6">
+        <List icon="link" title={bi("مصادر الزيارات", "Traffic sources")} items={a.sources} />
+        <List icon="users" title={bi("مصادر التسجيلات", "Signup sources")} items={a.signup_sources} />
+        <List icon="grid" title={bi("أكثر الصفحات زيارة", "Top pages")} items={a.pages} />
+        <List icon="phone" title={bi("الأجهزة", "Devices")} items={a.devices} />
+      </Grid>
+      <p className="m-0 text-[12px] leading-relaxed text-ink-3">
+        {bi("المصدر من ?utm_source= في رابط الحملة (مثال: botyalla.com/?utm_source=tiktok)، أو دومين الموقع المُحيل. الزائر الفريد يُعدّ مرة لكل يوم.",
+            "The source comes from ?utm_source= in the campaign link (e.g. botyalla.com/?utm_source=tiktok), or the referring site. A unique visitor is counted once per day.")}
+      </p>
+    </>
+  );
+}
+
 /* -------------------------------------------------------------- المنصة */
 export function AdminPlatform() {
   const { plat = {}, running, capacity = null, managed = {} } = P;
@@ -509,6 +621,11 @@ export function AdminPlatform() {
             <F name="bank_name" label={t("pay_bankname")} />
             <F name="bank_account" label={t("pay_account")} />
             <F name="bank_iban" label={t("pay_iban")} />
+          </div>
+          <div className="mt-4 max-w-[360px]">
+            <F name="addon_pay_price" ph="99"
+               label={bi("سعر إضافة «تحصيل المدفوعات» (ج.م شهرياً لكل بوت)",
+                         "Payments add-on price (EGP / month / bot)")} />
           </div>
           <p className="mt-4 mb-0 text-[12.5px] text-ink-3">
             {bi("صورة QR انستاباي محفوظة في static/instapay_qr.jpg — استبدلها بصورتك عند الحاجة.",

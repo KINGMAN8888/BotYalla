@@ -154,6 +154,66 @@ def _lang_from_query():
         session["lang"] = code
 
 @app.before_request
+def _canonical_host():
+    """www والدومين المجرّد كانا نسختين منفصلتين (200 لكلٍّ): محتوى مكرر يقسم Google
+    الروابط بينه، والجلسة لا تنتقل بينهما. الأصل مضيف PUBLIC_URL — أي GET على «نفس
+    الدومين مع www أو بدونه» يُحوَّل إليه 301. الويبهوك مستثنى: Meta تتحقق من العنوان
+    كما سُجّل عندها، والتحويل يكسر التحقق."""
+    if request.method not in ("GET", "HEAD") or request.path.startswith("/wh/"):
+        return None
+    base = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    if not base.startswith(("https://", "http://")):
+        return None
+    canon = _up.urlsplit(base).netloc.lower()
+    host = (request.host or "").lower()
+    bare = lambda h: h[4:] if h.startswith("www.") else h
+    if host == canon or bare(host) != bare(canon):
+        return None
+    qs = request.query_string.decode("latin-1")
+    return redirect(base + request.path + ("?" + qs if qs else ""), 301)
+
+# ---------- قياس الزوار — داخل المنصة، بلا سكربت خارجي ولا كوكي تتبّع ----------
+_PV_PATHS = {"/", "/pricing", "/register", "/login", "/terms", "/privacy", "/refund", "/acceptable-use"}
+_BOT_UA = _re.compile(r"bot|crawl|spider|slurp|preview|facebookexternalhit|whatsapp|telegram|curl|"
+                      r"wget|python|httpx|headless|lighthouse|uptime", _re.I)
+
+def _visitor_source():
+    """(مصدر الحملة، دومين المُحيل): utm_source أو كود أفيليت، ومُحيل من خارج الموقع."""
+    src = (request.args.get("utm_source") or "").strip().lower()[:40]
+    if not src and request.args.get("ref"):
+        src = "ref"
+    ref = ""
+    host = (_up.urlsplit(request.referrer or "").hostname or "").lower()
+    own = (request.host or "").split(":")[0].lower()
+    bare = lambda h: h[4:] if h.startswith("www.") else h
+    if host and bare(host) != bare(own):
+        ref = bare(host)[:60]
+    return src, ref
+
+@app.after_request
+def _count_view(resp):
+    """زيارة صفحة عامة واحدة. `vid` بصمة يومية (IP+المتصفح+اليوم+سرّ التطبيق) تعدّ الزوار
+    الفريدين بلا تخزين IP ولا تتبّع عبر الأيام — فلا كوكي تتبّع ولا لافتة موافقة. أول مصدر
+    للزائر (first-touch) يُحفظ في جلسته الموجودة أصلاً (CSRF) ليُنسب له تسجيله."""
+    try:
+        if (request.method != "GET" or resp.status_code != 200 or request.path not in _PV_PATHS
+                or resp.mimetype != "text/html"):
+            return resp
+        ua = request.headers.get("User-Agent", "")
+        if not ua or _BOT_UA.search(ua):
+            return resp
+        src, ref = _visitor_source()
+        if (src or ref) and not session.get("src"):
+            session["src"] = src or ref
+        vid = hashlib.sha256(f"{request.remote_addr}|{ua}|{db._day()}|{app.secret_key}".encode()
+                             ).hexdigest()[:16]
+        device = "mobile" if _re.search(r"Mobi|Android|iPhone", ua) else "desktop"
+        db.log_page_view(request.path, ref, src, device, vid)
+    except Exception:
+        log.warning("page view not counted", exc_info=True)
+    return resp
+
+@app.before_request
 def _revalidate_identity():
     """يعيد قراءة هوية المستخدم من قاعدة البيانات في كل طلب.
     الدور والحظر مصدرهما القاعدة لا الجلسة — حتى يسري الحظر أو تغيير الدور
@@ -437,6 +497,10 @@ def register():
             flash(i18n.t("email_taken", lang), "error")
         else:
             user_id = db.create_user(u, auth.hash_password(p), email=email or None)
+            db.track("signup", user_id)
+            src = session.pop("src", None)           # أول مصدر وصل منه (_count_view)
+            if src:
+                db.set_setting(user_id, "signup_src", src)
             urow = db.get_user(user_id)
             session["uid"] = user_id; session["uname"] = u; session["role"] = urow["role"]
             session["pwv"] = _pw_stamp(urow["pw_hash"])
@@ -472,8 +536,9 @@ def login():
         flash("بيانات دخول غير صحيحة.", "error")
     return react_page("login", "login")
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
+    """POST فقط (يمرّ بفحص CSRF): بـ GET كان أي موقع يُخرج زائرك بـ <img src=".../logout">."""
     session.clear(); return redirect(url_for("login"))
 
 # ---------- استرجاع كلمة المرور ----------
@@ -652,6 +717,10 @@ def _public_bot(b):
 @app.route("/bot/create", methods=["POST"])
 @login_required
 def bot_create():
+    # التحقق من التوكن ينتظر تليجرام/Meta حتى 15ث داخل الطلب — بلا حدّ تُشغل الخيوط كلها
+    if _rate_limited(f"u{uid()}", limit=10, window=3600, bucket="bot_create"):
+        flash(i18n.t("ai_rate", session.get("lang", i18n.DEFAULT)), "error")
+        return redirect(url_for("dashboard"))
     name = request.form.get("name", "").strip()
     template = request.form.get("template", "")
     channel = request.form.get("channel", "telegram")
@@ -763,6 +832,7 @@ def bot_detail(bot_id):
     replies_limit = None if staff else plans.ai_replies_limit(plan_id)
     return react_page("bot_detail", "nav_bots",
                       {"bot": _public_bot(b), "leads": leads, "orders": orders, "bookings": bookings,
+                       "pay": _pay_state(b),
                        "plan": p, "usage": usage,
                        "links": _bot_links(b),
                        "isNew": bool(request.args.get("new")),
@@ -816,8 +886,10 @@ def bot_config(bot_id):
             try: cfg[k] = cast(request.form.get(k, cfg.get(k)))
             except (ValueError, TypeError): pass
         cfg["service_name"] = request.form.get("service_name", cfg.get("service_name", "")).strip()
-        wd = request.form.getlist("working_days")
-        cfg["working_days"] = [int(x) for x in wd] if wd else None
+        # أيام الأسبوع 0..6 فقط — قيمة غير رقمية كانت ترمي ValueError فيسقط الحفظ بـ 500
+        wd = sorted({int(x) for x in request.form.getlist("working_days")
+                     if str(x).strip().isdigit() and int(x) <= 6})
+        cfg["working_days"] = wd or None
     is_wa = (b.get("channel") or "telegram") == "whatsapp"
     if is_wa:
         # توكنات Meta المؤقتة تنتهي خلال 24 ساعة — بلا تحديثها يموت البوت بصمت
@@ -922,6 +994,7 @@ def bot_action(bot_id, action):
         ok, msg = manager.start_bot(bot_id)
         if ok:
             _warn_capacity_once()
+            db.track("bot_live", uid(), bot_id)      # مرحلة القمع: أول تشغيل لهذا البوت
     elif action == "stop": ok, msg = manager.stop_bot(bot_id)
     elif action == "delete":
         manager.stop_bot(bot_id); db.delete_bot(bot_id)
@@ -946,6 +1019,60 @@ def api_stats(bot_id):
                     "sources": db.source_counts(bot_id)})
 
 # ---------- البث الجماعي ----------
+_CAMPAIGN_BUSY = ("هناك حملة قيد الإرسال لهذا البوت الآن — انتظر حتى تنتهي ثم أرسل التالية.",
+                  "A campaign is already sending for this bot — wait for it to finish first.")
+
+def _launch_campaign(bot_id, ar, mode, label, q, charged, send):
+    """يبدأ الحملة في الخلفية ويردّ ثمن ما لم يصل عند انتهائها. يرجّع True لو بدأت.
+
+    كان الإرسال داخل الطلب: مع ~110 مشترك يتجاوز مهلة nginx (60ث) فيرى صاحب البوت خطأً
+    بينما الخصم تمّ والإرسال مستمر، فيضغط «إرسال» ثانيةً — خصم مزدوج وحملة مكررة لعملائه.
+    الآن يرجع الطلب فوراً، وحملة واحدة لكل بوت (manager.start_campaign)، والنتيجة في الصفحة.
+    الخصم — إن كانت بمقابل — تمّ قبل الاستدعاء بقفل المحفظة الذرّي (`charged` قروش).
+    `send(state)` ترسل وتحدّث العدّاد الحيّ في state وترجّع (وصل, لم يصل)."""
+    owner = uid()
+    price = q["price"] if (q and charged) else 0
+
+    def job(state):
+        state.update(mode=mode, label=label, total=(q or {}).get("n") or state.get("total", 0))
+        sent = None
+        try:
+            sent, failed = send(state)
+            return {"sent": sent, "failed": failed}
+        finally:
+            # في finally: خطأ أثناء الإرسال لا يُبقي خصماً بلا ردّ — نعتمد العدّاد الحيّ حينها.
+            # لا نحاسب إلا على ما وصل، بالسعر نفسه المخصوم به لا بسعر اليوم.
+            got = sent if sent is not None else state.get("sent", 0)
+            back = max(0, charged - got * price) if charged else 0
+            if back:
+                n = state.get("total") or 0
+                db.wallet_refund(owner, back, ref=f"bot:{bot_id}",
+                                 note=f"undelivered {n - got} of {n}")
+            state.update(charged=charged - back, refunded=back)
+            log.info("campaign bot=%s mode=%s %s total=%s sent=%s charged=%s refunded=%s",
+                     bot_id, mode, label, state.get("total"), got, charged, back)
+
+    if not manager.start_campaign(bot_id, job):
+        if charged:           # سباق بين طلبين: الثاني لا يبقى مخصوماً
+            db.wallet_refund(owner, charged, ref=f"bot:{bot_id}", note="another campaign is running")
+        flash(_CAMPAIGN_BUSY[0 if ar else 1], "error")
+        return False
+    flash(("📢 بدأ إرسال الحملة في الخلفية — تقدر تقفل الصفحة، والنتيجة تظهر هنا في «آخر حملة»"
+           + (f" (حُجز {_egp(charged)} ج.م ويُردّ منها ما لا يصل تلقائياً)." if charged else "."))
+          if ar else
+          ("📢 The campaign is sending in the background — you can close this page; the result "
+           "shows here under «Last campaign»"
+           + (f" ({_egp(charged)} EGP reserved; anything undelivered is refunded automatically)."
+              if charged else ".")), "ok")
+    return True
+
+@app.route("/bot/<int:bot_id>/broadcast/status")
+@login_required
+def broadcast_status(bot_id):
+    """حالة آخر حملة للبوت — تستطلعها الصفحة أثناء الإرسال."""
+    _owned(bot_id)
+    return jsonify(manager.campaign_status(bot_id) or {})
+
 @app.route("/bot/<int:bot_id>/broadcast", methods=["GET", "POST"])
 @login_required
 def broadcast(bot_id):
@@ -965,6 +1092,11 @@ def broadcast(bot_id):
 
     if request.method == "POST":
         ar = session.get("lang") != "en"
+        # قبل أي خصم: حملة جارية للبوت نفسه تُرفض الثانية (والسباق بين طلبين يحسمه
+        # start_campaign، فيُردّ ما خُصم فوراً)
+        if (manager.campaign_status(bot_id) or {}).get("state") == "running":
+            flash(_CAMPAIGN_BUSY[0 if ar else 1], "error")
+            return redirect(url_for("broadcast", bot_id=bot_id))
         if is_wa and request.form.get("mode") == "template":
             name = request.form.get("template", "").strip()
             lang_code = request.form.get("template_lang", "").strip() or "ar"
@@ -1006,28 +1138,10 @@ def broadcast(bot_id):
                               "Could not reserve credit — please retry.", "error")
                         return redirect(url_for("broadcast", bot_id=bot_id))
                     charged = q["cost"]
-                sent, failed = manager.broadcast_template(bot_id, name, lang_code, values,
-                                                          peers=audience)
-                if charged:
-                    # لا نحاسب إلا على ما وصل: كل ما لم يُرسَل يُردّ — الفاشل، وما لم
-                    # يُحاوَل أصلاً (انقطاع أو مهلة). بالسعر نفسه المخصوم به لا بسعر
-                    # اليوم — فتغيير الإعداد بين الخصم والردّ لا يسرق.
-                    back = max(0, charged - sent * q["price"])
-                    if back:
-                        db.wallet_refund(uid(), back, ref=f"bot:{bot_id}",
-                                         note=f"undelivered {q['n'] - sent} of {q['n']}")
-                    log.info("campaign bot=%s tpl=%s cat=%s n=%s sent=%s failed=%s "
-                             "charged=%s refunded=%s", bot_id, name, cat, q["n"], sent,
-                             failed, charged, back)
-                    flash((f"📢 أُرسل القالب «{name}» إلى {sent} مشترك (فشل {failed}). "
-                           f"خُصم {_egp(charged - back)} ج.م — الرصيد "
-                           f"{_egp(db.wallet_balance(uid()))} ج.م." if ar else
-                           f"📢 Template «{name}» sent to {sent} subscribers ({failed} failed). "
-                           f"Charged {_egp(charged - back)} EGP — balance "
-                           f"{_egp(db.wallet_balance(uid()))} EGP."), "ok")
-                else:
-                    flash((f"📢 أُرسل القالب «{name}» إلى {sent} مشترك (فشل {failed})." if ar else
-                           f"📢 Template «{name}» sent to {sent} subscribers ({failed} failed)."), "ok")
+                # في الخلفية: ما لم يصل (فاشل أو لم يُحاوَل) يُردّ عند الانتهاء (_launch_campaign)
+                _launch_campaign(bot_id, ar, "template", name, q, charged,
+                                 lambda st: manager.broadcast_template(bot_id, name, lang_code, values,
+                                                                       peers=audience, prog=st))
         elif is_wa and request.form.get("mode") == "direct_send":
             # ---- Direct Send (بيتا): نص بلا قالب مسبق، وMeta تولّد القالب في الخلفية ----
             # الفئة نحن من يعلنها ولا يراجعها أحد قبل الإرسال — فلا شيء يمنع إعلاناً
@@ -1060,36 +1174,11 @@ def broadcast(bot_id):
                     flash("تعذّر حجز الرصيد — أعد المحاولة." if ar else
                           "Could not reserve credit — please retry.", "error")
                     return redirect(url_for("broadcast", bot_id=bot_id))
-                sent, failed = manager.broadcast_direct(bot_id, ds_text, "utility", peers=audience)
-                back = max(0, q["cost"] - sent * q["price"])
-                if back:
-                    db.wallet_refund(uid(), back, ref=f"bot:{bot_id}",
-                                     note=f"undelivered {q['n'] - sent} of {q['n']}")
-                log.info("direct send bot=%s n=%s sent=%s failed=%s charged=%s refunded=%s",
-                         bot_id, q["n"], sent, failed, q["cost"], back)
-                bal = _egp(db.wallet_balance(uid()))
-                if not sent:
-                    # لا شيء وصل: أشهر سبب أن الحساب غير مفعّل لبيتا Meta. نقول ذلك
-                    # صراحةً ونطمئنه أن الرصيد رجع كله، ونوجّهه للبديل الذي يعمل.
-                    flash((f"لم تصل أي رسالة — رفضتها Meta. السبب الأرجح أن Direct Send (ميزة "
-                           f"تجريبية) غير مفعّلة لحساب واتساب للأعمال الخاص بك. رُدّ رصيدك "
-                           f"كاملاً ({_egp(back)} ج.م) — الرصيد الآن {bal} ج.م. أرسل الرسالة "
-                           f"نفسها عبر «قالب معتمد» بدلاً منها." if ar else
-                           f"No message was delivered — Meta rejected them. Most likely Direct Send "
-                           f"(a beta feature) isn't enabled for your WhatsApp Business account. "
-                           f"Your credit was refunded in full ({_egp(back)} EGP) — balance is now "
-                           f"{bal} EGP. Send the same message with an «Approved template» instead."),
-                          "error")
-                else:
-                    refund_note = ((f" ورُدّ {_egp(back)} ج.م عن {q['n'] - sent} رسالة لم تصل."
-                                    if ar else f" {_egp(back)} EGP refunded for {q['n'] - sent} "
-                                    f"undelivered.") if back else "")
-                    flash((f"📢 أُرسل إلى {sent} مشترك عبر Direct Send (فشل {failed}). "
-                           f"خُصم {_egp(q['cost'] - back)} ج.م.{refund_note} الرصيد {bal} ج.م."
-                           if ar else
-                           f"📢 Sent to {sent} subscribers via Direct Send ({failed} failed). "
-                           f"Charged {_egp(q['cost'] - back)} EGP.{refund_note} Balance {bal} EGP."),
-                          "ok")
+                # في الخلفية، والنتيجة في «آخر حملة». لا شيء وصل (mode=direct و sent=0) =
+                # أشهر سبب أن الحساب غير مفعّل لبيتا Meta — الصفحة تقوله صراحةً مع الردّ الكامل.
+                _launch_campaign(bot_id, ar, "direct", "", q, q["cost"],
+                                 lambda st: manager.broadcast_direct(bot_id, ds_text, "utility",
+                                                                     peers=audience, prog=st))
         else:
             text = request.form.get("text", "").strip()
             # صورة/فيديو اختياري من مكتبة المستخدم نفسه (والنص يصير تعليقه)
@@ -1098,13 +1187,15 @@ def broadcast(bot_id):
             if not text and not asset:
                 flash("اكتب نص الرسالة." if ar else "Write the message.", "error")
             else:
-                sent, failed = manager.broadcast(bot_id, text, asset=asset)
-                flash((f"📢 تم الإرسال إلى {sent} مشترك (فشل {failed})." if ar else
-                       f"📢 Sent to {sent} subscribers ({failed} failed)."), "ok")
+                # مجاني (تليجرام أو داخل نافذة واتساب) — في الخلفية أيضاً: ~110 مشترك تتجاوز
+                # مهلة nginx، والضغطة الثانية كانت ترسل الحملة مرتين لعملائه
+                _launch_campaign(bot_id, ar, "text", "", None, 0,
+                                 lambda st: manager.broadcast(bot_id, text, asset=asset, prog=st))
         return redirect(url_for("broadcast", bot_id=bot_id))
 
     return react_page("broadcast", "campaign_title",
                       {"bot": _public_bot(b), "subs": subs, "isWa": is_wa, "reachable": reachable,
+                       "campaign": manager.campaign_status(bot_id),
                        # جمهور القالب (كل المشتركين) — هو ما تُعرض عليه التكلفة
                        "audience": len(db.list_bot_peers(bot_id)) if is_wa else subs,
                        "waba": _waba_of(b)[0] if is_wa else "",
@@ -1208,25 +1299,170 @@ def wa_delete_template(bot_id):
           "ok" if res.get("ok") else "error")
     return redirect(url_for("wa_templates_page", bot_id=bot_id))
 
+# ---------- تحصيل مدفوعات عملاء البوت (إضافة مدفوعة لكل بوت) ----------
+# عميل البوت يحوّل على حسابات **صاحب البوت** ويرسل الإيصال للبوت، فيُفحص بمحرك إيصالات المنصة
+# نفسه ويعتمده صاحب البوت (زرّ في تليجرام أو من اللوحة). v1: بوتات المتجر على تليجرام.
+ADDON_PAY_PRICE_FALLBACK = 99          # جنيه شهرياً لكل بوت — يُعدَّل من «إعدادات المنصة»
+_PAY_FIELDS = (("vodafone", 20), ("instapay", 60), ("instapay_link", 200), ("bank_name", 60),
+               ("bank_account", 40), ("bank_iban", 40), ("bank_holder", 80))
+
+def addon_pay_price():
+    """سعر الإضافة بالجنيه. قيمة فاسدة أو صفر تسقط للاحتياطي — لا إضافة مجانية بالخطأ."""
+    try:
+        v = int(float(str(db.get_platform("addon_pay_price", "") or "0").strip()))
+    except (TypeError, ValueError, OverflowError):
+        v = 0
+    return v if 0 < v <= 100000 else ADDON_PAY_PRICE_FALLBACK
+
+def _pay_eligible(b):
+    return b.get("template") == "store" and (b.get("channel") or "telegram") == "telegram"
+
+def _pay_state(b):
+    """حالة الإضافة لصفحة البوت."""
+    if not _pay_eligible(b):
+        return {"eligible": False}
+    cfg = json.loads(b.get("config_json") or "{}")
+    return {"eligible": True, "active": db.addon_active(b["id"]), "expires": db.addon_expires(b["id"]),
+            "price": addon_pay_price(), "methods": cfg.get("pay") or {},
+            "payments": db.list_bot_payments(b["id"])}
+
+@app.route("/bot/<int:bot_id>/addon/pay", methods=["GET", "POST"])
+@login_required
+def addon_pay(bot_id):
+    """شراء/تجديد الإضافة 30 يوماً — بمسار إيصالات المنصة نفسه: فحص آلي قبل الحفظ ثم موافقة
+    الأدمن. المبلغ من الخادم (`addon_pay_price`) لا من الفورم (§3.3)."""
+    b = _owned(bot_id)
+    ar = session.get("lang") != "en"
+    if not _pay_eligible(b):
+        flash("الإضافة متاحة لبوتات المتجر على تليجرام." if ar else
+              "The add-on is available for Telegram store bots.", "error")
+        return redirect(url_for("bot_detail", bot_id=bot_id))
+    price = addon_pay_price()
+    if request.method == "POST":
+        back = redirect(url_for("addon_pay", bot_id=bot_id))
+        if _rate_limited(f"u{uid()}", limit=8, window=3600, bucket="receipt"):
+            flash(i18n.t("ai_rate", session.get("lang", i18n.DEFAULT)), "error")
+            return back
+        file = request.files.get("screenshot")
+        ext = os.path.splitext(file.filename)[1].lower() if file and file.filename else ""
+        if ext not in pay.ALLOWED_EXT:
+            flash("ارفع صورة إيصال التحويل (jpg/png/webp)." if ar else
+                  "Upload the transfer receipt image (jpg/png/webp).", "error")
+            return back
+        data = file.read()
+        if not pay.validate_bytes(data)["ok"]:
+            flash("الملف ليس صورة صالحة." if ar else "The file is not a valid image.", "error")
+            return back
+        ac, img_hash, refused = _receipt_check(data, price)
+        if refused:
+            flash(refused, "error")
+            return back
+        fname = f"addon_{uid()}_{bot_id}_{int(_time.time())}{ext}"
+        fpath = os.path.join(UPLOAD_DIR, secure_filename(fname))
+        with open(fpath, "wb") as _f:
+            _f.write(data)
+        pid = db.create_payment(uid(), db.addon_plan(bot_id), request.form.get("method", ""),
+                                float(price), request.form.get("ref", "").strip(), fname, img_hash,
+                                json.dumps(ac, ensure_ascii=False))
+        log.info("add-on payment #%s requested user=%s bot=%s verdict=%s", pid, uid(), bot_id,
+                 ac.get("verdict"))
+        admin_id = db.get_platform("admin_chat_id", "")
+        payment = db.get_payment(pid)
+        caption = PB.build_caption(payment, session.get("uname", ""), _verdict_detail(ac))
+        msg_id = manager.send_payment_alert(admin_id, payment, session.get("uname", ""),
+                                            caption, fpath) if admin_id else None
+        if msg_id:
+            db.set_payment_msg(pid, msg_id)
+        else:
+            notify_admins(f"🧩 طلب إضافة تحصيل المدفوعات #{pid} — {session.get('uname')} — "
+                          f"بوت #{bot_id} — {price} EGP. راجعه من لوحة الأدمن.")
+        flash(("✅ وصل إثبات الدفع (#{}). تتفعّل الإضافة بعد المراجعة والموافقة." if ar else
+               "✅ Payment proof received (#{}). The add-on activates after review.").format(pid), "ok")
+        return redirect(url_for("bot_detail", bot_id=bot_id) + "#pay")
+    return react_page("addon_pay", "addon_pay_title",
+                      {"bot": _public_bot(b), "price": price, "expires": db.addon_expires(bot_id),
+                       "plat": _public_plat(), "qr": url_for("static", filename="instapay_qr.jpg"),
+                       "action": url_for("addon_pay", bot_id=bot_id)})
+
+@app.route("/bot/<int:bot_id>/pay-settings", methods=["POST"])
+@login_required
+def bot_pay_settings(bot_id):
+    """حسابات استلام **صاحب البوت** (لا حسابات المنصة): عليها يحوّل عملاؤه وبها يُطابَق الإيصال."""
+    b = _owned(bot_id)
+    ar = session.get("lang") != "en"
+    cfg = json.loads(b["config_json"] or "{}")
+    methods = {k: (request.form.get(f"pay_{k}") or "").strip()[:n] for k, n in _PAY_FIELDS}
+    cfg["pay"] = {k: v for k, v in methods.items() if v}
+    db.update_bot_config(bot_id, cfg)
+    if manager.is_running(bot_id):
+        manager.restart_bot(bot_id)            # القالب يقرأ إعداداته عند التشغيل
+    flash("تم حفظ حسابات الاستلام ✅" if ar else "Receiving accounts saved ✅", "ok")
+    return redirect(url_for("bot_detail", bot_id=bot_id) + "#pay")
+
+@app.route("/bot/<int:bot_id>/payments/<int:pid>/<any(approve,reject):action>", methods=["POST"])
+@login_required
+def bot_payment_decide(bot_id, pid, action):
+    """قرار صاحب البوت من اللوحة — نفس القرار الذرّي لزرّ تليجرام، والعميل يُبلَّغ عبر البوت."""
+    _owned(bot_id)
+    ar = session.get("lang") != "en"
+    row = db.decide_bot_payment(pid, bot_id, "approved" if action == "approve" else "rejected")
+    if not row:
+        flash("سبق البتّ في هذه الدفعة." if ar else "This payment was already decided.", "error")
+    else:
+        told = manager.bot_send(bot_id, row.get("tg_user_id"), T.pay_decision_text(row))
+        done = ("✅ تم تأكيد الدفع" if action == "approve" else "❌ تم رفض الدفعة") if ar else \
+               ("✅ Payment confirmed" if action == "approve" else "❌ Payment rejected")
+        flash(done + ((" وإبلاغ العميل." if ar else " — the customer was notified.") if told else
+                      (" — البوت متوقف فلم يُبلَّغ العميل." if ar else
+                       " — the bot is stopped, so the customer wasn't notified.")), "ok")
+    return redirect(url_for("bot_detail", bot_id=bot_id) + "#pay")
+
+@app.route("/bot/<int:bot_id>/payments/<int:pid>/receipt")
+@login_required
+def bot_payment_receipt(bot_id, pid):
+    """صورة إيصال عميل — لصاحب البوت وحده."""
+    _owned(bot_id)
+    row = db.get_bot_payment(pid, bot_id)
+    if not row or not row.get("screenshot"):
+        abort(404)
+    fname = secure_filename(row["screenshot"])
+    if not os.path.exists(os.path.join(UPLOAD_DIR, fname)):
+        abort(404)
+    resp = send_from_directory(UPLOAD_DIR, fname)
+    resp.headers["Cache-Control"] = "private, no-store"
+    return resp
+
 # ---------- تصدير CSV ----------
+_CSV_FORMULA = ("=", "+", "-", "@", "\t", "\r")
+
+def _csv_cell(v):
+    """خلية آمنة لـ Excel. نصّ يبدأ بـ = + - @ يُنفَّذ صيغةً عند فتح الملف — اسم عميل مثل
+    =HYPERLINK(...) يصل عبر البوت ثم يُفتح عند صاحب النشاط نفسه. تسبيقه بـ ' يجعله
+    نصاً. الأرقام الحقيقية (الإجمالي والوقت) تبقى أرقاماً."""
+    if isinstance(v, str) and v.startswith(_CSV_FORMULA):
+        return "'" + v
+    return v
+
 @app.route("/bot/<int:bot_id>/export/<kind>")
 @login_required
 def export_csv(bot_id, kind):
     _owned(bot_id)
     out = io.StringIO(); w = csv.writer(out)
+    put = lambda cells: w.writerow([_csv_cell(x) for x in cells])
+    # limit=None: «صدّر كل الطلبات» يعني الكل — اللوحة وحدها تكتفي بآخر 300
     if kind == "orders":
-        w.writerow(["العميل", "التليفون", "العنوان", "المنتجات", "الإجمالي", "الوقت"])
-        for o in db.list_orders(bot_id):
+        put(["العميل", "التليفون", "العنوان", "المنتجات", "الإجمالي", "الوقت"])
+        for o in db.list_orders(bot_id, limit=None):
             items = "; ".join(f"{i['name']}x{i['qty']}" for i in o["items"])
-            w.writerow([o["customer"], o["phone"], o["address"], items, o["total"], o["created_at"]])
+            put([o["customer"], o["phone"], o["address"], items, o["total"], o["created_at"]])
     elif kind == "bookings":
-        w.writerow(["العميل", "التليفون", "الخدمة", "الموعد", "الحالة"])
-        for x in db.list_bookings(bot_id):
-            w.writerow([x["customer"], x["phone"], x["service"], x["slot"], x["status"]])
+        put(["العميل", "التليفون", "الخدمة", "الموعد", "الحالة"])
+        for x in db.list_bookings(bot_id, limit=None):
+            put([x["customer"], x["phone"], x["service"], x["slot"], x["status"]])
     elif kind == "leads":
-        w.writerow(["البيانات", "الوقت"])
-        for l in db.list_leads(bot_id):
-            w.writerow([json.dumps(l["data"], ensure_ascii=False), l["created_at"]])
+        put(["البيانات", "الوقت"])
+        for l in db.list_leads(bot_id, limit=None):
+            put([json.dumps(l["data"], ensure_ascii=False), l["created_at"]])
     else:
         abort(404)
     csv_bytes = "﻿" + out.getvalue()   # BOM لدعم العربية في Excel
@@ -1247,26 +1483,8 @@ def settings():
                       {"aiProvider": db.get_platform("ai_provider", "gemini"),
                        "aiKey": db.get_platform("ai_key", "")})
 
-@app.route("/bot/<int:bot_id>/ai-setup", methods=["POST"])
-@login_required
-def ai_setup(bot_id):
-    """المسار القديم (توليد بضغطة واحدة) — باقٍ للتوافق. يمرّ الآن بنفس المصمّم
-    الذي لا ينسخ الوصف، ويحفظ نسخة قبل الاستبدال فيمكن التراجع عنه."""
-    b = _owned(bot_id); cfg = json.loads(b["config_json"] or "{}")
-    desc = (request.get_json(silent=True) or {}).get("description", "").strip()
-    if not desc:
-        return jsonify({"ok": False, "error": "اكتب وصف نشاطك أولاً."})
-    key, provider = _setup_provider()
-    patch, source = ai.generate_bot_config(desc, b["template"], api_key=key, provider=provider,
-                                           current_name=cfg.get("business_name") or b["name"],
-                                           channel=b.get("channel") or "telegram")
-    if not patch:
-        return jsonify({"ok": False, "error": "تعذّر توليد الإعدادات."})
-    db.save_config_version(bot_id, cfg, "ai_apply")
-    cfg.update(patch)
-    db.update_bot_config(bot_id, cfg)
-    if manager.is_running(bot_id): manager.restart_bot(bot_id)
-    return jsonify({"ok": True, "source": source, "applied": list(patch.keys())})
+# (المسار القديم POST /bot/<id>/ai-setup حُذف: لا تستعمله الواجهة، وكان بلا حصة ولا حدّ
+#  فيحرق مفتاح الذكاء الاصطناعي للمنصة بطلبين لكل استدعاء. وكيل الإعداد /ai/session يغنيه.)
 
 
 # ---------- وكيل الإعداد (محادثة ← أسئلة ← تصميم ← معاينة ← تطبيق) ----------
@@ -1401,6 +1619,10 @@ def config_restore(bot_id, vid):
 @app.route("/api/validate-token", methods=["POST"])
 @login_required
 def api_validate_token():
+    # ينتظر تليجرام حتى 10ث داخل الطلب، وكان بلا حدّ: خيوط gunicorn تُشغل كلها، ووسيلة
+    # مجانية لفحص توكنات مسروقة بالجملة. الواجهة تفحص بعد توقف الكتابة — 30 تكفي.
+    if _rate_limited(f"u{uid()}", limit=30, window=600, bucket="tg_check"):
+        return jsonify({"ok": False, "error": i18n.t("ai_rate", session.get("lang", i18n.DEFAULT))})
     token = (request.get_json(silent=True) or {}).get("token", "")
     return jsonify(tg.validate_token(token))
 
@@ -1498,6 +1720,10 @@ def _verdict_detail(ac):
 def subscribe_pay(plan_id):
     if not plans.is_sellable(plan_id):
         return redirect(url_for("pricing"))
+    # قراءة الإيصال (OCR) أغلى ما في المنصة وتعمل داخل الطلب — مسارا الدفع يتشاركان حداً
+    if _rate_limited(f"u{uid()}", limit=8, window=3600, bucket="receipt"):
+        flash(i18n.t("ai_rate", session.get("lang", i18n.DEFAULT)), "error")
+        return redirect(url_for("subscribe", plan_id=plan_id))
     # التسعيرة تُحسب في الخادم: سعر الباقة على الدورة المختارة بعد تجاوز المالك
     # وخصمها، ثم كود الخصم إن صحّ. لا يُقرأ أي مبلغ من الفورم (AGENTS.md §3.3).
     # الفورم يرسل اسم الدورة فقط — لا سعرها — و`norm_cycle` تردّ أي قيمة ملفّقة
@@ -1579,7 +1805,7 @@ def admin_platform():
                   "bank_holder","bank_name","bank_account","bank_iban",
                   "platform_bot_token","admin_chat_id",
                   "support_email","support_whatsapp","support_telegram",
-                  "wa_verify_token","wa_app_secret"):
+                  "wa_verify_token","wa_app_secret","addon_pay_price"):
             db.set_platform(k, request.form.get(k, "").strip())
         for bad in _save_ops_settings(request.form):
             flash(bad, "error")
@@ -1620,6 +1846,14 @@ def admin_platform_test():
 @require_roles("admin", "support")
 def admin_home():
     return react_page("admin_overview", "nav_admin", {"stats": db.platform_stats()}, needs_chart=True)
+
+@app.route("/admin/analytics")
+@require_roles("admin")
+def admin_analytics():
+    """إحصائيات الزوار وقمع التسجيل — للمالك وحده (أرقام العمل)."""
+    days = request.args.get("days", "30")
+    days = int(days) if days in ("7", "30", "90") else 30
+    return react_page("admin_analytics", "adm_analytics", {"a": db.analytics_summary(days)})
 
 @app.route("/api/admin/stats")
 @require_roles("admin", "support")
@@ -2019,6 +2253,8 @@ def account():
 @login_required
 def account_link_telegram():
     """يولّد رابط ربط لمرة واحدة عبر بوت المنصة، ليصل العميل تذكير الاشتراك."""
+    if _rate_limited(f"u{uid()}", limit=10, window=3600, bucket="tg_link"):   # ينتظر تليجرام
+        return jsonify({"ok": False, "error": i18n.t("ai_rate", session.get("lang", i18n.DEFAULT))})
     token = db.get_platform("platform_bot_token", "")
     if not token:
         return jsonify({"ok": False, "error": i18n.t("tg_link_no_bot",
@@ -2692,6 +2928,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
                 {"k": "admin_promos",     "u": url_for("admin_promos"),     "i": "bolt",     "l": i18n.t("adm_promos", lang)},
                 {"k": "admin_affiliates", "u": url_for("admin_affiliates"), "i": "users",    "l": i18n.t("adm_affiliates", lang)},
                 {"k": "settings",         "u": url_for("settings"),         "i": "sparkles", "l": i18n.t("nav_ai", lang)},
+                {"k": "admin_analytics",  "u": url_for("admin_analytics"),  "i": "chart",    "l": i18n.t("adm_analytics", lang)},
                 {"k": "admin_platform",   "u": url_for("admin_platform"),   "i": "settings", "l": i18n.t("nav_platform", lang)},
             ]
 
@@ -2914,12 +3151,14 @@ _PUBLIC_T_PREFIXES = ("lp", "hero_", "feat_", "ai_setup", "tmpl_", "footer_")
 _PUBLIC_T_EXTRA = ("get_started_free", "login", "signin_link", "brand_tag", "daily_activity",
                    "legal_updated", "stat_subs", "stat_orders", "stat_revenue", "stat_leads")
 
-# مسارات لا تُفهرَس: خاصة بالمستخدم أو تقنية أو مكررة لمحتوى الرئيسية
+# مسارات لا تُفهرَس: خاصة بالمستخدم أو تقنية. /pricing مفهرسة عمداً: أعلى صفحة نيّة شراء —
+# من يبحث «سعر بوت واتساب مصر» عميل جاهز يدفع.
 _NOINDEX_PATHS = ("/dashboard", "/admin", "/bot/", "/account", "/billing", "/wallet",
-                  "/subscribe/", "/settings", "/pricing", "/api/", "/wh/", "/reset/",
+                  "/subscribe/", "/settings", "/api/", "/wh/", "/reset/",
                   "/request-bot", "/affiliate")
 
-_SITEMAP = (("home", "1.0", "weekly"), ("register", "0.6", "monthly"), ("login", "0.3", "yearly"),
+_SITEMAP = (("home", "1.0", "weekly"), ("pricing", "0.8", "weekly"),
+            ("register", "0.6", "monthly"), ("login", "0.3", "yearly"),
             ("terms", "0.3", "yearly"), ("privacy", "0.3", "yearly"),
             ("refund_policy", "0.3", "yearly"), ("acceptable_use", "0.3", "yearly"))
 
@@ -3125,7 +3364,7 @@ def sitemap_xml():
            'xmlns:xhtml="http://www.w3.org/1999/xhtml">']
     for ep, prio, freq in _SITEMAP:
         loc = _xesc(base + url_for(ep))
-        mod = SITE_UPDATED if ep in ("home", "register", "login") else LEGAL_UPDATED
+        mod = SITE_UPDATED if ep in ("home", "pricing", "register", "login") else LEGAL_UPDATED
         alts = "".join(f'<xhtml:link rel="alternate" hreflang="{l}" href="{loc}?lang={l}"/>'
                        for l in ("ar", "en"))
         out.append(f"<url><loc>{loc}</loc><lastmod>{mod}</lastmod><changefreq>{freq}</changefreq>"
@@ -3191,6 +3430,9 @@ def _plan_names(lang=None):
     lang = lang or session.get("lang", i18n.DEFAULT)
     out = {k: plans.plan_name(k, lang) for k in plans.PLANS}
     out[db.WALLET_PLAN] = i18n.t("wallet_topup_label", lang)
+    # إضافة «تحصيل المدفوعات» تُشترى لكل بوت: plan = __addon_pay__:<bot_id>
+    for code in db.addon_plans_in_payments():
+        out[code] = i18n.t("addon_pay_label", lang).format(id=db.addon_bot_id(code))
     return out
 
 
@@ -3320,6 +3562,9 @@ def wallet_topup():
     والرصيد لا يُضاف إلا داخل `finalize_payment` بعد تلك الموافقة.
     """
     ar = session.get("lang") != "en"
+    if _rate_limited(f"u{uid()}", limit=8, window=3600, bucket="receipt"):   # نفس حدّ الاشتراك
+        flash(i18n.t("ai_rate", session.get("lang", i18n.DEFAULT)), "error")
+        return redirect(url_for("wallet_page"))
     try:
         amount = int(float(request.form.get("amount", "0") or 0))
     except (TypeError, ValueError, OverflowError):    # "inf" / "1e999" ترمي OverflowError
@@ -3411,11 +3656,13 @@ def contact_defaults():
         db.set_platform("support_whatsapp", "201097585951")
 
 def seed_default_admin():
-    """ينشئ حساب أدمن افتراضياً عند أول تشغيل (لو لا يوجد أي مستخدم)."""
+    """ينشئ حساب أدمن عند أول تشغيل (لو لا يوجد أي مستخدم). كلمة المرور من ADMIN_PASS،
+    وإلا عشوائية تُطبع مرة واحدة — لا كلمة افتراضية ثابتة: admin1234 كانت مكتوبة في
+    الوثائق وفي تاريخ git، فأي خادم نُسي ضبطه كان مفتوحاً لمن قرأها."""
     if db.count_users() > 0:
         return
     u = os.getenv("ADMIN_USER", "admin")
-    pw = os.getenv("ADMIN_PASS", "admin1234")
+    pw = os.getenv("ADMIN_PASS") or _secrets.token_urlsafe(12)
     db.create_user(u, auth.hash_password(pw))   # أول مستخدم = admin تلقائياً
     print("=" * 56)
     print("  🔐 تم إنشاء حساب الأدمن الافتراضي / Default admin created")

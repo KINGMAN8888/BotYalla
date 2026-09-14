@@ -28,6 +28,13 @@ def build_caption(payment, username, auto_verdict):
         item = "📦 البند / Item: رصيد الرسائل التسويقية / Marketing credit"
         action = ("اضغط موافقة لإضافة المبلغ إلى رصيد العميل، أو رفض للإلغاء.\n"
                   "Tap Approve to credit the wallet, or Reject.")
+    elif db.addon_bot_id(payment["plan"]):
+        b = db.get_bot(db.addon_bot_id(payment["plan"])) or {}
+        head = "🧩 طلب إضافة «تحصيل المدفوعات» / Payments add-on"
+        item = (f"📦 البند / Item: تحصيل مدفوعات العملاء — بوت «{b.get('name', '?')}» "
+                f"(#{b.get('id', '?')}) · 30 يوماً / days")
+        action = ("اضغط موافقة لتفعيل الإضافة 30 يوماً على هذا البوت، أو رفض للإلغاء.\n"
+                  "Tap Approve to enable the add-on on this bot for 30 days, or Reject.")
     else:
         annual = (payment.get("billing_cycle") or "monthly") == "annual"
         days = 365 if annual else 30
@@ -207,6 +214,8 @@ def register(app: Application):
             bal = row.get("wallet_after")
             tail = (f"\n\n✅ تمت الموافقة وشحن الرصيد — الرصيد الآن {(bal or 0) / 100:g} EGP"
                     f" / Approved & credited.")
+        elif status == "approved" and db.addon_bot_id(row["plan"]):
+            tail = "\n\n✅ تمت الموافقة وتفعيل إضافة «تحصيل المدفوعات» 30 يوماً / Add-on activated."
         elif status == "approved":
             tail = f"\n\n✅ تمت الموافقة وتفعيل «{plans.plan_name(row['plan'],'ar')}» / Approved & activated."
         else:

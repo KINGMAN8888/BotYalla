@@ -137,6 +137,73 @@ export function FlowBuilder() {
   );
 }
 
+/* آخر حملة: الإرسال يجري في الخلفية (الطلب يرجع فوراً) — فالنتيجة تُعرض هنا، وتُستطلع
+   كل ثانيتين ونصف أثناء الإرسال. المبالغ من الخادم كما خُصمت ورُدّت فعلاً. */
+function CampaignStatus({ botId, initial }) {
+  const [c, setC] = useState(initial || null);
+  useEffect(() => {
+    if (!c || c.state !== "running") return;
+    const id = setTimeout(() => {
+      fetch(`/bot/${botId}/broadcast/status`).then((r) => r.json())
+        .then((d) => setC(d && d.state ? d : null))
+        .catch(() => setC((x) => ({ ...x })));          // تعذّر الآن — نعيد في الدورة التالية
+    }, 2500);
+    return () => clearTimeout(id);
+  }, [c, botId]);
+  if (!c || !c.state) return null;
+  const egp = (p) => num(Number(p || 0) / 100);
+  const total = c.total || 0, sent = c.sent || 0, failed = c.failed || 0;
+  const running = c.state === "running";
+  const pct = total ? Math.min(100, Math.round(((sent + failed) / total) * 100)) : 0;
+  const rejected = !running && c.mode === "direct" && total > 0 && sent === 0;
+  const bad = rejected || (!running && c.error);
+  return (
+    <Card className="mb-5 max-w-[720px]">
+      <div className="flex flex-wrap items-center gap-2 text-[14px] font-extrabold text-ink">
+        <Icon name={running ? "pending" : bad ? "close" : "check"} size={17}
+              className={running ? "text-au-cyan" : bad ? "text-red-300" : "text-au-teal"} />
+        {running ? bi("الحملة قيد الإرسال الآن", "The campaign is sending now") : bi("آخر حملة", "Last campaign")}
+        <span className="ms-auto tnum text-[12.5px] font-bold text-ink-3">
+          {bi(`وصل ${num(sent)} · لم يصل ${num(failed)} · من ${num(total)}`,
+              `${num(sent)} delivered · ${num(failed)} not · of ${num(total)}`)}
+        </span>
+      </div>
+      {running && (
+        <>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/[0.08]" role="progressbar"
+               aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+            <div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)] transition-[width] duration-500"
+                 style={{ width: `${pct}%` }} />
+          </div>
+          <p className="mt-2 mb-0 text-[12.5px] text-ink-3">
+            {bi("تقدر تقفل الصفحة — الإرسال مستمر، والنتيجة تفضل هنا.",
+                "You can close this page — sending continues and the result stays here.")}
+          </p>
+        </>
+      )}
+      {!running && (c.charged > 0 || c.refunded > 0) && (
+        <p className="mt-2 mb-0 text-[12.5px] leading-relaxed text-ink-2 tnum">
+          {bi(`خُصم ${egp(c.charged)} ج.م`, `Charged ${egp(c.charged)} EGP`)}
+          {c.refunded > 0 && bi(` · رُدّ ${egp(c.refunded)} ج.م عن الرسائل التي لم تصل`,
+                                ` · ${egp(c.refunded)} EGP refunded for undelivered messages`)}
+        </p>
+      )}
+      {rejected && (
+        <p className="mt-2 mb-0 text-[12.5px] leading-relaxed text-amber-200">
+          {bi("لم تصل أي رسالة — رفضتها Meta. السبب الأرجح أن Direct Send (ميزة تجريبية) غير مفعّلة لحساب واتساب للأعمال الخاص بك. رُدّ رصيدك كاملاً — أرسل الرسالة نفسها عبر «قالب معتمد».",
+              "No message was delivered — Meta rejected them. Most likely Direct Send (a beta feature) isn't enabled for your WhatsApp Business account. Your credit was refunded in full — send the same message with an «Approved template».")}
+        </p>
+      )}
+      {!running && c.error && !rejected && (
+        <p className="mt-2 mb-0 text-[12.5px] text-red-300">
+          {bi("توقّف الإرسال بخطأ — ما لم يصل رُدّ ثمنه تلقائياً.",
+              "Sending stopped with an error — anything undelivered was refunded automatically.")}
+        </p>
+      )}
+    </Card>
+  );
+}
+
 /* ------------------------------------------------------------- البث */
 export function Broadcast() {
   const { bot, subs, isWa = false, reachable = subs, audience = reachable, waba = "",
@@ -176,6 +243,8 @@ export function Broadcast() {
           {isWa && <Btn variant="ghost" sm icon="grid" href={`/bot/${bot.id}/templates`}>{t("wa_tpl_link")}</Btn>}
           <Btn variant="ghost" sm icon="back" href={`/bot/${bot.id}`}>{t("back")}</Btn>
         </>} />
+
+      <CampaignStatus botId={bot.id} initial={P.campaign} />
 
       <Card className="max-w-[720px]">
         <div className="flex flex-wrap items-center gap-2">

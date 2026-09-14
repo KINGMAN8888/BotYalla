@@ -257,11 +257,14 @@ sequenceDiagram
 
 Plan configuration and tier definitions can be modified in `plans.py`:
 
-| Plan Tier | Price | Bot Limit | Channels | WhatsApp Msgs / mo | Media Files / mo | AI Generation | Broadcast |
+| Plan Tier | Price | Bot Limit | Channels | WhatsApp service msgs / mo | Media Files / mo | AI | Broadcast |
 |---|---|---|---|---|---|---|---|
-| **Free** | 0 EGP / mo | 1 Bot | Telegram only | — | 100 | Offline generator | Disabled |
-| **Pro** | 199 EGP / mo | 5 Bots | Telegram + WhatsApp | 1,000 | 2,000 | Gemini / Groq + fallback | Enabled |
-| **Business** | 499 EGP / mo | Unlimited | Telegram + WhatsApp | 5,000 | 10,000 | Gemini / Groq + fallback | Enabled |
+| **Free** | 0 EGP / mo | 1 Bot | Telegram only | — | 100 | The real setup agent · 3 sessions / mo | Disabled |
+| **Merchant** | 299 EGP / mo | 3 Bots | Telegram only | — | 1,000 | 30 sessions / mo · 500 AI replies | Enabled |
+| **WhatsApp** | 899 EGP / mo | 5 Bots | Telegram + WhatsApp | 2,000 | 3,000 | 60 sessions / mo · 1,500 AI replies · our team connects WhatsApp for you | Enabled |
+| **Agency** | 2,999 EGP / mo | Unlimited | Telegram + WhatsApp | 10,000 | 20,000 | 300 sessions / mo · 10,000 AI replies | Enabled |
+
+Annual billing is 30% off (`plans.ANNUAL_FACTOR`). The legacy Pro (199) and Business (499) plans remain in `plans.py` only for subscribers who already hold them — they are not sold. WhatsApp **marketing** messages are never inside a plan: they are paid per message from the wallet.
 
 > WhatsApp is closed on the Free tier and metered above it because Meta bills **per message** — an unlimited allowance on an active tenant can cost more than the subscription itself. Telegram is free to operate, so it carries no message cap.
 
@@ -387,7 +390,7 @@ python app.py
 
 Navigate to `http://127.0.0.1:5000` in your browser.
 
-> **Security Advisory**: Change the default admin password (`Username: admin`, `Password: admin1234` or the values specified in `ADMIN_USER` / `ADMIN_PASS`) immediately upon first login via the Account Settings page.
+> **Security Advisory**: On first start the admin account is created from `ADMIN_USER` / `ADMIN_PASS`. If `ADMIN_PASS` is not set, a random password is generated and printed **once** to the log — there is no fixed default password. Change it after your first login via the Account page.
 
 ### 7. Run the Tests
 

@@ -28,9 +28,10 @@ PLANS = {
  "merchant": {
     "name_ar": "تاجر", "name_en": "Merchant", "price": 299, "max_bots": 3,
     # سطور وكيل الإعداد وعقل البوت وصندوق الوارد تُضاف من FEATURES (app._plan_feature_lines)
-    "features_ar": ["3 بوتات على تليجرام", "تحصيل فودافون كاش وانستاباي",
+    # تحصيل مدفوعات العملاء إضافة مدفوعة لكل بوت (app.addon_pay) — لا مشمولة في الباقة
+    "features_ar": ["3 بوتات على تليجرام", "تحصيل مدفوعات عملائك (إضافة لكل بوت)",
                     "حملات Broadcast", "تحليلات كاملة ودعم الصور", "بدون تذييل BotYalla"],
-    "features_en": ["3 Telegram bots", "Vodafone Cash & InstaPay collection",
+    "features_en": ["3 Telegram bots", "Customer payment collection (per-bot add-on)",
                     "Broadcast campaigns", "Full analytics and media support", "No BotYalla footer"],
     "ai": True, "broadcast": True, "whatsapp": False, "white_label": False,
     "wa_msgs": 0, "media_files": 1000,

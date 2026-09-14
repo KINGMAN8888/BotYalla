@@ -275,9 +275,10 @@ class BroadcastTests(unittest.TestCase):
         row = db.get_bot(self.bot)
         with mock.patch.object(WhatsAppChannel, "_post", fake_post):
             ch = bot_manager._wa_channel(row)
+            peers = db.list_bot_peers(self.bot)
             asyncio.run(bot_manager.BotManager._broadcast_template(
-                bot_manager.manager, row, db.list_bot_peers(self.bot),
-                "order_ready", "ar", ["أحمد", "A-12"]))
+                bot_manager.manager, row, peers, "order_ready", "ar", ["أحمد", "A-12"],
+                bot_manager.BotManager._progress(None, len(peers))))
 
         self.assertEqual(len(posted), 2, "القالب يجب أن يصل للاثنين")
         self.assertEqual(posted[0]["type"], "template")
@@ -307,8 +308,10 @@ class BroadcastTests(unittest.TestCase):
                       " VALUES(?,?,strftime('%Y-%m','now'),1000)", (self.bot, 61))
         row = db.get_bot(self.bot)
         with mock.patch.object(WhatsAppChannel, "_post", fake_post):
+            peers = db.list_bot_peers(self.bot)
             asyncio.run(bot_manager.BotManager._broadcast_template(
-                bot_manager.manager, row, db.list_bot_peers(self.bot), "order_ready", "ar", []))
+                bot_manager.manager, row, peers, "order_ready", "ar", [],
+                bot_manager.BotManager._progress(None, len(peers))))
         self.assertEqual(posted, [], "أُرسل قالب رغم نفاد رصيد الباقة")
 
 

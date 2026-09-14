@@ -255,7 +255,19 @@ async def _ai_answer(bot_row, cfg, raw_channel, peer, text, extra=None):
     if not grant:
         log.info("AI reply dropped for bot #%s — allowance and wallet exhausted", bot_row["id"])
         return False
-    await ch.send_text(peer, reply)
+    inner = raw_channel._c if isinstance(raw_channel, LoggedChannel) else raw_channel
+    try:
+        res = await ch.send_text(peer, reply)
+        # واتساب يرجّع None حين يُرفض الإرسال (نافذة 24 ساعة · خطأ Meta · حدّ الباقة)،
+        # وتليجرام لا يرجّع شيئاً عند النجاح ويرمي عند الفشل — تمييز LoggedChannel._log نفسه
+        delivered = not (res is None and getattr(inner, "phone_id", None) is not None)
+    except Exception:
+        log.exception("AI reply send failed for bot #%s", bot_row["id"])
+        delivered = False
+    if not delivered:
+        # حُجز للرد (من الحصة أو بالقروش) ولم يصل: يُعاد الحجز كله — لا خصم على ما لم يصل
+        db.ai_reply_release(bot_row["owner_id"], grant, price, ref=f"ai:{bot_row['id']}")
+        return False
     try:
         await _ai_action(bot_row, cfg, raw_channel, peer, out.get("action"))
     except Exception:
@@ -687,7 +699,20 @@ async def track_start(update, ctx):
     if src:
         db.log_event(_bid(ctx), f"src_{src}")
 
+def inbox_out(update, ctx, text, markup=None, kind="text"):
+    """يسجّل رد قالب تليجرام (متجر · حجز · قائمة) في صندوق الوارد. هذه القوالب لا تمرّ بـ
+    LoggedChannel، فكان صاحب النشاط يرى رسالة عميله ولا يرى ما ردّ به بوته. نفس صيغته:
+    النص ثم الأزرار [..]."""
+    kb = getattr(markup, "keyboard", None) or ()
+    opts = [getattr(b, "text", b) for row in kb for b in row]
+    body = (text or "") + ("\n" + " · ".join(f"[{o}]" for o in opts) if opts else "")
+    try:
+        db.log_message(_bid(ctx), f"tg:{update.effective_chat.id}", "out", "bot", body, kind=kind)
+    except Exception:
+        log.exception("could not log a template reply")
+
 async def send_intro(update, ctx, text, reply_markup=None):
+    """ترحيب قوالب المتجر والحجز والقائمة (وحدها تستعمله) — ويُسجَّل في صندوق الوارد."""
     cfg = _cfg(ctx)
     aid = cfg.get("welcome_asset")
     if aid:
@@ -698,6 +723,7 @@ async def send_intro(update, ctx, text, reply_markup=None):
                 await TelegramChannel(ctx.bot).send_media(
                     f"tg:{update.effective_chat.id}", asset, _bid(ctx), caption=text,
                     markup=reply_markup)
+                inbox_out(update, ctx, text, reply_markup, "media")
                 return
             except Exception:
                 log.exception("welcome media failed for bot #%s", _bid(ctx))
@@ -705,7 +731,9 @@ async def send_intro(update, ctx, text, reply_markup=None):
     if img:
         try:
             await update.message.reply_photo(img, caption=text, reply_markup=reply_markup)
+            inbox_out(update, ctx, text, reply_markup, "media")
             return
         except Exception:
             pass
     await update.message.reply_text(text, reply_markup=reply_markup)
+    inbox_out(update, ctx, text, reply_markup)
