@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useReducedMotion } from "motion/react";
-import Backdrop from "./Backdrop.jsx";
+import Backdrop, { lowPower } from "./Backdrop.jsx";
 
 /* ============================================================================
    الشفق الحيّ — خلفية GPU بشيدر واحد، بلا three.js ولا أي تبعية.
@@ -82,6 +82,9 @@ export default function Aurora({ quiet = false }) {
     const U = (n) => gl.getUniformLocation(prog, n);
     const uR = U("uR"), uT = U("uT"), uM = U("uM"), uS = U("uS"), uQ = U("uQ");
 
+    // الجوال والأجهزة الضعيفة: إطار ثابت يُعاد رسمه مع التمرير فقط (كتقليل الحركة) —
+    // شيدر fbm بثلاث طبقات 30 مرة في الثانية يُثقل التمرير ويستنزف البطارية هناك.
+    const still = reduce || lowPower();
     const scale = window.innerWidth < 768 ? 0.35 : 0.5;
     const t0 = performance.now();
     const ptr = { x: 0.62, y: 0.28, tx: 0.62, ty: 0.28 };
@@ -98,7 +101,7 @@ export default function Aurora({ quiet = false }) {
       ptr.y += (ptr.ty - ptr.y) * 0.05;
       const sc = Math.min(1, window.scrollY / Math.max(1, window.innerHeight * 1.6));
       gl.uniform2f(uR, w, h);
-      gl.uniform1f(uT, reduce ? 14 : (now - t0) / 1000);
+      gl.uniform1f(uT, still ? 14 : (now - t0) / 1000);
       gl.uniform2f(uM, ptr.x * w, (1 - ptr.y) * h);
       gl.uniform1f(uS, sc);
       gl.uniform1f(uQ, quiet ? 1 : 0);
@@ -124,17 +127,20 @@ export default function Aurora({ quiet = false }) {
     function onLeave() { if (glowRef.current) glowRef.current.style.opacity = "0"; }
     function onVis() {
       if (document.hidden) { running = false; cancelAnimationFrame(raf); }
-      else if (!reduce) { running = true; raf = requestAnimationFrame(frame); }
+      else if (!still) { running = true; raf = requestAnimationFrame(frame); }
     }
     function onLost(e) { e.preventDefault(); setFallback(true); }
-    function onScrollStill() { draw(performance.now()); }
+    // رسمة واحدة لكل إطار مهما تكاثرت أحداث التمرير
+    function onScrollStill() {
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(performance.now()); });
+    }
 
     resize();
     draw(performance.now());                   // إطار أول متزامن — لا شاشة سوداء أبداً
     const ro = new ResizeObserver(() => { resize(); draw(performance.now()); });
     ro.observe(canvas);
     canvas.addEventListener("webglcontextlost", onLost);
-    if (reduce) {
+    if (still) {
       window.addEventListener("scroll", onScrollStill, { passive: true });
     } else {
       raf = requestAnimationFrame(frame);

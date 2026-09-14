@@ -17,13 +17,13 @@ echo  And that your latest code is pushed to GitHub.
 echo ==================================================
 echo(
 
-set /p HOST=^> Server Address (IP): 
-if "!HOST!"=="" ( echo Server address is required. & pause & exit /b 1 )
+set "HOST=187.77.161.12"
+set "SSHUSER=root"
+set "DOMAIN=botyalla.com"
 
-set /p SSHUSER=^> Username [root]: 
-if "!SSHUSER!"=="" set "SSHUSER=root"
-
-set /p DOMAIN=^> Domain (leave empty to deploy via IP): 
+echo ^> Server Address: !HOST!
+echo ^> Username: !SSHUSER!
+echo ^> Domain: !DOMAIN!
 
 set /p MODE=^> [1] Full Deploy  [2] Update Only  : 
 if "!MODE!"=="2" ( set "ARGS=--update !DOMAIN!" ) else ( set "ARGS=!DOMAIN!" )

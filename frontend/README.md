@@ -28,10 +28,14 @@ npm run build      # يُخرج static/dist/
 
 | الملف | الاستخدام |
 |---|---|
-| `landing.js` | صفحة الهبوط `/landing` |
-| `console.js` | كل صفحات اللوحة |
-| `chunk-src.js` | React + Motion (مشترك بين المدخلين) |
-| `style.css` | Tailwind (مشترك) |
+| `landing-<hash>.js` | الموقع العام (الرئيسية والوثائق) |
+| `console-<hash>.js` | مدخل اللوحة: القشرة وحاجز الأخطاء، ثم يحمّل قطعة العرض وحدها |
+| `chunk-<View>-<hash>.js` | قطعة لكل صفحة (Dashboard, BotDetail, auth…) |
+| `chunk-src-<hash>.js` | React + Motion (مشترك بين المدخلين) |
+| `style.css` | Tailwind (مشترك، يُطلب بـ `?v=`) |
+| `.vite/manifest.json` | منه يأخذ Flask أسماء الملفات (`dist_entry` / `dist_preloads`) |
+
+الأسماء تتغيّر مع كل بناء — لا تكتب اسم ملف JS في قالب؛ استعمل `dist_entry(...)`.
 
 ## مهم قبل النشر
 

@@ -271,8 +271,8 @@ class LegalAndNotFoundTests(unittest.TestCase):
 
     def test_policies_use_the_public_layout_not_the_dashboard_shell(self):
         html = web.app.test_client().get("/privacy").get_data(as_text=True)
-        self.assertIn("dist/landing.js", html)
-        self.assertNotIn("dist/console.js", html)
+        self.assertIn("dist/landing-", html)
+        self.assertNotIn("dist/console-", html)
         self.assertEqual(_by(html)["page"], "legal")
 
     def test_every_policy_is_linked_from_every_public_page(self):

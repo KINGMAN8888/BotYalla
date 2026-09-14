@@ -328,9 +328,43 @@ def _static_v(filename):
         v = "0"
     return url_for("static", filename=filename, v=v)
 
+_DIST_MANIFEST = {"mtime": None, "data": {}}
+
+def _dist_manifest():
+    """dist/.vite/manifest.json (خريطة Vite: مدخل ← ملفه وقطعه). يُعاد قراءته فقط حين
+    يتغيّر بعد بناء جديد."""
+    path = os.path.join(app.static_folder, "dist", ".vite", "manifest.json")
+    try:
+        mtime = os.path.getmtime(path)
+        if _DIST_MANIFEST["mtime"] != mtime:
+            with open(path, encoding="utf-8") as f:
+                _DIST_MANIFEST.update(data=json.load(f), mtime=mtime)
+    except (OSError, ValueError):
+        return {}
+    return _DIST_MANIFEST["data"]
+
+def _dist_entry(entry):
+    """رابط مدخل Vite الفعلي (`src/main.jsx` أو `src/console-main.jsx`) — اسمه يحمل hash.
+    بلا ?v=: قطع العروض تستورد المدخل باسمه المجرّد، ورابط مختلف يجعل المتصفح ينفّذه مرتين."""
+    m = _dist_manifest().get(entry)
+    return url_for("static", filename="dist/" + m["file"]) if m else ""
+
+def _dist_preloads(entry):
+    """روابط القطع المشتركة التي يستوردها مدخل Vite — تُطلب بـ modulepreload مع الصفحة بدل
+    أن تنتظر تحليل المدخل (جولة شبكة كاملة على كل صفحة). أسماؤها تحمل hash فلا تحتاج ?v=."""
+    man, out, seen = _dist_manifest(), [], set()
+    def walk(key):
+        for k in man.get(key, {}).get("imports", []):
+            if k not in seen and k in man:
+                seen.add(k)
+                out.append(url_for("static", filename="dist/" + man[k]["file"]))
+                walk(k)
+    walk(entry)
+    return out
+
 @app.context_processor
 def _static_ctx():
-    return {"static_v": _static_v}
+    return {"static_v": _static_v, "dist_entry": _dist_entry, "dist_preloads": _dist_preloads}
 
 def _csrf_token():
     """توكن CSRF للجلسة، يُنشأ عند أول حاجة. `react_page` تحتاجه **قبل** أن تعمل
@@ -1879,7 +1913,9 @@ def _pay_state(b):
     if not _pay_eligible(b):
         return {"eligible": False}
     cfg = json.loads(b.get("config_json") or "{}")
-    return {"eligible": True, "active": db.addon_active(b["id"]), "expires": db.addon_expires(b["id"]),
+    staff = db.bot_owner_is_staff(b["id"])            # حساب الإدارة: مشمولة بلا شراء ولا انتهاء
+    return {"eligible": True, "active": db.addon_active(b["id"]), "staff": staff,
+            "expires": None if staff else db.addon_expires(b["id"]),
             "price": addon_pay_price(), "methods": cfg.get("pay") or {},
             "payments": db.list_bot_payments(b["id"])}
 
@@ -1894,6 +1930,11 @@ def addon_pay(bot_id):
         flash("الإضافة متاحة لبوتات المتجر على تليجرام." if ar else
               "The add-on is available for Telegram store bots.", "error")
         return redirect(url_for("bot_detail", bot_id=bot_id))
+    if db.bot_owner_is_staff(bot_id):
+        # لا دفعة ولا إيصال لحساب الإدارة — الإضافة مفتوحة له أصلاً (db.addon_active)
+        flash("الإضافة مفتوحة لحساب الإدارة بلا اشتراك ✅" if ar else
+              "The add-on is included for the admin account ✅", "ok")
+        return redirect(url_for("bot_detail", bot_id=bot_id) + "#pay")
     price = addon_pay_price()
     if request.method == "POST":
         back = redirect(url_for("addon_pay", bot_id=bot_id))

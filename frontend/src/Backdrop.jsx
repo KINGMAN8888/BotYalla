@@ -21,6 +21,14 @@ const ORBS = [
   { h: 200, s: 0.14, r: 0.22 },
 ];
 
+/* أجهزة اللمس (لا مؤشّر تتفاعل معه الخلفية) والأجهزة الضعيفة: إطار ثابت بدل حلقة رسم لا
+   تتوقف. الانجراف أبطأ من أن تلحظه العين، والحلقة كانت تُشغل المعالج وتُثقل التمرير —
+   خصوصاً تحت الشريط والقائمة الزجاجيين (backdrop-blur) اللذين يُعاد تمويههما مع كل إطار. */
+export const lowPower = () =>
+  typeof window !== "undefined" &&
+  (!!window.matchMedia?.("(pointer: coarse)").matches ||
+   (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4);
+
 export default function Backdrop({ dense = true }) {
   const canvasRef = useRef(null);
   const glowRef = useRef(null);
@@ -32,8 +40,11 @@ export default function Backdrop({ dense = true }) {
     const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    let w = 0, h = 0, raf = 0, running = true;
+    const still = reduce || lowPower();
+    // التدرّجات ناعمة أصلاً: نصف الدقة يكفي والمتصفح يكبّرها — كانت بدقة الشاشة ×2
+    // (أربعة أضعاف البكسلات على شاشات الريتنا) مع كل إطار.
+    const scale = 0.5;
+    let w = 0, h = 0, raf = 0, running = true, last = 0;
     const pointer = { x: -9999, y: -9999, tx: -9999, ty: -9999, active: false };
 
     // حالة كل كُرة: موضع، سرعة، طور للتذبذب
@@ -49,9 +60,9 @@ export default function Backdrop({ dense = true }) {
 
     function resize() {
       w = canvas.clientWidth; h = canvas.clientHeight;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      canvas.width = Math.max(1, Math.round(w * scale));
+      canvas.height = Math.max(1, Math.round(h * scale));
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
     }
 
     function paint(t) {
@@ -109,8 +120,10 @@ export default function Backdrop({ dense = true }) {
 
     function frame(t) {
       if (!running) return;
-      paint(t);
       raf = requestAnimationFrame(frame);
+      if (t - last < 33) return;                  // ≤ 30 إطاراً — تدرّج بطيء لا يحتاج أكثر
+      last = t;
+      paint(t);
     }
 
     function onMove(e) {
@@ -130,7 +143,7 @@ export default function Backdrop({ dense = true }) {
     // أوقف الرسم عندما تكون الصفحة مخفية — لا نحرق بطارية بلا داعٍ
     function onVis() {
       if (document.hidden) { running = false; cancelAnimationFrame(raf); }
-      else if (!reduce) { running = true; raf = requestAnimationFrame(frame); }
+      else if (!still) { running = true; raf = requestAnimationFrame(frame); }
     }
 
     resize();
@@ -142,7 +155,7 @@ export default function Backdrop({ dense = true }) {
     // وكانت الخلفية تبقى سوداء تماماً. الآن هي موجودة قبل أي حركة.
     paint(performance.now());
 
-    if (!reduce) {
+    if (!still) {
       raf = requestAnimationFrame(frame);
       window.addEventListener("pointermove", onMove, { passive: true });
       window.addEventListener("pointerleave", onLeave, { passive: true });

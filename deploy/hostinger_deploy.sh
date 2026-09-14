@@ -115,7 +115,8 @@ if command -v npm >/dev/null 2>&1; then
 else
   echo "  ✓ Node is not available — using the uploaded static/dist"
 fi
-[[ -f "$APP_DIR/static/dist/console.js" ]] || die "static/dist is missing — the frontend will not work"
+# JS file names carry a content hash; the app finds them through Vite's manifest
+[[ -f "$APP_DIR/static/dist/.vite/manifest.json" ]] || die "static/dist is missing — the frontend will not work"
 
 chown -R "$SVC_USER:$SVC_USER" "$APP_DIR" /var/log/botyalla
 
@@ -189,6 +190,22 @@ if [[ -n "$DOMAIN" && "$DOMAIN" != "_" ]]; then
   # Re-issue and configure Nginx automatically
   echo "  Securing $DOMAIN with Let's Encrypt..."
   certbot --nginx -d "$DOMAIN" -d "www.$DOMAIN" --non-interactive --agree-tos -m "info@botyalla.com" --redirect >/dev/null 2>&1 || warn "SSL setup failed. Run certbot manually."
+
+  # HTTP/2 on 443: every file loads in parallel over one connection instead of the
+  # HTTP/1.1 queue. certbot writes "listen 443 ssl;" without it — add it, and roll back
+  # if this nginx build rejects it (nginx -t), so the site never goes down for it.
+  NGX=/etc/nginx/sites-available/botyalla
+  if grep -qE 'listen (\[::\]:)?443 ssl( |;)' "$NGX" && ! grep -q 'http2' "$NGX"; then
+    cp "$NGX" "$NGX.pre-h2"
+    sed -i -E 's/listen (\[::\]:)?443 ssl( |;)/listen \1443 ssl http2\2/' "$NGX"
+    if nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx && echo "  ✓ HTTP/2 enabled"
+    else
+      mv "$NGX.pre-h2" "$NGX"
+      warn "This nginx rejected http2 — kept HTTP/1.1"
+    fi
+    rm -f "$NGX.pre-h2"
+  fi
 fi
 
 echo ""

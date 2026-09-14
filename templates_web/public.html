@@ -38,6 +38,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;600;700;800&family=Noto+Kufi+Arabic:wght@700;800;900&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ static_v('dist/style.css') }}">
+{# القطع المشتركة (React والحركة) تُطلب بالتوازي مع landing.js لا بعد تحليله #}
+{% for u in dist_preloads('src/main.jsx') %}<link rel="modulepreload" href="{{ u }}">
+{% endfor %}
 <style nonce="{{ csp_nonce }}">
   html{background:#05070D;}
   body{font-family:{% if P.lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}
@@ -56,6 +59,47 @@
   #fallback .cta a.alt{background:transparent;color:#F2F5FC;box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);}
   #fallback .fb-foot{margin-top:64px;padding-top:24px;border-top:1px solid rgba(255,255,255,.08);font-size:14px;}
   #fallback .fb-foot a{margin-inline-end:16px;}
+  /* قبل تركيب React يظهر هيكل (skeleton) بشكل الصفحة الحقيقية بدل النص الخام أعلاه — كان
+     يظهر لحظة بلا تصميم ثم «يقلب» فجأة. النص الخام يبقى في الصفحة لمحركات البحث ولمن عطّل
+     الجافاسكربت (بلا .js يظهر كما هو)، ويظهر وحده لو تعثّر React أكثر من 6 ثوانٍ فلا يبقى
+     الزائر أمام هيكل فارغ. تنبيه: بعد كل «{» مسافة — «{» ملاصقة لـ«#» تبدأ تعليق Jinja. */
+  #lsk{display:none;}
+  .js #lsk{display:block;min-height:100vh;animation:lsk-off 0s 6s forwards;
+    background:radial-gradient(55% 45% at 72% 8%,rgba(124,108,246,.16),transparent 70%),
+               radial-gradient(45% 35% at 18% 28%,rgba(34,211,238,.08),transparent 70%);}
+  .js #fallback{position:absolute;top:0;left:0;right:0;visibility:hidden;animation:fb-on 0s 6s forwards;}
+  .react-on #lsk{display:none;}
+  @keyframes lsk-off{to{visibility:hidden;}}
+  @keyframes fb-on{to{visibility:visible;}}
+  .sk{position:relative;overflow:hidden;background:rgba(255,255,255,.055);border-radius:10px;flex-shrink:0;}
+  .sk::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.075),transparent);
+    animation:sk 1.5s ease-in-out infinite;}
+  [dir=rtl] .sk::after{animation-name:skr;}
+  @keyframes sk{to{transform:translateX(100%)}}
+  @keyframes skr{from{transform:translateX(100%)}to{transform:translateX(-100%)}}
+  @media (prefers-reduced-motion:reduce){ .sk::after{display:none;}}
+  .skvh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+  .lsk-top{max-width:1320px;margin:0 auto;box-sizing:border-box;display:flex;align-items:center;gap:12px;padding:12px 20px;}
+  .lsk-links{display:none;align-items:center;gap:30px;margin-inline-start:34px;}
+  .lsk-end{margin-inline-start:auto;display:flex;align-items:center;gap:8px;}
+  .lsk-sm,.lsk-md{display:none;}
+  .lsk-hero{max-width:1240px;margin:0 auto;box-sizing:border-box;padding:clamp(8px,2vw,28px) 16px 48px;}
+  .lsk-demo{max-width:880px;margin:0 auto;border-radius:30px;overflow:hidden;background:rgba(255,255,255,.03);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 60px 140px -50px rgba(124,108,246,.5);}
+  .lsk-row{display:flex;align-items:center;gap:10px;padding:12px 16px;overflow:hidden;
+    box-shadow:inset 0 -1px 0 rgba(255,255,255,.07);}
+  .lsk-chat{display:flex;flex-direction:column;justify-content:flex-end;gap:10px;padding:20px 16px;
+    min-height:clamp(170px,20vw,230px);}
+  .lsk-h1{max-width:1000px;margin:clamp(36px,5vw,64px) auto 0;display:flex;flex-direction:column;align-items:center;gap:14px;}
+  .lsk-h1 .sk{height:clamp(38px,5.4vw,72px);border-radius:16px;}
+  .lsk-cta{display:flex;flex-direction:column;align-items:center;gap:16px;margin-top:30px;}
+  .lsk-cta .sk{width:100%;max-width:360px;height:56px;border-radius:999px;}
+  .lsk-doc{max-width:860px;margin:44px auto 0;padding:0 24px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;}
+  @media (min-width:640px){ .lsk-sm{display:block;} .lsk-top{padding:16px 24px;} .lsk-hero{padding-inline:24px;}
+    .lsk-cta{flex-direction:row;justify-content:center;} .lsk-cta .sk{width:200px;}}
+  @media (min-width:768px){ .lsk-md{display:block;}}
+  @media (min-width:1024px){ .lsk-links{display:flex;} .lsk-burger{display:none;}}
 </style>
 {# علامة "الجافاسكربت يعمل": بدونها يبقى كل محتوى React ظاهراً بلا حركة #}
 <script nonce="{{ csp_nonce }}">document.documentElement.className += " js";</script>
@@ -65,6 +109,56 @@
 <body>
 
 <div id="landing-root">
+  <div id="lsk" role="status">
+    <span class="skvh">{{ seo.title }}</span>
+    <div class="lsk-top" aria-hidden="true">
+      <div class="sk" style="width:128px;height:34px;"></div>
+      <div class="lsk-links">{% for w in (74, 88, 62, 58) %}<div class="sk" style="width:{{ w }}px;height:14px;"></div>{% endfor %}</div>
+      <div class="lsk-end">
+        <div class="sk" style="width:62px;height:40px;border-radius:999px;"></div>
+        <div class="sk lsk-md" style="width:96px;height:40px;border-radius:999px;"></div>
+        <div class="sk lsk-sm" style="width:150px;height:40px;border-radius:999px;background:rgba(143,233,255,.14);"></div>
+        <div class="sk lsk-burger" style="width:40px;height:40px;border-radius:50%;"></div>
+      </div>
+    </div>
+  {% if P.page == 'home' %}
+    <div class="lsk-hero" aria-hidden="true">
+      <div class="lsk-demo">
+        <div class="lsk-row">{% for w in (92, 124, 84, 70) %}<div class="sk" style="width:{{ w }}px;height:32px;border-radius:12px;"></div>{% endfor %}</div>
+        <div class="lsk-row" style="padding:16px 20px;">
+          <div class="sk" style="width:44px;height:44px;border-radius:50%;"></div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:8px;">
+            <div class="sk" style="width:120px;height:14px;"></div><div class="sk" style="width:70px;height:10px;"></div>
+          </div>
+        </div>
+        <div class="lsk-chat">
+          <div class="sk" style="align-self:flex-end;width:min(240px,62%);height:42px;border-radius:20px;background:rgba(143,233,255,.1);"></div>
+          <div class="sk" style="align-self:flex-start;width:min(380px,90%);height:42px;border-radius:20px;"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;width:min(380px,90%);">
+            <div class="sk" style="height:38px;border-radius:12px;"></div><div class="sk" style="height:38px;border-radius:12px;"></div>
+          </div>
+        </div>
+        <div style="padding:0 16px 16px;"><div class="sk" style="height:50px;border-radius:16px;"></div></div>
+      </div>
+      <div class="lsk-h1">
+        <div class="sk" style="width:min(640px,86%);"></div>
+        <div class="sk" style="width:min(430px,62%);"></div>
+        <div class="sk" style="width:min(520px,88%);height:16px;margin-top:14px;border-radius:8px;"></div>
+      </div>
+      <div class="lsk-cta">
+        <div class="sk" style="background:rgba(143,233,255,.14);"></div><div class="sk"></div>
+      </div>
+    </div>
+  {% else %}
+    <div class="lsk-doc" aria-hidden="true">
+      <div class="sk" style="width:62%;height:44px;border-radius:14px;"></div>
+      <div class="sk" style="width:28%;height:12px;margin-bottom:18px;"></div>
+      {% for w in (100, 96, 92, 98, 70, 0, 44, 100, 94, 97, 62) %}
+        {% if w %}<div class="sk" style="width:{{ w }}%;height:13px;"></div>{% else %}<div style="height:18px;"></div>{% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+  </div>
   <div id="fallback">
     <header class="fb-top">
       <a href="{{ P.urls.home }}"><img src="{{ P.urls.logo }}" alt="BotYalla" width="140" height="36"></a>
@@ -154,6 +248,6 @@
   </div>
 </div>
 
-<script nonce="{{ csp_nonce }}" type="module" src="{{ static_v('dist/landing.js') }}"></script>
+<script nonce="{{ csp_nonce }}" type="module" src="{{ dist_entry('src/main.jsx') }}"></script>
 </body>
 </html>

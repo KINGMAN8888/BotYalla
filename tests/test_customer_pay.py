@@ -91,6 +91,21 @@ class AddonPurchaseTests(unittest.TestCase):
         _upload(_as("cp_owner"), f"/bot/{self.flow}/addon/pay")
         self.assertEqual(self._addon_payments(self.flow), [])
 
+    def test_the_admin_account_has_it_without_buying(self):
+        """قرار المالك: حساب الإدارة مفتوح له كل شيء — الإضافة سارية على بوتاته بلا دفعة،
+        في الواجهة وفي البوت نفسه (templates_bot.pay_enabled يقرأ db.addon_active)."""
+        admin_id = db.get_user_by_login("admin")["id"]
+        bid = db.create_bot(admin_id, "AdminShop", "T:cp-admin", "store", {"business_name": "A"})
+        self.assertTrue(db.addon_active(bid))
+        st = web._pay_state(db.get_bot(bid))
+        self.assertTrue(st["active"] and st["staff"])
+        self.assertIsNone(st["expires"])
+        r = _as("admin").get(f"/bot/{bid}/addon/pay")
+        self.assertEqual(r.status_code, 302, "لا صفحة شراء لحساب الإدارة")
+        self.assertEqual([p for p in db.list_payments(admin_id) if p["plan"] == db.addon_plan(bid)], [])
+        # يُفحص بصاحب البوت لا بمن يتصفّح: بوت العميل يبقى محتاجاً شراء صاحبه
+        self.assertFalse(web._pay_state(db.get_bot(self.store))["staff"])
+
     def test_receiving_accounts_keep_only_known_fields(self):
         _as("cp_owner").post(f"/bot/{self.store}/pay-settings", data={
             "pay_vodafone": " 01001234567 ", "pay_instapay": "", "pay_evil": "x", "csrf_token": "tk"})

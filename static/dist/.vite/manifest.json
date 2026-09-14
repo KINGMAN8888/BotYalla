@@ -1,0 +1,181 @@
+{
+  "_chunk-src-Cs486EvG.js": {
+    "file": "chunk-src-Cs486EvG.js",
+    "name": "src"
+  },
+  "src/app/auth.jsx": {
+    "file": "chunk-auth-VDSQGXlU.js",
+    "name": "auth",
+    "src": "src/app/auth.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx"
+    ]
+  },
+  "src/app/media.jsx": {
+    "file": "chunk-media-D41r0G1x.js",
+    "name": "media",
+    "src": "src/app/media.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx"
+    ]
+  },
+  "src/app/views/Account.jsx": {
+    "file": "chunk-Account-D93tHcCo.js",
+    "name": "Account",
+    "src": "src/app/views/Account.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx",
+      "src/app/auth.jsx"
+    ]
+  },
+  "src/app/views/Admin.jsx": {
+    "file": "chunk-Admin-CW9BhnCk.js",
+    "name": "Admin",
+    "src": "src/app/views/Admin.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx",
+      "src/app/auth.jsx",
+      "src/app/views/Account.jsx"
+    ]
+  },
+  "src/app/views/BotDetail.jsx": {
+    "file": "chunk-BotDetail-Qm0epp-R.js",
+    "name": "BotDetail",
+    "src": "src/app/views/BotDetail.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx",
+      "src/app/media.jsx"
+    ]
+  },
+  "src/app/views/Dashboard.jsx": {
+    "file": "chunk-Dashboard-BiSbxDAt.js",
+    "name": "Dashboard",
+    "src": "src/app/views/Dashboard.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx",
+      "src/app/media.jsx"
+    ]
+  },
+  "src/app/views/Emails.jsx": {
+    "file": "chunk-Emails-BjTrlOCi.js",
+    "name": "Emails",
+    "src": "src/app/views/Emails.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx"
+    ]
+  },
+  "src/app/views/Inbox.jsx": {
+    "file": "chunk-Inbox-DZwWqmZB.js",
+    "name": "Inbox",
+    "src": "src/app/views/Inbox.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx",
+      "src/app/media.jsx"
+    ]
+  },
+  "src/app/views/Legal.jsx": {
+    "file": "chunk-Legal-CBDdjs8G.js",
+    "name": "Legal",
+    "src": "src/app/views/Legal.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx"
+    ]
+  },
+  "src/app/views/Revenue.jsx": {
+    "file": "chunk-Revenue-D4kXjpCi.js",
+    "name": "Revenue",
+    "src": "src/app/views/Revenue.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx"
+    ]
+  },
+  "src/app/views/Tools.jsx": {
+    "file": "chunk-Tools-BFny5KfR.js",
+    "name": "Tools",
+    "src": "src/app/views/Tools.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx",
+      "src/app/auth.jsx",
+      "src/app/media.jsx"
+    ]
+  },
+  "src/app/views/WaTemplates.jsx": {
+    "file": "chunk-WaTemplates-DJGG5HcX.js",
+    "name": "WaTemplates",
+    "src": "src/app/views/WaTemplates.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx"
+    ]
+  },
+  "src/app/views/Wallet.jsx": {
+    "file": "chunk-Wallet-DRoyP5Zm.js",
+    "name": "Wallet",
+    "src": "src/app/views/Wallet.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js",
+      "src/console-main.jsx"
+    ]
+  },
+  "src/console-main.jsx": {
+    "file": "console-DroX8GrP.js",
+    "name": "console",
+    "src": "src/console-main.jsx",
+    "isEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js"
+    ],
+    "dynamicImports": [
+      "src/app/views/Dashboard.jsx",
+      "src/app/views/BotDetail.jsx",
+      "src/app/views/Account.jsx",
+      "src/app/views/Admin.jsx",
+      "src/app/views/Tools.jsx",
+      "src/app/auth.jsx",
+      "src/app/views/Revenue.jsx",
+      "src/app/views/Legal.jsx",
+      "src/app/views/Emails.jsx",
+      "src/app/views/WaTemplates.jsx",
+      "src/app/views/Wallet.jsx",
+      "src/app/views/Inbox.jsx",
+      "src/app/media.jsx"
+    ]
+  },
+  "src/main.jsx": {
+    "file": "landing-D8CfMfiz.js",
+    "name": "landing",
+    "src": "src/main.jsx",
+    "isEntry": true,
+    "imports": [
+      "_chunk-src-Cs486EvG.js"
+    ]
+  },
+  "style.css": {
+    "file": "style.css",
+    "src": "style.css"
+  }
+}

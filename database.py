@@ -2841,7 +2841,20 @@ def addon_expires(bot_id, addon="pay"):
         return r[0] if r else None
 
 
+def bot_owner_is_staff(bot_id):
+    """صاحب البوت أدمن أو دعم؟ حساب الإدارة مفتوح له كل شيء بلا شراء (قرار المالك) — كما
+    يتخطّى حدود الباقات في كل مكان آخر (app.py، flow_engine، bot_manager.wa_limit_for)."""
+    with get_conn() as c:
+        r = c.execute("SELECT u.role FROM bots b JOIN users u ON u.id = b.owner_id WHERE b.id=?",
+                      (bot_id,)).fetchone()
+    return bool(r and r[0] in ("admin", "support"))
+
+
 def addon_active(bot_id, addon="pay"):
+    # بوت يملكه حساب الإدارة: الإضافة سارية دائماً — المنصة لا تبيع لنفسها. يُفحص بصاحب
+    # البوت لا بمن يتصفّح: بوت عميل يفتحه الأدمن يبقى محتاجاً شراء صاحبه.
+    if bot_owner_is_staff(bot_id):
+        return True
     exp = addon_expires(bot_id, addon)
     return bool(exp and exp > time.time())
 

@@ -1022,7 +1022,9 @@ function PaymentsCard({ bot, pay }) {
   return (
     <Card className="mb-6" id="pay">
       <SectionTitle icon="wallet"
-        extra={pay.active
+        extra={pay.staff
+          ? <Pill tone="on" dot>{bi("مفتوحة لحساب الإدارة", "Included for admin")}</Pill>
+          : pay.active
           ? <Pill tone="on" dot>{bi(`مفعّلة حتى ${fmtDate(pay.expires)}`, `Active until ${fmtDate(pay.expires)}`)}</Pill>
           : <Pill tone="mute">{bi("غير مفعّلة", "Not active")}</Pill>}>
         {bi("تحصيل مدفوعات العملاء", "Customer payments")}
@@ -1067,7 +1069,9 @@ function PaymentsCard({ bot, pay }) {
             )}
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <Btn sm icon="check" type="submit">{bi("احفظ الحسابات", "Save accounts")}</Btn>
-              <Btn sm variant="ghost" icon="card" href={`/bot/${bot.id}/addon/pay`}>{bi("جدّد الإضافة", "Renew the add-on")}</Btn>
+              {!pay.staff && (
+                <Btn sm variant="ghost" icon="card" href={`/bot/${bot.id}/addon/pay`}>{bi("جدّد الإضافة", "Renew the add-on")}</Btn>
+              )}
             </div>
           </Form>
           <div className="mt-6">

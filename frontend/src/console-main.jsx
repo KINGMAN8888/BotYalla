@@ -4,65 +4,67 @@ import AppShell from "./app/AppShell.jsx";
 import { BY } from "./app/kit.jsx";
 import "./index.css";
 
-import Dashboard from "./app/views/Dashboard.jsx";
-import BotDetail, { AddonPay } from "./app/views/BotDetail.jsx";
-import { Account, Settings, Billing, Pricing, Subscribe, RequestBot, Support } from "./app/views/Account.jsx";
-import { AdminOverview, AdminUsers, AdminPayments, AdminRequests, AdminTickets, AdminPlatform,
-         AdminAnalytics } from "./app/views/Admin.jsx";
-import { FlowBuilder, Broadcast, Analytics, Recover } from "./app/views/Tools.jsx";
-import { Auth, VerifyEmail, CompleteProfile } from "./app/auth.jsx";
-import { AdminPricing, AdminPromos, AdminAffiliates, Affiliate } from "./app/views/Revenue.jsx";
-import { Terms, Privacy } from "./app/views/Legal.jsx";
-import { AdminEmails, Unsubscribe } from "./app/views/Emails.jsx";
-import WaTemplates from "./app/views/WaTemplates.jsx";
-import Wallet from "./app/views/Wallet.jsx";
-import Inbox from "./app/views/Inbox.jsx";
-import { MediaLibrary } from "./app/media.jsx";
+/* كل عرض في قطعة JS مستقلة تُحمَّل وحدها: صفحة الدخول لا تنزّل محرّر التدفّق ولوحة الأدمن
+   وإعدادات البوت (كانت ~290KB تُحلَّل مع كل صفحة، والجوال الضعيف يدفع ثمنها في كل نقرة).
+   الهيكل (#boot في react_app.html) يبقى ظاهراً حتى تصل قطعة العرض فلا يظهر هيكلان. */
+const dashboard = () => import("./app/views/Dashboard.jsx");
+const botDetail = () => import("./app/views/BotDetail.jsx");
+const account   = () => import("./app/views/Account.jsx");
+const admin     = () => import("./app/views/Admin.jsx");
+const tools     = () => import("./app/views/Tools.jsx");
+const auth      = () => import("./app/auth.jsx");
+const revenue   = () => import("./app/views/Revenue.jsx");
+const legal     = () => import("./app/views/Legal.jsx");
+const emails    = () => import("./app/views/Emails.jsx");
+const waTpl     = () => import("./app/views/WaTemplates.jsx");
+const wallet    = () => import("./app/views/Wallet.jsx");
+const inbox     = () => import("./app/views/Inbox.jsx");
+const media     = () => import("./app/media.jsx");
 
-/* خريطة العرض ← المكوّن. Flask يحدّد العرض عبر data-view. */
+/* خريطة العرض ← [وحدته، اسم المكوّن المصدَّر]. Flask يحدّد العرض عبر data-view. */
 const VIEWS = {
-  dashboard:      Dashboard,
-  bot_detail:     BotDetail,
-  flow:           FlowBuilder,
-  broadcast:      Broadcast,
-  analytics:      Analytics,
-  account:        Account,
-  settings:       Settings,
-  billing:        Billing,
-  pricing:        Pricing,
-  subscribe:      Subscribe,
-  request_bot:    RequestBot,
-  support:        Support,
-  admin_overview: AdminOverview,
-  admin_users:    AdminUsers,
-  admin_payments: AdminPayments,
-  admin_requests: AdminRequests,
-  admin_tickets:  AdminTickets,
-  admin_platform: AdminPlatform,
-  admin_analytics: AdminAnalytics,
-  admin_emails:    AdminEmails,
-  addon_pay:       AddonPay,
-  admin_pricing:    AdminPricing,
-  admin_promos:     AdminPromos,
-  admin_affiliates: AdminAffiliates,
-  affiliate:        Affiliate,
-  terms:            Terms,
-  privacy:          Privacy,
-  wa_templates:     WaTemplates,
-  wallet:           Wallet,
-  inbox:            Inbox,
-  media:            MediaLibrary,
+  dashboard:      [dashboard, "default"],
+  bot_detail:     [botDetail, "default"],
+  flow:           [tools, "FlowBuilder"],
+  broadcast:      [tools, "Broadcast"],
+  analytics:      [tools, "Analytics"],
+  account:        [account, "Account"],
+  settings:       [account, "Settings"],
+  billing:        [account, "Billing"],
+  pricing:        [account, "Pricing"],
+  subscribe:      [account, "Subscribe"],
+  request_bot:    [account, "RequestBot"],
+  support:        [account, "Support"],
+  admin_overview: [admin, "AdminOverview"],
+  admin_users:    [admin, "AdminUsers"],
+  admin_payments: [admin, "AdminPayments"],
+  admin_requests: [admin, "AdminRequests"],
+  admin_tickets:  [admin, "AdminTickets"],
+  admin_platform: [admin, "AdminPlatform"],
+  admin_analytics: [admin, "AdminAnalytics"],
+  admin_emails:    [emails, "AdminEmails"],
+  addon_pay:       [botDetail, "AddonPay"],
+  admin_pricing:    [revenue, "AdminPricing"],
+  admin_promos:     [revenue, "AdminPromos"],
+  admin_affiliates: [revenue, "AdminAffiliates"],
+  affiliate:        [revenue, "Affiliate"],
+  terms:            [legal, "Terms"],
+  privacy:          [legal, "Privacy"],
+  wa_templates:     [waTpl, "default"],
+  wallet:           [wallet, "default"],
+  inbox:            [inbox, "default"],
+  media:            [media, "MediaLibrary"],
 };
 
-/* صفحات المصادقة بلا قشرة لوحة */
+/* صفحات المصادقة بلا قشرة لوحة: [وحدته، المكوّن، خصائصه] */
 const BARE = {
-  login:    () => <Auth mode="login" />,
-  register: () => <Auth mode="register" />,
-  forgot:   () => <Recover mode="forgot" />,
-  reset:    () => <Recover mode="reset" />,
-  unsubscribe: () => <Unsubscribe />,
-  verify_email: () => <VerifyEmail />,
-  complete_profile: () => <CompleteProfile />,
+  login:    [auth, "Auth", { mode: "login" }],
+  register: [auth, "Auth", { mode: "register" }],
+  forgot:   [tools, "Recover", { mode: "forgot" }],
+  reset:    [tools, "Recover", { mode: "reset" }],
+  unsubscribe:      [emails, "Unsubscribe"],
+  verify_email:     [auth, "VerifyEmail"],
+  complete_profile: [auth, "CompleteProfile"],
 };
 
 /* حاجز أخطاء: خطأ في عرض واحد لا يجوز أن يترك الصفحة سوداء فارغة.
@@ -103,16 +105,34 @@ class Boundary extends Component {
   }
 }
 
+/* فشل تنزيل قطعة العرض (انقطاع شبكة، أو نشر جديد حذف القطعة القديمة) يُعرض عبر الحاجز نفسه */
+function LoadFailed({ err }) { throw err; }
+
 const el = document.getElementById("root");
 if (el) {
   const view = el.dataset.view;
-  const Bare = BARE[view];
-  const View = VIEWS[view];
+  const bare = BARE[view];
+  const spec = bare || VIEWS[view];
+  const mount = (tree) => {
+    createRoot(el).render(<StrictMode><Boundary>{tree}</Boundary></StrictMode>);
+    document.documentElement.classList.add("react-on");
+  };
 
-  const tree = Bare ? <Bare />
-    : View ? <AppShell view={view}><Boundary><View /></Boundary></AppShell>
-    : <AppShell view={view}><div className="text-ink-3">Unknown view: {view}</div></AppShell>;
-
-  createRoot(el).render(<StrictMode><Boundary>{tree}</Boundary></StrictMode>);
-  document.documentElement.classList.add("react-on");
+  if (!spec) {
+    mount(<AppShell view={view}><div className="text-ink-3">Unknown view: {view}</div></AppShell>);
+  } else {
+    const [load, name, props] = spec;
+    load().then((mod) => {
+      const View = mod[name];
+      mount(bare ? <View {...props} />
+                 : <AppShell view={view}><Boundary><View /></Boundary></AppShell>);
+    }, (err) => {
+      // قطعة من نشر سابق لم تعد موجودة ← تحديث واحد يجلب الروابط الجديدة، بلا حلقة تحديث
+      const key = "by-chunk-reload";
+      let again = false;
+      try { again = sessionStorage.getItem(key) === view; sessionStorage.setItem(key, view); } catch { again = true; }
+      if (!again) { location.reload(); return; }
+      mount(<LoadFailed err={err} />);
+    });
+  }
 }
