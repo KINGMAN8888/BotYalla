@@ -18,6 +18,7 @@ import auth                                # noqa: E402
 import database as db                      # noqa: E402
 import mailer                              # noqa: E402
 import app as web                          # noqa: E402
+from _signup import signup, STRONG_PW  # noqa: E402
 
 MAIL = []
 mailer.SYNC = True
@@ -85,26 +86,21 @@ class EmailFieldTests(Base):
         finally:
             db.DB_PATH = orig
 
-    def test_registration_accepts_an_optional_email_normalised(self):
-        _client().post("/register", data={"username": "withmail", "password": TEST_PW,
-                                          "email": "  Owner@Shop.COM ", "csrf_token": "tk"})
+    def test_registration_requires_an_email_and_normalises_it(self):
+        _client().post("/register", data=signup("withmail", email="  Owner@Shop.COM "))
         self.assertEqual(db.get_user_by_name("withmail")["email"], "owner@shop.com")
-        _client().post("/register", data={"username": "nomail", "password": TEST_PW,
-                                          "csrf_token": "tk"})
-        self.assertIsNone(db.get_user_by_name("nomail")["email"])
+        _client().post("/register", data=signup("nomail", email=""))
+        self.assertIsNone(db.get_user_by_name("nomail"), "البريد صار إجبارياً في التسجيل")
 
     def test_the_same_email_cannot_belong_to_two_accounts(self):
-        _client().post("/register", data={"username": "first1", "password": TEST_PW,
-                                          "email": "dup@x.co", "csrf_token": "tk"})
-        _client().post("/register", data={"username": "second1", "password": TEST_PW,
-                                          "email": "DUP@x.co", "csrf_token": "tk"})
+        _client().post("/register", data=signup("first1", email="dup@x.co"))
+        _client().post("/register", data=signup("second1", email="DUP@x.co"))
         self.assertIsNone(db.get_user_by_name("second1"))
         other = db.create_user("third1", "h")
         self.assertEqual(db.set_user_email(other, "dup@x.co"), (False, "email_taken"))
 
     def test_a_malformed_email_is_refused(self):
-        _client().post("/register", data={"username": "badmail", "password": TEST_PW,
-                                          "email": "not an email", "csrf_token": "tk"})
+        _client().post("/register", data=signup("badmail", email="not an email"))
         self.assertIsNone(db.get_user_by_name("badmail"))
 
     def test_the_account_page_sets_the_email_and_an_old_form_does_not_erase_it(self):
@@ -153,24 +149,24 @@ class PasswordResetTests(Base):
         self._request()
         tok = _token_from_mail()
         self.assertEqual(_client().get(f"/reset/{tok}").status_code, 200)
-        r = _client().post(f"/reset/{tok}", data={"password": "new-password", "csrf_token": "tk"})
+        r = _client().post(f"/reset/{tok}", data={"password": "New#pass2026", "csrf_token": "tk"})
         self.assertIn("/login", r.headers["Location"])
-        self.assertTrue(auth.verify_password("new-password", db.get_user(self.uid)["pw_hash"]))
+        self.assertTrue(auth.verify_password("New#pass2026", db.get_user(self.uid)["pw_hash"]))
         # إعادة الاستخدام مرفوضة ولا تغيّر شيئاً
-        r = _client().post(f"/reset/{tok}", data={"password": "attacker-pass", "csrf_token": "tk"})
+        r = _client().post(f"/reset/{tok}", data={"password": "Attack#er2026", "csrf_token": "tk"})
         self.assertIn("/forgot", r.headers["Location"])
-        self.assertTrue(auth.verify_password("new-password", db.get_user(self.uid)["pw_hash"]))
+        self.assertTrue(auth.verify_password("New#pass2026", db.get_user(self.uid)["pw_hash"]))
 
     def test_the_first_sign_in_after_a_reset_is_accepted(self):
         """الاسترجاع يمسح الجلسة؛ صفحة الدخول بعده يجب أن تحمل توكن CSRF صالحاً
         (اكتُشف في المتصفح: كان أول دخول بعد الاسترجاع يُرفض بـ 400)."""
         self._request()
         c = _client()
-        r = c.post(f"/reset/{_token_from_mail()}", data={"password": "after-reset-1", "csrf_token": "tk"},
+        r = c.post(f"/reset/{_token_from_mail()}", data={"password": "After#reset1", "csrf_token": "tk"},
                    follow_redirects=True)
         tok = re.search(r'"csrf": "([^"]*)"', r.get_data(as_text=True)).group(1)
         self.assertTrue(tok)
-        r = c.post("/login", data={"username": "forgetful", "password": "after-reset-1", "csrf_token": tok})
+        r = c.post("/login", data={"username": "forgetful", "password": "After#reset1", "csrf_token": tok})
         self.assertEqual(r.status_code, 302)
         self.assertTrue(_signed_in(c))
 
@@ -200,14 +196,14 @@ class PasswordResetTests(Base):
         victim_laptop = _client(); _login(victim_laptop, "forgetful", "pw-before")
         self.assertTrue(_signed_in(victim_laptop))
         self._request()
-        _client().post(f"/reset/{_token_from_mail()}", data={"password": "pw-after", "csrf_token": "tk"})
+        _client().post(f"/reset/{_token_from_mail()}", data={"password": "Pw#After2026", "csrf_token": "tk"})
         self.assertFalse(_signed_in(victim_laptop), "الجلسة القديمة كان يجب أن تنتهي")
 
     def test_changing_the_password_keeps_this_session_and_ends_the_others(self):
         db.create_user("twodevices", auth.hash_password("pw-one"))
         phone, laptop = _client(), _client()
         _login(phone, "twodevices", "pw-one"); _login(laptop, "twodevices", "pw-one")
-        phone.post("/account", data={"username": "twodevices", "new_password": "pw-two",
+        phone.post("/account", data={"username": "twodevices", "new_password": "Pw#Two2026",
                                      "current_password": "pw-one", "csrf_token": "tk"})
         self.assertTrue(_signed_in(phone))
         self.assertFalse(_signed_in(laptop))

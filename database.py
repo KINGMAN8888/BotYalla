@@ -159,6 +159,14 @@ def _migrate(c):
         c.execute("ALTER TABLE users ADD COLUMN ref_by TEXT")
     if "email" not in cols:                       # اختياري: استرجاع الحساب والإيصالات
         c.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    # نظام الحساب (2026-09-15): الهاتف وتأكيده، تأكيد البريد، السن، نوع الكيان.
+    # verify_required=1 للحسابات الجديدة وحدها — القديمة تبقى تعمل بلا تأكيد إجباري.
+    for col, ddl in (("phone", "TEXT"), ("phone_verified_at", "INTEGER"),
+                     ("email_verified_at", "INTEGER"), ("verify_required", "INTEGER NOT NULL DEFAULT 0"),
+                     ("age", "INTEGER"), ("entity_type", "TEXT")):
+        if col not in cols:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users(phone) WHERE phone IS NOT NULL")
     # فهرس جزئي: الإيميل فريد إن وُجد، والحسابات القديمة بلا إيميل (NULL) لا تتعارض.
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email) WHERE email IS NOT NULL")
     # أول مستخدم = admin دائماً
@@ -658,6 +666,7 @@ def init_db():
         _analytics_tables(c)
         _customer_pay_tables(c)
         _email_tables(c)
+        _auth_tables(c)
 
 def _hot_indexes(c):
     """فهارس الاستعلامات الساخنة. EXPLAIN QUERY PLAN كان يُظهر مسحاً كاملاً لـ events و
@@ -761,6 +770,34 @@ def _email_tables(c):
             PRIMARY KEY(campaign_id, user_id)
         );
         CREATE INDEX IF NOT EXISTS ix_es_day ON email_sends(sent_at);
+    """)
+
+def _auth_tables(c):
+    """نظام الحساب: كود تأكيد البريد (مجزّأ — لا يُخزَّن الكود نفسه) وهويات الدخول الخارجية.
+    email_verifications: صف واحد لكل مستخدم؛ إعادة الإرسال تستبدله وتصفّر المحاولات.
+    user_identities: (مزوّد، معرّف الحساب عنده) ⇒ مستخدم. جوجل: sub · فيسبوك: id."""
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS email_verifications(
+            user_id INTEGER PRIMARY KEY,
+            email TEXT NOT NULL,                  -- البريد الذي أُرسل له الكود (تغيّره يُبطله)
+            code_hash TEXT NOT NULL,
+            token_hash TEXT NOT NULL,             -- رابط التأكيد في نفس الرسالة
+            attempts INTEGER NOT NULL DEFAULT 0,
+            sent_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_ev_token ON email_verifications(token_hash);
+        CREATE TABLE IF NOT EXISTS user_identities(
+            provider TEXT NOT NULL,               -- google | facebook
+            subject TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            email TEXT,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY(provider, subject),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_ui_user ON user_identities(user_id);
     """)
 
 # ---------- حملات البريد (email_campaigns.py) ----------
@@ -888,6 +925,187 @@ def platform_setdefault(key, value):
     with get_conn() as c:
         c.execute("INSERT OR IGNORE INTO platform(key,value) VALUES(?,?)", (key, value))
         return c.execute("SELECT value FROM platform WHERE key=?", (key,)).fetchone()[0]
+
+# ---------- نظام الحساب: التسجيل والتحقق والهويات (السياسات في accounts.py) ----------
+def create_account(username, pw_hash, email, phone=None, age=None, entity_type=None,
+                   verify_required=False, email_verified=False):
+    """حساب جديد بكل بيانات التسجيل. يرجّع (user_id, error). الفحوص هنا ثم القيود الفريدة
+    هي الحارس الأخير لو سبق طلبٌ متزامن. أول حساب = admin كما في create_user."""
+    now = int(time.time())
+    with get_conn() as c:
+        if c.execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)", (username,)).fetchone():
+            return None, "u_taken"
+        if email and c.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
+            return None, "email_taken"
+        if phone and c.execute("SELECT 1 FROM users WHERE phone=?", (phone,)).fetchone():
+            return None, "phone_taken"
+        role = "admin" if c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0 else "user"
+        try:
+            cur = c.execute(
+                "INSERT INTO users(username,pw_hash,role,created_at,email,phone,age,entity_type,"
+                "verify_required,email_verified_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (username, pw_hash, role, now, email or None, phone, age, entity_type,
+                 1 if verify_required else 0, now if email_verified else None))
+        except sqlite3.IntegrityError:
+            return None, "u_taken"
+        return cur.lastrowid, None
+
+def username_taken(username, exclude_id=None):
+    """التفرّد بلا حساسية لحالة الأحرف: «Ahmed» و«ahmed» حساب واحد في عين العميل."""
+    with get_conn() as c:
+        return bool(c.execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?) AND id<>?",
+                              (username, exclude_id or 0)).fetchone())
+
+def phone_taken(phone, exclude_id=None):
+    with get_conn() as c:
+        return bool(c.execute("SELECT 1 FROM users WHERE phone=? AND id<>?",
+                              (phone, exclude_id or 0)).fetchone())
+
+def get_user_by_login(ident):
+    """الدخول باسم المستخدم أو البريد. الاسم: مطابقة تامة، ثم بلا حساسية للحالة إن كانت فريدة."""
+    ident = (ident or "").strip()
+    if not ident:
+        return None
+    with get_conn() as c:
+        r = None
+        if "@" in ident:
+            r = c.execute("SELECT * FROM users WHERE email=?", (ident.lower(),)).fetchone()
+        if not r:
+            # أسماء قديمة (قبل USERNAME_RE) قد تحمل «@» — فالاسم احتياطي حتى مع @
+            r = c.execute("SELECT * FROM users WHERE username=?", (ident,)).fetchone()
+            if not r:
+                rows = c.execute("SELECT * FROM users WHERE LOWER(username)=LOWER(?)", (ident,)).fetchall()
+                r = rows[0] if len(rows) == 1 else None
+        return dict(r) if r else None
+
+def email_gate(u):
+    """هل يُمنع هذا الحساب من اللوحة حتى يؤكد بريده؟ الحسابات الجديدة وحدها (verify_required)،
+    والأدمن والدعم لا يُحجبون أبداً."""
+    return bool(u and u.get("verify_required") and not u.get("email_verified_at")
+                and u.get("role", "user") == "user")
+
+def start_email_verification(user_id, email, code_hash, token_hash, ttl):
+    now = int(time.time())
+    with get_conn() as c:
+        c.execute("INSERT INTO email_verifications(user_id,email,code_hash,token_hash,attempts,sent_at,expires_at) "
+                  "VALUES(?,?,?,?,0,?,?) ON CONFLICT(user_id) DO UPDATE SET email=excluded.email, "
+                  "code_hash=excluded.code_hash, token_hash=excluded.token_hash, attempts=0, "
+                  "sent_at=excluded.sent_at, expires_at=excluded.expires_at",
+                  (user_id, email, code_hash, token_hash, now, now + ttl))
+
+def email_verification(user_id):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM email_verifications WHERE user_id=?", (user_id,)).fetchone()
+        return dict(r) if r else None
+
+def _confirm_email(c, user_id, email, now):
+    # شرط email=?: لو غيّر المستخدم بريده بعد الإرسال فالكود القديم لا يؤكد الجديد
+    cur = c.execute("UPDATE users SET email_verified_at=? WHERE id=? AND email=?", (now, user_id, email))
+    c.execute("DELETE FROM email_verifications WHERE user_id=?", (user_id,))
+    return "ok" if cur.rowcount == 1 else "expired"
+
+def check_email_code(user_id, code_hash, max_attempts=5):
+    """'ok' | 'bad' | 'locked' | 'expired'. الخطأ يُحسب، وبعد max_attempts يلزم كود جديد."""
+    import hmac as _hmac
+    now = int(time.time())
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM email_verifications WHERE user_id=?", (user_id,)).fetchone()
+        if not r or r["expires_at"] <= now:
+            return "expired"
+        if r["attempts"] >= max_attempts:
+            return "locked"
+        if not _hmac.compare_digest(r["code_hash"], code_hash or ""):
+            c.execute("UPDATE email_verifications SET attempts=attempts+1 WHERE user_id=?", (user_id,))
+            return "locked" if r["attempts"] + 1 >= max_attempts else "bad"
+        return _confirm_email(c, user_id, r["email"], now)
+
+def confirm_email_token(token_hash):
+    """رابط التأكيد من الرسالة. يرجّع user_id أو None."""
+    now = int(time.time())
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM email_verifications WHERE token_hash=? AND expires_at>?",
+                      (token_hash, now)).fetchone()
+        if not r:
+            return None
+        return r["user_id"] if _confirm_email(c, r["user_id"], r["email"], now) == "ok" else None
+
+def mark_email_verified(user_id):
+    """بريد أكّده مزوّد الدخول (جوجل/فيسبوك) — لا حاجة لكود."""
+    with get_conn() as c:
+        c.execute("UPDATE users SET email_verified_at=? WHERE id=? AND email IS NOT NULL",
+                  (int(time.time()), user_id))
+
+def set_user_profile(user_id, phone=None, age=None, entity_type=None):
+    """بيانات النشاط. تغيير الهاتف يُسقط تأكيده. يرجّع (ok, error)."""
+    with get_conn() as c:
+        row = c.execute("SELECT phone FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            return False, "missing"
+        if phone and phone != row["phone"]:
+            if c.execute("SELECT 1 FROM users WHERE phone=? AND id<>?", (phone, user_id)).fetchone():
+                return False, "phone_taken"
+            try:
+                c.execute("UPDATE users SET phone=?, phone_verified_at=NULL WHERE id=?", (phone, user_id))
+            except sqlite3.IntegrityError:
+                return False, "phone_taken"
+        if age is not None:
+            c.execute("UPDATE users SET age=? WHERE id=?", (age, user_id))
+        if entity_type:
+            c.execute("UPDATE users SET entity_type=? WHERE id=?", (entity_type, user_id))
+    return True, None
+
+PHONE_CODE_TTL = 900        # رابط تأكيد الهاتف عبر بوت المنصة: 15 دقيقة
+
+def set_phone_code(user_id, code):
+    set_setting(user_id, "phone_code", code)
+    set_setting(user_id, "phone_code_at", str(int(time.time())))
+
+def phone_code_user(code):
+    """صاحب كود تأكيد الهاتف إن كان صالحاً، وإلا None."""
+    code = (code or "").strip()
+    if not code:
+        return None
+    with get_conn() as c:
+        r = c.execute("SELECT user_id FROM settings WHERE key='phone_code' AND value=?", (code,)).fetchone()
+    if not r:
+        return None
+    at = int(get_setting(r["user_id"], "phone_code_at", "0") or 0)
+    return r["user_id"] if at + PHONE_CODE_TTL > time.time() else None
+
+def verify_phone_tg(user_id, code, contact_phone, tg_id):
+    """جهة اتصال شاركها صاحبها مع بوت المنصة (تليجرام يثبت أن الرقم رقمه).
+    'ok' | 'mismatch' (رقم تليجرام غير رقم الحساب) | 'expired'. النجاح يربط تليجرام للتنبيهات أيضاً."""
+    import re as _re
+    if phone_code_user(code) != user_id:
+        return "expired"
+    u = get_user(user_id)
+    digits = lambda s: _re.sub(r"\D", "", s or "")
+    if not u or not u.get("phone") or digits(u["phone"]) != digits(contact_phone):
+        return "mismatch"
+    with get_conn() as c:
+        c.execute("UPDATE users SET phone_verified_at=? WHERE id=?", (int(time.time()), user_id))
+        c.execute("DELETE FROM settings WHERE user_id=? AND key IN ('phone_code','phone_code_at')", (user_id,))
+        c.execute("INSERT INTO settings(user_id,key,value) VALUES(?,'tg_chat_id',?) "
+                  "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user_id, str(tg_id)))
+    return "ok"
+
+def get_identity(provider, subject):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM user_identities WHERE provider=? AND subject=?",
+                      (provider, str(subject))).fetchone()
+        return dict(r) if r else None
+
+def add_identity(provider, subject, user_id, email=None):
+    """يربط هوية خارجية بحساب. False لو كانت مربوطة بحساب (أي حساب) من قبل."""
+    with get_conn() as c:
+        cur = c.execute("INSERT OR IGNORE INTO user_identities(provider,subject,user_id,email,created_at) "
+                        "VALUES(?,?,?,?,?)", (provider, str(subject), user_id, email, int(time.time())))
+        return cur.rowcount == 1
+
+def list_identities(user_id):
+    with get_conn() as c:
+        return [r[0] for r in c.execute("SELECT provider FROM user_identities WHERE user_id=?",
+                                        (user_id,)).fetchall()]
 
 # ---------- users ----------
 def create_user(username, pw_hash, email=None):
@@ -1371,6 +1589,9 @@ def set_user_email(user_id, email):
                                (email, user_id)).fetchone():
             return False, "email_taken"
         try:
+            # بريد جديد = غير مؤكَّد حتى يثبت صاحبه ملكيته
+            c.execute("UPDATE users SET email_verified_at=NULL WHERE id=? AND COALESCE(email,'')<>COALESCE(?,'')",
+                      (user_id, email or None))
             c.execute("UPDATE users SET email=? WHERE id=?", (email or None, user_id))
         except sqlite3.IntegrityError:
             return False, "email_taken"
@@ -1443,6 +1664,7 @@ def list_all_users(limit=500):
     with get_conn() as c:
         rows = c.execute("""
             SELECT u.id, u.username, u.role, u.is_blocked, u.created_at,
+                   u.email, u.email_verified_at, u.phone, u.phone_verified_at, u.entity_type, u.age,
                    COALESCE(s.plan,'free') AS plan, s.status AS sub_status, s.expires_at,
                    (SELECT COUNT(*) FROM bots b WHERE b.owner_id=u.id) AS bots
             FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id

@@ -251,6 +251,8 @@ T = {
  "adm_analytics":    {"ar": "إحصائيات الزوار", "en": "Visitor analytics"},
  "adm_emails":       {"ar": "رسائل البريد", "en": "Email campaigns"},
  "unsub_title":      {"ar": "اشتراك البريد", "en": "Email preferences"},
+ "verify_title":     {"ar": "تأكيد البريد", "en": "Verify your email"},
+ "complete_title":   {"ar": "أكمل حسابك", "en": "Complete your account"},
  "addon_pay_title":  {"ar": "إضافة تحصيل المدفوعات", "en": "Payments add-on"},
  "addon_pay_label":  {"ar": "إضافة تحصيل المدفوعات — بوت #{id}", "en": "Payments add-on — bot #{id}"},
  "bc_window_note":   {"ar": "النص الحر يصل فقط لمن راسل البوت خلال 24 ساعة. للباقين استخدم قالباً معتمداً.",

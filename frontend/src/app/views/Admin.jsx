@@ -4,6 +4,7 @@ import {
   Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate, daysLeft,
 } from "../kit.jsx";
 import { TicketHead, TicketThread } from "./Account.jsx";
+import { entityLabel } from "../auth.jsx";
 
 /* رسم Chart.js — المكتبة محمّلة من القالب عند الحاجة فقط.
    `enabled` إلزامي: بدونه يُستدعى build() قبل وصول البيانات من fetch
@@ -99,7 +100,9 @@ export function AdminUsers() {
           <Form action="/admin/users/add">
             <div className="grid gap-4 sm:grid-cols-3">
               <Field label={t("username")}><Input name="username" required minLength={3} /></Field>
-              <Field label={t("password")}><Input type="password" name="password" required minLength={6} /></Field>
+              <Field label={t("password")} hint={bi("8+ فيها حرف كبير وصغير ورقم ورمز", "8+ with upper, lower, number and symbol")}>
+                <Input type="password" name="password" required minLength={8} autoComplete="new-password" />
+              </Field>
               <Field label={t("role")}>
                 <Select name="role" defaultValue="user">
                   <option value="user">{t("role_user")}</option>
@@ -114,13 +117,26 @@ export function AdminUsers() {
       )}
 
       <Card>
-        <Table head={["#", t("username"), t("role"), t("col_plan2"), t("col_bots"), t("col_status"), ""]}>
+        <Table head={["#", t("username"), bi("التواصل", "Contact"), t("role"), t("col_plan2"), t("col_bots"), t("col_status"), ""]}>
           {users.map((u) => (
             <Tr key={u.id}>
               <Td className="tnum">{u.id}</Td>
               <Td>
                 <span className="font-bold text-ink">{u.username}</span>
                 {u.is_blocked ? <span className="ms-2"><Pill tone="off">{t("blocked")}</Pill></span> : null}
+              </Td>
+              <Td className="max-w-[230px] text-[12.5px] leading-relaxed">
+                {u.email ? (
+                  <div className="truncate" dir="ltr">
+                    {u.email}{u.email_verified_at ? <span className="ms-1 text-au-teal">✓</span> : null}
+                  </div>
+                ) : <span className="text-ink-4">—</span>}
+                {u.phone && (
+                  <div className="text-ink-3" dir="ltr">
+                    {u.phone}{u.phone_verified_at ? <span className="ms-1 text-au-teal">✓</span> : null}
+                  </div>
+                )}
+                {u.entity_type && <div className="text-ink-3">{entityLabel(u.entity_type)}{u.age ? ` · ${u.age}` : ""}</div>}
               </Td>
               <Td>
                 {isAdmin && u.id !== 1 ? (

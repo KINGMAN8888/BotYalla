@@ -1,7 +1,8 @@
 """بوت المنصة — يرسل تنبيه الدفع للأدمن بزرّي موافقة/رفض ويعالج القرار.
 منفصل عن بوتات المستخدمين. يعمل داخل حلقة bot_manager."""
 import json, logging
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputFile, KeyboardButton,
+                      ReplyKeyboardMarkup, ReplyKeyboardRemove, Update)
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 import database as db
@@ -138,6 +139,25 @@ def register_admin_commands(app: Application):
             # إنشاء بوت بضغطة: الكود يربط هذا الحساب بطلب المنصة ثم يعرض زر الإنشاء
             await managed_bots.on_start_code(update, ctx, args[0][len(managed_bots.CODE_PREFIX):])
             return
+        if args and args[0].startswith("phone-"):
+            # تأكيد رقم الهاتف: زرّ «شارك رقمي» — تليجرام يرسل رقم الحساب نفسه (لا رقماً يكتبه أحد)
+            code = args[0][6:]
+            uid_ = db.phone_code_user(code)
+            en = bool(uid_) and db.user_lang(uid_) == "en"
+            if not uid_:
+                await update.message.reply_text("⚠️ الرابط انتهى — اطلب رابطاً جديداً من صفحة «حسابي».\n"
+                                                "⚠️ The link expired — request a new one from your account page.")
+                return
+            ctx.user_data["phone_verify"] = (uid_, code)
+            kb = ReplyKeyboardMarkup([[KeyboardButton("📱 Share my number" if en else "📱 شارك رقمي للتأكيد",
+                                                      request_contact=True)]],
+                                     resize_keyboard=True, one_time_keyboard=True)
+            await update.message.reply_text(
+                "Tap the button below to share your number. Telegram sends your own account's number — "
+                "that's how we know it's yours." if en else
+                "اضغط الزر تحت لمشاركة رقمك. تليجرام بيبعت رقم حسابك أنت نفسه — وده اللي بيثبت إن الرقم رقمك.",
+                reply_markup=kb)
+            return
         if args and args[0].startswith("link-"):
             uid_ = db.claim_tg_link(args[0][5:], update.effective_user.id)
             if uid_:
@@ -182,7 +202,36 @@ def register_admin_commands(app: Application):
         st = db.platform_stats()
         await update.message.reply_text(f"💰 إجمالي الإيرادات المقبولة: {st['revenue']} EGP\n💎 مشتركون مدفوعون: {st['paying']}")
 
+    async def on_contact(update, ctx):
+        """جهة اتصال بعد «شارك رقمي». تُقبل جهة اتصال صاحب الحساب وحده (contact.user_id)."""
+        pending = ctx.user_data.get("phone_verify")
+        c = update.message.contact if update.message else None
+        if not pending or not c:
+            return
+        uid_, code = pending
+        en = db.user_lang(uid_) == "en"
+        if c.user_id != update.effective_user.id:
+            await update.message.reply_text("Share your own number with the button — not another contact." if en
+                                            else "شارك رقمك أنت بالزر — مش جهة اتصال تانية.")
+            return
+        res = db.verify_phone_tg(uid_, code, c.phone_number, update.effective_user.id)
+        if res == "ok":
+            ctx.user_data.pop("phone_verify", None)
+            text = ("✅ Your phone number is verified, and this Telegram is now linked for account alerts."
+                    if en else "✅ تم تأكيد رقم هاتفك، واتربط تليجرام ده بحسابك لتنبيهات الاشتراك.")
+        elif res == "mismatch":
+            text = ("⚠️ This Telegram number differs from the one on your account. Change it on your account "
+                    "page to this number, then try again." if en else
+                    "⚠️ رقم تليجرام ده مختلف عن الرقم المسجّل في حسابك. عدّل الرقم في «حسابي» لنفس رقم "
+                    "تليجرام وجرّب تاني.")
+        else:
+            ctx.user_data.pop("phone_verify", None)
+            text = ("⚠️ The link expired — request a new one from your account page." if en
+                    else "⚠️ الرابط انتهى — اطلب رابطاً جديداً من صفحة «حسابي».")
+        await update.message.reply_text(text, reply_markup=ReplyKeyboardRemove())
+
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(MessageHandler(filters.CONTACT, on_contact))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler(["pending","payments"], cmd_pending))
     app.add_handler(CommandHandler("users", cmd_users))

@@ -20,6 +20,7 @@ os.environ.update(SMTP_ENV)
 import auth                                # noqa: E402
 import database as db                      # noqa: E402
 import app as web                          # noqa: E402
+from _signup import signup, STRONG_PW  # noqa: E402
 import mailer                              # noqa: E402
 import email_campaigns as EC               # noqa: E402
 
@@ -325,10 +326,9 @@ class ConsentTests(unittest.TestCase):
     def setUp(self):
         _reset_state()
 
-    def test_signup_opt_in_needs_the_box_and_an_email(self):
-        for name, email, box, want in (("cs_a", "cs_a@x.co", "1", True), ("cs_b", "cs_b@x.co", None, False),
-                                       ("cs_c", "", "1", False)):
-            data = {"username": name, "password": PW, "email": email, "csrf_token": "tk"}
+    def test_signup_opt_in_needs_the_box(self):
+        for name, box, want in (("cs_a", "1", True), ("cs_b", None, False)):
+            data = signup(name)
             if box:
                 data["email_news"] = box
             _client().post("/register", data=data)

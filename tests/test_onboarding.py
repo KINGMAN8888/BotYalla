@@ -22,6 +22,7 @@ import auth                                # noqa: E402
 import mailer                              # noqa: E402
 import database as db                      # noqa: E402
 import app as web                          # noqa: E402
+from _signup import signup, STRONG_PW  # noqa: E402
 
 
 def _boot():
@@ -158,9 +159,7 @@ class WelcomeEmailTests(unittest.TestCase):
         os.environ["PUBLIC_URL"] = "https://botyalla.test"
 
     def _register(self, name, email=""):
-        return _client().post("/register", data={"username": name, "password": PW,
-                                                 "email": email, "csrf_token": "tk"},
-                              follow_redirects=False)
+        return _client().post("/register", data=signup(name, email=email), follow_redirects=False)
 
     def test_registering_with_an_email_sends_the_three_steps(self):
         self._register("ob_mail_1", "ob1@example.com")
@@ -170,10 +169,10 @@ class WelcomeEmailTests(unittest.TestCase):
         self.assertIn("BotFather", text)
         self.assertIn("https://botyalla.test/", html)
 
-    def test_registering_without_an_email_sends_nothing(self):
+    def test_registering_without_an_email_is_refused_and_sends_nothing(self):
         self._register("ob_mail_2")
         self.assertEqual(self.sent, [])
-        self.assertIsNotNone(db.get_user_by_name("ob_mail_2"))
+        self.assertIsNone(db.get_user_by_name("ob_mail_2"), "البريد صار إجبارياً في التسجيل")
 
     def test_without_public_url_the_email_still_goes_out_without_a_button(self):
         """الرسالة لا تحمل أي سرّ، فحجبها كلها خسارة بلا مكسب (بعكس رابط الاسترجاع)."""
@@ -197,8 +196,7 @@ class WelcomeEmailTests(unittest.TestCase):
     def test_the_email_is_written_in_the_account_language(self):
         c = _client()
         c.get("/lang/en")
-        c.post("/register", data={"username": "ob_mail_5", "password": PW,
-                                  "email": "ob5@example.com", "csrf_token": "tk"})
+        c.post("/register", data=signup("ob_mail_5", email="ob5@example.com"))
         self.assertTrue(any("Welcome" in s for _, s, _, _ in self.sent))
 
 

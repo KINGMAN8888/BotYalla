@@ -619,6 +619,42 @@ def send_payment_receipt(row, status):
         return False
 
 
+def verify_email(code, link=None, lang="ar", minutes=60):
+    """(subject, html, text) لكود تأكيد البريد + رابط بضغطة. الكود في العنوان كعادة
+    المواقع الكبرى: يُقرأ من إشعار الموبايل دون فتح الرسالة."""
+    en = lang == "en"
+    if en:
+        subject = f"{code} is your BotYalla verification code"
+        title = "Confirm your email"
+        intro = "Enter this code on the verification page to activate your BotYalla account:"
+        or_btn = "Or confirm with one tap:"
+        label = "Confirm my email"
+        note = (f"The code and the button work for {minutes} minutes. Didn't create an account? "
+                "Ignore this email — nothing happens without the code.")
+        pre = f"Your code: {code} — valid for {minutes} minutes."
+    else:
+        subject = f"{code} كود تأكيد بريدك على BotYalla"
+        title = "أكّد بريدك الإلكتروني"
+        intro = "اكتب هذا الكود في صفحة التأكيد لتفعيل حسابك على BotYalla:"
+        or_btn = "أو أكّد بضغطة واحدة:"
+        label = "أكّد بريدي"
+        note = (f"الكود والزر صالحان {minutes} دقيقة. لم تنشئ حساباً؟ تجاهل هذه الرسالة — "
+                "لا شيء يحدث بدون الكود.")
+        pre = f"كودك: {code} — صالح {minutes} دقيقة."
+    box = ('<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" '
+           'style="margin:8px 0 18px;"><tr><td align="center" style="background:#F4F2FF;border:1px solid #DCD6FF;'
+           'border-radius:14px;padding:18px 12px;">'
+           f'<div dir="ltr" style="font-family:Consolas,\'Courier New\',monospace;font-size:34px;font-weight:800;'
+           f'letter-spacing:10px;color:{INK};">{escape(code)}</div></td></tr></table>')
+    body = (_p(escape(intro)) + box
+            + ((_p(escape(or_btn), muted=True, small=True, last=True) + _button(link, label)
+                + _link_hint(link, lang)) if link else "")
+            + _note(escape(note), lang, "info"))
+    html = _layout(lang, title, body, badge="security", preheader=pre)
+    text = f"{intro}\n\n{code}\n\n" + (f"{or_btn} {link}\n\n" if link else "") + note
+    return subject, html, text
+
+
 def expiry_email(kind, plan_name, date, lang="ar", link=None):
     """(subject, html, text) لتذكير انتهاء الاشتراك: pre3 · pre1 · expired.
     سياسة الخصوصية تعد بتذكير الانتهاء بالبريد — هذا هو (من حلقة التذكيرات في bot_manager)."""

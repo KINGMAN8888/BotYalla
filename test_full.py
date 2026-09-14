@@ -5,7 +5,7 @@ import os, json, secrets, tempfile, time, shutil, unittest
 # تُولَّد ديناميكياً لتجنب تحذيرات أدوات فحص الأمان (Secret Scanners).
 ADMIN_USER = os.environ.setdefault("ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.setdefault("ADMIN_PASS", f"tst_adm_{secrets.token_hex(8)}")
-CLIENT_PW = f"tst_cli_{secrets.token_hex(8)}"
+CLIENT_PW = f"Tst#cli{secrets.token_hex(8)}"      # سياسة كلمة المرور: كبير وصغير ورقم ورمز
 # bootstrap() يفعّل سجل الملف — لا يُكتب في logs/ الحقيقي (على الخادم = سجل الإنتاج)
 os.environ.setdefault("BOTYALLA_LOGS", tempfile.mkdtemp(prefix="botyalla-e2e-logs-"))
 
@@ -106,12 +106,16 @@ class BotYallaE2ETest(unittest.TestCase):
         # تسجيل عميل جديد
         tk = self._tk()
         r = self.client.post("/register", data={
-            "username": "client1",
-            "password": CLIENT_PW,
+            "username": "client1", "email": "client1@example.com", "phone_cc": "+20",
+            "phone": "01012345678", "age": "30", "entity_type": "individual",
+            "password": CLIENT_PW, "password2": CLIENT_PW, "terms": "1",
             "csrf_token": tk
         }, follow_redirects=True)
         self.assertEqual(r.status_code, 200)
         self.assertIn(b"client1", r.data) # يجب أن يظهر اسمه في لوحة التحكم
+        # لو .env المحلي فيه SMTP تُقفل اللوحة حتى تأكيد البريد — نؤكّده هنا لتكمل الرحلة
+        with db.get_conn() as c:
+            c.execute("UPDATE users SET email_verified_at=1 WHERE username='client1'")
 
     def test_03_bot_creation(self):
         """اختبار إنشاء بوت جديد (من نوع menu)."""

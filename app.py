@@ -50,6 +50,8 @@ import payments as pay
 import platform_bot as PB
 import mailer
 import email_campaigns as EC
+import accounts as ACC
+import urllib.request as _ureq
 import legal_content as LEGAL
 from xml.sax.saxutils import escape as _xesc
 import time as _time
@@ -250,6 +252,28 @@ def _revalidate_identity():
     # مزامنة الجلسة مع القاعدة (قد يكون الأدمن غيّر الدور أو الاسم)
     if session.get("role") != row["role"]: session["role"] = row["role"]
     if session.get("uname") != row["username"]: session["uname"] = row["username"]
+
+# ما يبقى متاحاً لحساب جديد لم يؤكد بريده — كل ما عداه يحوّل لصفحة التأكيد.
+_GATE_OPEN = ("/verify-email", "/logout", "/lang/", "/static/", "/wh/", "/email/unsubscribe/",
+              "/auth/", "/.well-known/", "/api/check-username")
+_GATE_PUBLIC = _PV_PATHS | {"/forgot", "/robots.txt", "/sitemap.xml", "/favicon.ico", "/healthz",
+                            "/manifest.webmanifest", "/site.webmanifest"}
+
+@app.before_request
+def _email_gate():
+    """حساب جديد لا يستخدم المنصة قبل تأكيد بريده (قرار المالك: «إجباري قبل أي استخدام»).
+    الحسابات القديمة والأدمن والدعم لا يُحجبون (db.email_gate)، والصفحات العامة تبقى متاحة."""
+    u = getattr(g, "user", None)
+    if not u or not db.email_gate(u):
+        return None
+    p = request.path
+    if p in _GATE_PUBLIC or p.startswith(_GATE_OPEN):
+        return None
+    if request.method != "GET" or p.startswith("/api/") or request.is_json:
+        lang = session.get("lang", i18n.DEFAULT)
+        return jsonify({"ok": False, "verify": url_for("verify_email"),
+                        "error": "أكّد بريدك الإلكتروني أولاً." if lang != "en" else "Verify your email first."}), 403
+    return redirect(url_for("verify_email"))
 
 # ---------- ترويسات الأمان (CSP بـ nonce) ----------
 # CSP هي الطبقة التي تُبطل أثر أي حقن حتى لو نفذ من رقابة الهروب. لا تُضبط في
@@ -478,76 +502,424 @@ def set_lang(code):
     return redirect(url_for("dashboard") if session.get("uid") else url_for("home"))
 
 # ---------- المصادقة ----------
+def _oauth_on(provider):
+    c = _OAUTH.get(provider)
+    return bool(c and os.getenv(c["id"], "").strip() and os.getenv(c["secret"], "").strip()
+                and _public_url("home"))
+
+def _auth_props(**kw):
+    """حمولة صفحات الدخول والتسجيل: أزرار جوجل/فيسبوك (المفعّلة فقط) وقائمة الدول."""
+    return dict({"oauth": {p: _oauth_on(p) for p in _OAUTH},
+                 "countries": [list(c) for c in ACC.COUNTRIES]}, **kw)
+
+_SIGNUP_FIELDS = ("username", "email", "phone", "phone_cc", "age", "entity_type")
+
+def _signup_check(f, lang, need_password=True, locked_email=None):
+    """يفحص نموذج التسجيل (العادي أو إكمال جوجل/فيسبوك) بسياسات accounts.py.
+    يرجّع (بيانات مُطبَّعة، {الحقل: رسالة الخطأ})."""
+    errs = {}
+    u = f.get("username", "").strip()
+    k = ACC.username_problem(u) or ("u_taken" if db.username_taken(u) else None)
+    if k:
+        errs["username"] = ACC.msg(k, lang)
+    email = locked_email or _norm_email(f.get("email", ""))
+    if not email:
+        errs["email"] = ACC.msg("email_req", lang)
+    elif not EMAIL_RE.match(email):
+        errs["email"] = ACC.msg("email_bad", lang)
+    elif db.get_user_by_email(email):
+        errs["email"] = ACC.msg("email_taken", lang)
+    phone = ACC.normalize_phone(f.get("phone_cc", "+20"), f.get("phone", ""))
+    if not phone:
+        errs["phone"] = ACC.msg("phone_bad", lang)
+    elif db.phone_taken(phone):
+        errs["phone"] = ACC.msg("phone_taken", lang)
+    age, ak = ACC.parse_age(f.get("age"))
+    if ak:
+        errs["age"] = ACC.msg(ak, lang)
+    entity = f.get("entity_type", "")
+    if entity not in ACC.ENTITIES:
+        errs["entity_type"] = ACC.msg("entity_bad", lang)
+    pw = f.get("password", "")
+    if need_password:
+        probs = ACC.password_problems(pw, u, email or "")
+        if probs:
+            errs["password"] = ACC.msg(probs[0], lang)
+        elif pw != f.get("password2", ""):
+            errs["password2"] = ACC.msg("p_match", lang)
+    if f.get("terms") != "1":
+        errs["terms"] = ACC.msg("terms_req", lang)
+    return {"username": u, "email": email, "phone": phone, "age": age,
+            "entity_type": entity, "password": pw}, errs
+
+def _signup_failed(view, title, errs, extra=None):
+    flash(next(iter(errs.values())), "error")
+    vals = {k: request.form.get(k, "") for k in _SIGNUP_FIELDS}
+    return react_page(view, title, _auth_props(errors=errs, values=vals, **(extra or {})))
+
+def _finish_signup(user_id, d, lang, news):
+    """بعد إنشاء الحساب (عادي أو بجوجل/فيسبوك): الجلسة، التتبّع، الإحالة، التنبيه، البريد."""
+    db.track("signup", user_id)
+    db.set_setting(user_id, "terms_at", str(int(_time.time())))
+    # أخبار وعروض بالبريد: موافقة صريحة فقط — المربع غير محدد افتراضياً
+    if news and d["email"]:
+        db.set_email_news(user_id, True)
+    src = session.pop("src", None)           # أول مصدر وصل منه (_count_view)
+    if src:
+        db.set_setting(user_id, "signup_src", src)
+    urow = db.get_user(user_id)
+    session["uid"] = user_id; session["uname"] = urow["username"]; session["role"] = urow["role"]
+    session["pwv"] = _pw_stamp(urow["pw_hash"])
+    ref_code = session.pop("ref", None)      # التُقط من ?ref= على أي صفحة
+    if ref_code:
+        db.attach_referral(user_id, ref_code)
+    notify_admins(f"🆕 تسجيل مستخدم جديد / New user: {urow['username']} (#{user_id})"
+                  + (f" — عبر إحالة {ref_code}" if ref_code else ""))
+    if db.email_gate(urow):
+        _send_verify(urow, lang)
+        return redirect(url_for("verify_email"))
+    # بلا تأكيد إجباري (بريد أكّده جوجل، أو SMTP غير مضبوط): الترحيب فوراً. الرابط من
+    # `PUBLIC_URL` وحدها، وبدونه تُرسل بلا زرّ — الرسالة لا تحمل توكناً.
+    mailer.send_welcome(user_id, d["email"], urow["username"], _public_url("dashboard"), lang)
+    return redirect(url_for("dashboard"))
+
 @app.route("/register", methods=["GET", "POST"])
 def register():
+    lang = session.get("lang", i18n.DEFAULT)
     if request.method == "POST":
         # التسجيل مُحدَّد كالدخول: بدونه يمكن إغراق المنصة بحسابات آلياً.
         if _rate_limited(request.remote_addr or "?", limit=5, window=600, bucket="register"):
-            flash("محاولات كثيرة. انتظر قليلاً." if session.get("lang") != "en"
-                  else "Too many attempts. Please wait.", "error")
-            return react_page("register", "register")
-        u = request.form.get("username", "").strip()
-        p = request.form.get("password", "")
-        email = _norm_email(request.form.get("email", ""))       # اختياري
-        lang = session.get("lang", i18n.DEFAULT)
-        if not USERNAME_RE.match(u) or len(p) < 6:
-            flash(("اسم المستخدم 3–32 حرفاً (حروف/أرقام و _ . -) وكلمة المرور 6 على الأقل."
-                   if session.get("lang") != "en" else
-                   "Username must be 3–32 chars (letters/digits and _ . -) and password at least 6."), "error")
-        elif email and not EMAIL_RE.match(email):
-            flash(i18n.t("email_invalid", lang), "error")
-        elif db.get_user_by_name(u):
-            flash("اسم المستخدم موجود بالفعل.", "error")
-        elif email and db.get_user_by_email(email):
-            flash(i18n.t("email_taken", lang), "error")
-        else:
-            user_id = db.create_user(u, auth.hash_password(p), email=email or None)
-            db.track("signup", user_id)
-            # أخبار وعروض بالبريد: موافقة صريحة فقط — المربع غير محدد افتراضياً
-            if email and request.form.get("email_news") == "1":
-                db.set_email_news(user_id, True)
-            src = session.pop("src", None)           # أول مصدر وصل منه (_count_view)
-            if src:
-                db.set_setting(user_id, "signup_src", src)
-            urow = db.get_user(user_id)
-            session["uid"] = user_id; session["uname"] = u; session["role"] = urow["role"]
-            session["pwv"] = _pw_stamp(urow["pw_hash"])
-            ref_code = session.pop("ref", None)      # التُقط من ?ref= على أي صفحة
-            if ref_code:
-                db.attach_referral(user_id, ref_code)
-            notify_admins(f"🆕 تسجيل مستخدم جديد / New user: {u} (#{user_id})"
-                          + (f" — عبر إحالة {ref_code}" if ref_code else ""))
-            # ترحيب best-effort: الخطوات الثلاث داخل الرسالة نفسها لا خلف رابط.
-            # الرابط من `PUBLIC_URL` وحدها، وبدونه تُرسل بلا زرّ — الرسالة لا
-            # تحمل توكناً، وحجبها كلها يخسر المستخدم بلا أي مكسب أمني.
-            if email:
-                mailer.send_welcome(user_id, email, u, _public_url("dashboard"), lang)
-            return redirect(url_for("dashboard"))
-    return react_page("register", "register")
+            flash("محاولات كثيرة. انتظر قليلاً." if lang != "en" else "Too many attempts. Please wait.", "error")
+            return react_page("register", "register", _auth_props())
+        d, errs = _signup_check(request.form, lang)
+        if not errs:
+            # التأكيد إجباري للحسابات الجديدة — إلا لو SMTP غير مضبوط: لا كود سيصل،
+            # وقفل الحساب عندها يُضيع العميل بلا أي مكسب.
+            need = mailer.configured()
+            if not need:
+                log.warning("signup without email verification: SMTP is not configured")
+            user_id, err = db.create_account(d["username"], auth.hash_password(d["password"]), d["email"],
+                                              d["phone"], d["age"], d["entity_type"], verify_required=need)
+            if not err:
+                return _finish_signup(user_id, d, lang, request.form.get("email_news") == "1")
+            errs[{"email_taken": "email", "phone_taken": "phone"}.get(err, "username")] = ACC.msg(err, lang)
+        return _signup_failed("register", "register", errs)
+    return react_page("register", "register", _auth_props())
+
+@app.route("/api/check-username")
+def api_check_username():
+    """فحص حيّ لاسم المستخدم أثناء الكتابة: القواعد + التفرّد + اقتراحات لو مأخوذ."""
+    lang = session.get("lang", i18n.DEFAULT)
+    if _rate_limited(request.remote_addr or "?", limit=60, window=300, bucket="u_check"):
+        return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)}), 429
+    u = request.args.get("u", "").strip()[:40]
+    k = ACC.username_problem(u)
+    if not k and db.username_taken(u, exclude_id=uid()):
+        k = "u_taken"
+    out = {"ok": not k, "error": ACC.msg(k, lang) if k else None}
+    if k in ("u_taken", "u_reserved"):
+        out["suggestions"] = [c for c in ACC.username_candidates(u) if not db.username_taken(c)][:3]
+    return jsonify(out)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         if _rate_limited(request.remote_addr or "?"):
             flash("محاولات كثيرة. انتظر قليلاً." if session.get("lang")!="en" else "Too many attempts. Please wait.", "error")
-            return react_page("login", "login")
+            return react_page("login", "login", _auth_props())
         u = request.form.get("username", "").strip()
         p = request.form.get("password", "")
-        row = db.get_user_by_name(u)
+        row = db.get_user_by_login(u)            # اسم المستخدم أو البريد
         if row and row.get("is_blocked"):
             flash("تم حظر هذا الحساب." if session.get("lang")!="en" else "This account is blocked.", "error")
-            return react_page("login", "login")
+            return react_page("login", "login", _auth_props())
         if row and auth.verify_password(p, row["pw_hash"]):
-            session["uid"] = row["id"]; session["uname"] = u; session["role"] = row.get("role","user")
+            session["uid"] = row["id"]; session["uname"] = row["username"]; session["role"] = row.get("role","user")
             session["pwv"] = _pw_stamp(row["pw_hash"])
             return redirect(url_for("dashboard"))
-        flash("بيانات دخول غير صحيحة.", "error")
-    return react_page("login", "login")
+        flash("بيانات دخول غير صحيحة." if session.get("lang") != "en" else "Wrong login details.", "error")
+    return react_page("login", "login", _auth_props())
 
 @app.route("/logout", methods=["POST"])
 def logout():
     """POST فقط (يمرّ بفحص CSRF): بـ GET كان أي موقع يُخرج زائرك بـ <img src=".../logout">."""
     session.clear(); return redirect(url_for("login"))
+
+# ---------- تأكيد البريد: كود من 6 أرقام + رابط بضغطة ----------
+VERIFY_TTL = 3600         # الكود والرابط صالحان ساعة
+RESEND_GAP = 60           # ثانية بين إرسالين
+
+def _code_hash(user_id, code):
+    """الكود لا يُخزَّن — HMAC مربوط بالمستخدم فلا يصلح كود مستخدم لغيره."""
+    return hmac.new(app.secret_key.encode(), f"ev:{user_id}:{code}".encode(), hashlib.sha256).hexdigest()
+
+def _send_verify(u, lang=None):
+    """كود جديد + رابط يستبدلان أي سابق. الرابط من PUBLIC_URL وحدها (§14) — وبدونها الكود وحده."""
+    code = f"{_secrets.randbelow(1000000):06d}"
+    tok = _secrets.token_urlsafe(32)
+    db.start_email_verification(u["id"], u["email"], _code_hash(u["id"], code), _token_hash(tok), VERIFY_TTL)
+    mailer.send_async(u["email"], *mailer.verify_email(
+        code, _public_url("verify_email_link", token=tok), lang or db.user_lang(u["id"]), VERIFY_TTL // 60))
+    log.info("email verification sent user=%s", u["id"])
+
+def _after_verified(u, lang):
+    # الحساب الجديد يصله الترحيب بعد التأكيد لا قبله — رسالة واحدة في كل خطوة
+    if u.get("verify_required") and u.get("email"):
+        mailer.send_welcome(u["id"], u["email"], u["username"], _public_url("dashboard"), lang)
+    log.info("email verified user=%s", u["id"])
+
+def _vmsg(key, lang):
+    return {"ok": ("✅ تم تأكيد بريدك — أهلاً بك في BotYalla!", "✅ Email verified — welcome to BotYalla!"),
+            "bad": ("الكود غير صحيح — راجع الأرقام وجرّب تاني.", "That code isn't right — check the digits and try again."),
+            "locked": ("محاولات كثيرة بكود خاطئ — اطلب كوداً جديداً.", "Too many wrong tries — request a new code."),
+            "expired": ("الكود انتهى أو اتغيّر — اطلب كوداً جديداً.", "The code expired or was replaced — request a new one."),
+            "sent": ("بعتنا كوداً جديداً على بريدك.", "We sent a new code to your email."),
+            "wait": ("استنى دقيقة قبل ما تطلب كوداً تاني.", "Wait a minute before asking for another code."),
+            "nosmtp": ("إرسال البريد متوقف مؤقتاً — كلّم الدعم.", "Email sending is paused — contact support."),
+            "link_bad": ("رابط التأكيد انتهى أو اتستخدم — اطلب كوداً جديداً.", "That link expired or was used — request a new code."),
+            }[key][1 if lang == "en" else 0]
+
+@app.route("/verify-email", methods=["GET", "POST"])
+@login_required
+def verify_email():
+    lang = session.get("lang", i18n.DEFAULT)
+    u = db.get_user(uid())
+    if not u.get("email"):
+        flash(i18n.t("email_prompt", lang), "error")
+        return redirect(url_for("account"))
+    if u.get("email_verified_at"):
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        if _rate_limited(f"u{uid()}", limit=10, window=900, bucket="ev_code"):
+            flash(_vmsg("locked", lang), "error")
+            return redirect(url_for("verify_email"))
+        code = _re.sub(r"\D", "", request.form.get("code", "").translate(ACC._DIGITS))[:6]
+        res = db.check_email_code(uid(), _code_hash(uid(), code))
+        if res == "ok":
+            _after_verified(u, lang)
+            flash(_vmsg("ok", lang), "ok")
+            return redirect(url_for("dashboard"))
+        flash(_vmsg(res, lang), "error")
+        return redirect(url_for("verify_email"))
+    ev = db.email_verification(uid())
+    now = int(_time.time())
+    return react_page("verify_email", "verify_title", {
+        "email": u["email"], "sent": bool(ev and ev["expires_at"] > now),
+        "wait": max(0, RESEND_GAP - (now - ev["sent_at"])) if ev else 0,
+        "gated": db.email_gate(u)})
+
+@app.route("/verify-email/resend", methods=["POST"])
+@login_required
+def verify_email_resend():
+    lang = session.get("lang", i18n.DEFAULT)
+    u = db.get_user(uid())
+    if u.get("email_verified_at") or not u.get("email"):
+        return redirect(url_for("account"))
+    ev = db.email_verification(uid())
+    if ev and _time.time() - ev["sent_at"] < RESEND_GAP:
+        flash(_vmsg("wait", lang), "error")
+    elif not mailer.configured():
+        flash(_vmsg("nosmtp", lang), "error")
+    elif _rate_limited(f"u{uid()}", limit=5, window=3600, bucket="ev_send"):
+        flash(_vmsg("wait", lang), "error")
+    else:
+        _send_verify(u, lang)
+        flash(_vmsg("sent", lang), "ok")
+    return redirect(url_for("verify_email"))
+
+@app.route("/verify-email/change", methods=["POST"])
+@login_required
+def verify_email_change():
+    """بريد كُتب غلطاً وقت التسجيل: يُصحَّح هنا (بكلمة المرور) ويصله كود جديد."""
+    lang = session.get("lang", i18n.DEFAULT)
+    u = db.get_user(uid())
+    email = _norm_email(request.form.get("email", ""))
+    if not auth.verify_password(request.form.get("password", ""), u["pw_hash"]):
+        flash("كلمة المرور غير صحيحة." if lang != "en" else "Wrong password.", "error")
+    elif not EMAIL_RE.match(email):
+        flash(ACC.msg("email_bad", lang), "error")
+    else:
+        other = db.get_user_by_email(email)
+        ok = not (other and other["id"] != u["id"]) and db.set_user_email(uid(), email)[0]
+        if not ok:
+            flash(ACC.msg("email_taken", lang), "error")
+        elif mailer.configured() and not _rate_limited(f"u{uid()}", limit=5, window=3600, bucket="ev_send"):
+            _send_verify(db.get_user(uid()), lang)
+            flash(_vmsg("sent", lang), "ok")
+    return redirect(url_for("verify_email"))
+
+@app.route("/verify-email/t/<token>")
+def verify_email_link(token):
+    """الزر في رسالة التأكيد — يعمل حتى بلا جلسة (فُتح على جهاز آخر)."""
+    lang = session.get("lang", i18n.DEFAULT)
+    if _rate_limited(request.remote_addr or "?", limit=20, window=600, bucket="ev_link"):
+        abort(429)
+    user_id = db.confirm_email_token(_token_hash(token))
+    if not user_id:
+        flash(_vmsg("link_bad", lang), "error")
+        resp = redirect(url_for("verify_email") if session.get("uid") else url_for("login"))
+    else:
+        _after_verified(db.get_user(user_id), lang)
+        flash(_vmsg("ok", lang), "ok")
+        resp = redirect(url_for("dashboard") if session.get("uid") == user_id else url_for("login"))
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+# ---------- الدخول بجوجل وفيسبوك (OAuth 2.0 — مكتبة Python القياسية، بلا تبعيات) ----------
+# المفاتيح في .env: GOOGLE_CLIENT_ID/SECRET · FACEBOOK_APP_ID/SECRET. بلا مفاتيح لا يظهر الزر.
+# عنوان الرجوع من PUBLIC_URL وحدها: {PUBLIC_URL}/auth/<provider>/callback (§14).
+_OAUTH = {
+    "google": {"auth": "https://accounts.google.com/o/oauth2/v2/auth",
+               "token": "https://oauth2.googleapis.com/token",
+               "me": "https://openidconnect.googleapis.com/v1/userinfo",
+               "scope": "openid email profile", "id": "GOOGLE_CLIENT_ID", "secret": "GOOGLE_CLIENT_SECRET"},
+    "facebook": {"auth": "https://www.facebook.com/v19.0/dialog/oauth",
+                 "token": "https://graph.facebook.com/v19.0/oauth/access_token",
+                 "me": "https://graph.facebook.com/v19.0/me?fields=id,name,email",
+                 "scope": "email,public_profile", "id": "FACEBOOK_APP_ID", "secret": "FACEBOOK_APP_SECRET"},
+}
+_OAUTH_NAME = {"google": ("جوجل", "Google"), "facebook": ("فيسبوك", "Facebook")}
+
+def _http_json(url, data=None, headers=None):
+    req = _ureq.Request(url, data=_up.urlencode(data).encode() if data else None,
+                        headers={"Accept": "application/json", **(headers or {})})
+    with _ureq.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+def _oauth_profile(provider, code, verifier):
+    """code ⇒ {sub, email, email_verified, name}. يرمي عند أي فشل — المستدعي يعالج."""
+    c = _OAUTH[provider]
+    data = {"client_id": os.getenv(c["id"], ""), "client_secret": os.getenv(c["secret"], ""), "code": code,
+            "redirect_uri": _public_url("oauth_callback", provider=provider)}
+    if provider == "google":
+        data.update(grant_type="authorization_code", code_verifier=verifier)
+    at = _http_json(c["token"], data).get("access_token")
+    if not at:
+        raise ValueError("no access token")
+    me = _http_json(c["me"], headers={"Authorization": f"Bearer {at}"})
+    if provider == "google":
+        return {"sub": str(me["sub"]), "email": _norm_email(me.get("email")),
+                "email_verified": bool(me.get("email_verified")), "name": me.get("name") or ""}
+    # فيسبوك لا يرجّع إلا البريد الأساسي المؤكَّد — وقد لا يرجّع بريداً أصلاً (حساب بالهاتف)
+    return {"sub": str(me["id"]), "email": _norm_email(me.get("email")),
+            "email_verified": bool(me.get("email")), "name": me.get("name") or ""}
+
+def _oauth_login(u, lang):
+    if not u or u.get("is_blocked"):
+        flash("تم حظر هذا الحساب." if lang != "en" else "This account is blocked.", "error")
+        return redirect(url_for("login"))
+    session["uid"] = u["id"]; session["uname"] = u["username"]; session["role"] = u.get("role", "user")
+    session["pwv"] = _pw_stamp(u["pw_hash"])
+    return redirect(url_for("dashboard"))
+
+@app.route("/auth/<any(google,facebook):provider>")
+def oauth_start(provider):
+    lang = session.get("lang", i18n.DEFAULT)
+    back = url_for("account") if session.get("uid") else url_for("login")
+    if not _oauth_on(provider):
+        flash("الدخول بهذه الطريقة غير مفعّل حالياً." if lang != "en" else "This sign-in option isn't enabled.", "error")
+        return redirect(back)
+    if _rate_limited(request.remote_addr or "?", limit=20, window=600, bucket="oauth"):
+        flash(i18n.t("ai_rate", lang), "error")
+        return redirect(back)
+    c = _OAUTH[provider]
+    state, verifier = _secrets.token_urlsafe(24), _secrets.token_urlsafe(48)
+    session["oauth"] = {"p": provider, "state": state, "v": verifier, "t": int(_time.time()),
+                        "link": bool(session.get("uid")) and request.args.get("link") == "1"}
+    q = {"client_id": os.getenv(c["id"], ""), "redirect_uri": _public_url("oauth_callback", provider=provider),
+         "response_type": "code", "scope": c["scope"], "state": state}
+    if provider == "google":
+        q.update(code_challenge=base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+                 .rstrip(b"=").decode(), code_challenge_method="S256", prompt="select_account")
+    return redirect(c["auth"] + "?" + _up.urlencode(q))
+
+@app.route("/auth/<any(google,facebook):provider>/callback")
+def oauth_callback(provider):
+    """الرجوع من جوجل/فيسبوك. الأمان: state + PKCE (جوجل) + مهلة 10 دقائق، والربط التلقائي
+    بحساب قائم **فقط** لو بريده مؤكَّد عندنا وعند المزوّد — وإلا يسرق من سجّل حساباً ببريد
+    غيره (بلا تأكيد) حساب صاحب البريد الحقيقي حين يدخل بجوجل (pre-account takeover)."""
+    lang = session.get("lang", i18n.DEFAULT)
+    name = _OAUTH_NAME[provider][1 if lang == "en" else 0]
+    st = session.pop("oauth", None) or {}
+    back = url_for("account") if st.get("link") else url_for("login")
+
+    def fail():
+        flash(f"تعذّر الدخول بـ{name} — جرّب تاني." if lang != "en" else f"Couldn't sign in with {name} — try again.",
+              "error")
+        return redirect(back)
+
+    got = request.args.get("state", "")
+    if (st.get("p") != provider or not got or not _secrets.compare_digest(str(st.get("state", "")), got)
+            or _time.time() - st.get("t", 0) > 600 or not request.args.get("code")):
+        return fail()
+    if _rate_limited(request.remote_addr or "?", limit=20, window=600, bucket="oauth"):
+        return fail()
+    try:
+        prof = _oauth_profile(provider, request.args["code"], st.get("v"))
+    except Exception:
+        log.warning("oauth %s exchange failed", provider, exc_info=True)
+        return fail()
+    ident = db.get_identity(provider, prof["sub"])
+    if st.get("link") and session.get("uid"):                      # ربط من «حسابي»
+        if ident and ident["user_id"] != uid():
+            flash(f"حساب {name} ده مربوط بحساب BotYalla تاني." if lang != "en"
+                  else f"That {name} account is linked to another BotYalla account.", "error")
+        else:
+            db.add_identity(provider, prof["sub"], uid(), prof["email"])
+            flash(f"✅ اتربط {name} بحسابك — تقدر تدخل بيه من دلوقتي." if lang != "en"
+                  else f"✅ {name} is linked — you can sign in with it now.", "ok")
+        return redirect(url_for("account"))
+    if ident:
+        return _oauth_login(db.get_user(ident["user_id"]), lang)
+    if prof["email"]:
+        ex = db.get_user_by_email(prof["email"])
+        if ex:
+            if ex.get("email_verified_at") and prof["email_verified"]:
+                db.add_identity(provider, prof["sub"], ex["id"], prof["email"])
+                return _oauth_login(ex, lang)
+            flash(f"فيه حساب بالبريد ده — ادخل بكلمة المرور وأكّد بريدك، وبعدين اربط {name} من «حسابي»."
+                  if lang != "en" else
+                  f"An account already uses this email — sign in with your password, verify your email, "
+                  f"then link {name} from your account page.", "error")
+            return redirect(url_for("login"))
+    session["oauth_new"] = {"p": provider, "sub": prof["sub"], "name": prof["name"][:60],
+                            "email": prof["email"] if prof["email_verified"] else "", "t": int(_time.time())}
+    return redirect(url_for("register_complete"))
+
+@app.route("/register/complete", methods=["GET", "POST"])
+def register_complete():
+    """حساب جديد بجوجل/فيسبوك: البريد (إن أكّده المزوّد) جاهز، والباقي يكمله العميل هنا."""
+    lang = session.get("lang", i18n.DEFAULT)
+    pend = session.get("oauth_new")
+    if not pend or _time.time() - pend.get("t", 0) > 1800:
+        session.pop("oauth_new", None)
+        flash("انتهت الجلسة — ابدأ التسجيل من جديد." if lang != "en" else "Session expired — start again.", "error")
+        return redirect(url_for("register"))
+    view = {"provider": pend["p"], "email": pend["email"], "name": pend["name"]}
+    if request.method == "POST":
+        if _rate_limited(request.remote_addr or "?", limit=5, window=600, bucket="register"):
+            flash("محاولات كثيرة. انتظر قليلاً." if lang != "en" else "Too many attempts. Please wait.", "error")
+            return redirect(url_for("register_complete"))
+        ident = db.get_identity(pend["p"], pend["sub"])
+        if ident:                                                   # إرسال مزدوج
+            session.pop("oauth_new", None)
+            return _oauth_login(db.get_user(ident["user_id"]), lang)
+        d, errs = _signup_check(request.form, lang, need_password=False, locked_email=pend["email"] or None)
+        if not errs:
+            verified = bool(pend["email"])
+            user_id, err = db.create_account(
+                d["username"], auth.hash_password(_secrets.token_urlsafe(32)), d["email"], d["phone"], d["age"],
+                d["entity_type"], verify_required=not verified and mailer.configured(), email_verified=verified)
+            if not err:
+                db.add_identity(pend["p"], pend["sub"], user_id, d["email"])
+                db.set_setting(user_id, "pw_set", "0")      # بلا كلمة مرور — يضبطها بـ«نسيت كلمة المرور»
+                session.pop("oauth_new", None)
+                return _finish_signup(user_id, d, lang, request.form.get("email_news") == "1")
+            errs[{"email_taken": "email", "phone_taken": "phone"}.get(err, "username")] = ACC.msg(err, lang)
+        return _signup_failed("complete_profile", "complete_title", errs, {"pending": view})
+    base = pend["name"] or pend["email"].split("@")[0]
+    return react_page("complete_profile", "complete_title", _auth_props(
+        pending=view, suggestions=[c for c in ACC.username_candidates(base) if not db.username_taken(c)][:3]))
 
 # ---------- إلغاء اشتراك البريد (أخبار وعروض) ----------
 @app.route("/email/unsubscribe/<int:user_id>/<token>", methods=["GET", "POST"])
@@ -633,14 +1005,17 @@ def reset_password(token):
         return redirect(url_for("forgot"))
     if request.method == "POST":
         p = request.form.get("password", "")
-        if len(p) < 6:
-            flash(i18n.t("pw_short", lang), "error")
+        owner = db.get_user(db.get_password_reset(th)["user_id"]) or {}
+        probs = ACC.password_problems(p, owner.get("username", ""), owner.get("email") or "")
+        if probs or p != request.form.get("password2", p):
+            flash(ACC.msg(probs[0] if probs else "p_match", lang), "error")
             return redirect(url_for("reset_password", token=token))
         user_id = db.consume_password_reset(th, auth.hash_password(p))
         if not user_id:
             flash(i18n.t("reset_invalid", lang), "error")
             return redirect(url_for("forgot"))
         log.info("password reset completed user=%s", user_id)
+        db.set_setting(user_id, "pw_set", "1")      # حساب جوجل/فيسبوك صار له كلمة مرور
         # الجلسات القائمة على أي جهاز تنتهي تلقائياً: بصمة كلمة المرور تغيّرت.
         session.clear()
         session["lang"] = lang
@@ -2421,13 +2796,17 @@ def account():
         # يُفحص الاسم عند تغييره فقط: النموذج يرسل الاسم الحالي دائماً
         # (defaultValue)، وحسابات قديمة سُجّلت قبل USERNAME_RE قد لا تطابقه —
         # فحصه دائماً كان سيمنع أصحابها من تغيير كلمة المرور نفسها.
-        if new_user and new_user != me["username"] and not USERNAME_RE.match(new_user):
-            flash(("اسم المستخدم 3–32 حرفاً (حروف/أرقام و _ . -)." if session.get("lang")!="en"
-                   else "Username must be 3–32 chars (letters/digits and _ . -)."), "error")
-            return redirect(url_for("account"))
-        if new_pw and len(new_pw) < 6:
-            flash("كلمة المرور قصيرة." if session.get("lang")!="en" else "Password too short.", "error")
-            return redirect(url_for("account"))
+        _l = session.get("lang", i18n.DEFAULT)
+        if new_user and new_user != me["username"]:
+            k = ACC.username_problem(new_user) or ("u_taken" if db.username_taken(new_user, me["id"]) else None)
+            if k:
+                flash(ACC.msg(k, _l), "error")
+                return redirect(url_for("account"))
+        if new_pw:
+            probs = ACC.password_problems(new_pw, new_user or me["username"], me.get("email") or "")
+            if probs or new_pw != request.form.get("new_password2", new_pw):
+                flash(ACC.msg(probs[0] if probs else "p_match", _l), "error")
+                return redirect(url_for("account"))
         # الإيميل يُعالج فقط لو أرسله النموذج: بناء واجهة أقدم بلا هذا الحقل
         # يجب ألا يمسح إيميلاً محفوظاً. ويُفحص كله **قبل** أي كتابة.
         lang = session.get("lang", i18n.DEFAULT)
@@ -2454,6 +2833,10 @@ def account():
             if not ok:
                 flash(i18n.t("email_taken", lang), "error")
                 return redirect(url_for("account"))
+            if new_email and mailer.configured():          # بريد جديد = كود تأكيد جديد
+                _send_verify(db.get_user(uid()), lang)
+        if new_hash:
+            db.set_setting(uid(), "pw_set", "1")
         if new_user: session["uname"] = new_user
         if new_hash:
             # هذه الجلسة تبقى، وكل جلسة أخرى (جهاز آخر أو مسروقة) تنتهي.
@@ -2466,7 +2849,47 @@ def account():
         "tgFallback": bool(db.user_tg_channel(uid())),
         "hasPlatformBot": bool(db.get_platform("platform_bot_token", "")),
         "emailNews": db.email_news_on(uid()),
+        "identities": db.list_identities(uid()),
+        "pwSet": db.get_setting(uid(), "pw_set", "1") != "0",
+        **_auth_props(),
     })
+
+@app.route("/account/profile", methods=["POST"])
+@login_required
+def account_profile():
+    """بيانات النشاط (الهاتف · السن · نوع الحساب) — بلا كلمة مرور: ليست بيانات دخول.
+    تغيير الهاتف يُسقط تأكيده."""
+    lang = session.get("lang", i18n.DEFAULT)
+    f = request.form
+    phone = ACC.normalize_phone(f.get("phone_cc", "+20"), f.get("phone", ""))
+    age, ak = ACC.parse_age(f.get("age"))
+    entity = f.get("entity_type", "")
+    err = ("phone_bad" if not phone else ak if ak else None if entity in ACC.ENTITIES else "entity_bad")
+    if not err:
+        ok, err = db.set_user_profile(uid(), phone, age, entity)
+    if err:
+        flash(ACC.msg(err, lang), "error")
+    else:
+        flash("تم حفظ بياناتك ✅" if lang != "en" else "Details saved ✅", "ok")
+    return redirect(url_for("account"))
+
+@app.route("/account/verify-phone", methods=["POST"])
+@login_required
+def account_verify_phone():
+    """رابط تأكيد الهاتف عبر بوت المنصة: العميل يشارك رقمه بزرّ تليجرام (مجاناً، وتليجرام
+    يثبت أن الرقم رقمه) — platform_bot يطابقه برقم الحساب ويربط تليجرام للتنبيهات."""
+    lang = session.get("lang", i18n.DEFAULT)
+    if _rate_limited(f"u{uid()}", limit=10, window=3600, bucket="tg_link"):   # ينتظر تليجرام
+        return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)})
+    if not (db.get_user(uid()) or {}).get("phone"):
+        return jsonify({"ok": False, "error": "أضف رقم هاتفك أولاً." if lang != "en" else "Add your phone number first."})
+    token = db.get_platform("platform_bot_token", "")
+    info = tg.validate_token(token) if token else {}
+    if not info.get("ok") or not info.get("username"):
+        return jsonify({"ok": False, "error": i18n.t("tg_link_no_bot", lang)})
+    code = _secrets.token_hex(6)
+    db.set_phone_code(uid(), code)
+    return jsonify({"ok": True, "link": f"https://t.me/{info['username']}?start=phone-{code}"})
 
 @app.route("/account/email-prefs", methods=["POST"])
 @login_required
@@ -2514,10 +2937,10 @@ def admin_user_add():
     u = request.form.get("username", "").strip()
     pw = request.form.get("password", "")
     role = request.form.get("role", "user")
-    if not USERNAME_RE.match(u) or len(pw) < 6:
-        flash(("اسم المستخدم 3–32 حرفاً (حروف/أرقام و _ . -) وكلمة المرور 6 على الأقل."
-               if session.get("lang")!="en" else
-               "Username must be 3–32 chars (letters/digits and _ . -) and password 6+."), "error")
+    k = ACC.username_problem(u) or ("u_taken" if db.username_taken(u) else None)
+    probs = ACC.password_problems(pw, u)
+    if k or probs:
+        flash(ACC.msg(k or probs[0], session.get("lang", i18n.DEFAULT)), "error")
         return redirect(url_for("admin_users"))
     user_id, err = db.admin_create_user(u, auth.hash_password(pw), role)
     if err == "username_taken":
@@ -3177,7 +3600,8 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
         "csrf": _csrf_token(),
         "user": {"name": session.get("uname"), "role": role,
                  # لمطالبة لطيفة بإضافة إيميل — بدونه لا استرجاع للحساب
-                 "hasEmail": bool((getattr(g, "user", None) or {}).get("email"))},
+                 "hasEmail": bool((getattr(g, "user", None) or {}).get("email")),
+                 "emailVerified": bool((getattr(g, "user", None) or {}).get("email_verified_at"))},
         "t": {k: i18n.t(k, lang) for k in i18n.T},
         "icons": {n: _icon_svg(n) for n in icons._P},
         "nav": nav, "adminNav": admin_nav,
@@ -3188,7 +3612,8 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
             "wallet": url_for("wallet_page"),
             "logout": url_for("logout"), "login": url_for("login"),
             "register": url_for("register"), "landing": url_for("home"),
-            "forgot": url_for("forgot"),
+            "forgot": url_for("forgot"), "verify": url_for("verify_email"),
+            "checkUsername": url_for("api_check_username"),
             "requestBot": url_for("request_bot"), "botCreate": url_for("bot_create"),
             "botCreateManaged": url_for("bot_create_managed"),
             "media": url_for("media_page"), "assets": url_for("api_assets"),
@@ -3379,7 +3804,7 @@ def healthz():
 # ============================================================================
 
 # تاريخ آخر تعديل فعلي على النصوص القانونية — حدّثه عند تغيير أي وثيقة.
-LEGAL_UPDATED = "2026-09-14"
+LEGAL_UPDATED = "2026-09-15"
 # آخر تعديل جوهري على الصفحة الرئيسية (يظهر في sitemap.xml)
 SITE_UPDATED = "2026-09-12"
 

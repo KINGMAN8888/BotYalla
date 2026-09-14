@@ -9,7 +9,8 @@ import BotDetail, { AddonPay } from "./app/views/BotDetail.jsx";
 import { Account, Settings, Billing, Pricing, Subscribe, RequestBot, Support } from "./app/views/Account.jsx";
 import { AdminOverview, AdminUsers, AdminPayments, AdminRequests, AdminTickets, AdminPlatform,
          AdminAnalytics } from "./app/views/Admin.jsx";
-import { FlowBuilder, Broadcast, Analytics, Auth, Recover } from "./app/views/Tools.jsx";
+import { FlowBuilder, Broadcast, Analytics, Recover } from "./app/views/Tools.jsx";
+import { Auth, VerifyEmail, CompleteProfile } from "./app/auth.jsx";
 import { AdminPricing, AdminPromos, AdminAffiliates, Affiliate } from "./app/views/Revenue.jsx";
 import { Terms, Privacy } from "./app/views/Legal.jsx";
 import { AdminEmails, Unsubscribe } from "./app/views/Emails.jsx";
@@ -60,6 +61,8 @@ const BARE = {
   forgot:   () => <Recover mode="forgot" />,
   reset:    () => <Recover mode="reset" />,
   unsubscribe: () => <Unsubscribe />,
+  verify_email: () => <VerifyEmail />,
+  complete_profile: () => <CompleteProfile />,
 };
 
 /* حاجز أخطاء: خطأ في عرض واحد لا يجوز أن يترك الصفحة سوداء فارغة.

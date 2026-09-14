@@ -15,6 +15,7 @@ os.environ["ADMIN_PASS"] = PW
 import auth                                # noqa: E402
 import database as db                      # noqa: E402
 import app as web                          # noqa: E402
+from _signup import signup, STRONG_PW  # noqa: E402
 import flow_engine                         # noqa: E402
 import templates_bot                       # noqa: E402
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove   # noqa: E402
@@ -100,7 +101,7 @@ class FunnelTests(unittest.TestCase):
         c = _client()
         c.get("/?utm_source=facebook", headers=PHONE)
         c.get("/?utm_source=google", headers=PHONE)          # المصدر الأول هو المحسوب
-        r = c.post("/register", data={"username": "gr_new", "password": PW, "csrf_token": "tk"})
+        r = c.post("/register", data=signup("gr_new"))
         self.assertEqual(r.status_code, 302)
         u = db.get_user_by_name("gr_new")["id"]
         self.assertEqual(db.get_setting(u, "signup_src"), "facebook")

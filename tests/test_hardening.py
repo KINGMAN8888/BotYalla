@@ -21,6 +21,7 @@ import auth                                # noqa: E402
 import database as db                      # noqa: E402
 import payments as pay                     # noqa: E402
 import app as web                          # noqa: E402
+from _signup import signup, STRONG_PW  # noqa: E402
 
 
 def _boot():
@@ -171,10 +172,10 @@ class UsernameRuleTests(unittest.TestCase):
         c = _client()
         c.post("/login", data={"username": "old name@x.com", "password": TEST_PW,
                                "csrf_token": "tk"})
-        c.post("/account", data={"username": "old name@x.com", "new_password": "newpass456",
+        c.post("/account", data={"username": "old name@x.com", "new_password": "New#pass456",
                                  "current_password": TEST_PW, "csrf_token": "tk"})
         row = db.get_user_by_name("old name@x.com")
-        self.assertTrue(auth.verify_password("newpass456", row["pw_hash"]))
+        self.assertTrue(auth.verify_password("New#pass456", row["pw_hash"]))
 
 
 class FirstVisitCsrfTests(unittest.TestCase):
@@ -205,7 +206,7 @@ class FirstVisitCsrfTests(unittest.TestCase):
     def test_a_fresh_visitor_can_register_on_the_first_try(self):
         c = web.app.test_client()
         tok = self._page_token(c, "/register")
-        r = c.post("/register", data={"username": "firsttry", "password": TEST_PW, "csrf_token": tok})
+        r = c.post("/register", data=signup("firsttry", tok))
         self.assertNotEqual(r.status_code, 400)
         self.assertIsNotNone(db.get_user_by_name("firsttry"))
 

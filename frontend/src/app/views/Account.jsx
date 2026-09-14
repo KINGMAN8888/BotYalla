@@ -3,6 +3,7 @@ import {
   BY, P, t, bi, Icon, Card, Btn, Field, Input, Select, Textarea, Form, Grid, Stat,
   Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate, daysLeft,
 } from "../kit.jsx";
+import { UsernameField, PasswordField, PhoneField, EntityPicker, SocialButtons, splitPhone } from "../auth.jsx";
 
 /* ------------------------------------------------- تذاكر الدعم (مشتركة مع الأدمن) */
 export const TICKET_KIND = {
@@ -147,6 +148,20 @@ export function Account() {
   const me = P.me || {};
   const [link, setLink] = useState(null);
   const [err, setErr] = useState(null);
+  const [phoneLink, setPhoneLink] = useState(null);
+  const [phoneErr, setPhoneErr] = useState(null);
+  const [pcc, pnum] = splitPhone(me.phone, P.countries);
+  const oauthOn = P.oauth && (P.oauth.google || P.oauth.facebook);
+
+  /* تأكيد الهاتف مجاناً: رابط لبوت المنصة، والعميل يضغط «شارك رقمي» */
+  async function verifyPhone() {
+    setPhoneErr(null);
+    try {
+      const r = await fetch("/account/verify-phone", { method: "POST", headers: { "X-CSRF-Token": BY.csrf } });
+      const d = await r.json();
+      if (d.ok) setPhoneLink(d.link); else setPhoneErr(d.error);
+    } catch { setPhoneErr(bi("تعذّر الاتصال بالخادم.", "Couldn't reach the server.")); }
+  }
 
   async function linkTelegram() {
     setErr(null);
@@ -165,15 +180,22 @@ export function Account() {
       <Card className="max-w-[560px]">
         <Pill tone="mute"><Icon name="shield" size={13} />{t("role_" + (me.role || "user"))}</Pill>
         <Form action="" className="mt-5">
-          <Field label={t("username")} className="mb-4">
-            <Input name="username" defaultValue={me.username} required minLength={3} autoComplete="username" />
-          </Field>
-          <Field label={`${t("email")} (${t("optional")})`} hint={t("email_hint")} className="mb-4">
+          <div className="mb-4"><UsernameField defaultValue={me.username} current={me.username} /></div>
+          <Field label={t("email")} className="mb-4"
+                 hint={me.email ? (me.email_verified_at ? null : bi("تغيير البريد يرسل كود تأكيد للبريد الجديد.", "Changing it sends a code to the new address.")) : t("email_hint")}>
             <Input type="email" name="email" defaultValue={me.email || ""} autoComplete="email" dir="ltr" />
           </Field>
-          <Field label={t("new_password")} className="mb-5">
-            <Input type="password" name="new_password" placeholder="••••••" minLength={6} autoComplete="new-password" />
-          </Field>
+          <div className="mb-5">
+            <PasswordField name="new_password" confirmName="new_password2" label={t("new_password")} optional
+                           username={me.username} email={me.email || ""} />
+          </div>
+          {P.pwSet === false && (
+            <p className="mb-4 mt-0 rounded-xl bg-white/[0.04] px-3.5 py-3 text-[12.5px] leading-relaxed text-ink-2">
+              {bi("حسابك مسجّل بجوجل/فيسبوك ولسه ملوش كلمة مرور. عشان تعدّل البيانات دي اضبط واحدة من ",
+                  "You signed up with Google/Facebook and have no password yet. To edit these, set one via ")}
+              <a href={BY.urls.forgot} className="font-bold text-au-cyan">{t("forgot_link")}</a>.
+            </p>
+          )}
           <div className="my-5 h-px bg-white/10" />
           <Field label={t("current_password")}
                  hint={bi("مطلوبة لتأكيد أي تعديل.", "Required to confirm any change.")}>
@@ -182,6 +204,69 @@ export function Account() {
           <div className="mt-6"><Btn icon="check" type="submit">{t("update_account")}</Btn></div>
         </Form>
       </Card>
+
+      {/* التحقق: البريد بكود، والهاتف مجاناً عبر تليجرام */}
+      <Card className="max-w-[560px]">
+        <SectionTitle icon="shield">{bi("التحقق من الحساب", "Account verification")}</SectionTitle>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-3 rounded-xl bg-white/[0.03] px-3.5 py-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+            <Icon name="mail" size={17} className="text-au-cyan" />
+            <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink" dir="ltr">{me.email || bi("لا يوجد بريد", "No email")}</span>
+            {me.email && (me.email_verified_at
+              ? <Pill tone="on" dot>{bi("مؤكَّد", "Verified")}</Pill>
+              : <Form action="/verify-email/resend" className="inline"><Btn sm variant="ghost" icon="mail" type="submit">{bi("أكّد البريد", "Verify email")}</Btn></Form>)}
+          </div>
+          <div className="flex flex-wrap items-center gap-3 rounded-xl bg-white/[0.03] px-3.5 py-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+            <Icon name="phone" size={17} className="text-au-cyan" />
+            <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink" dir="ltr">{me.phone || bi("أضف رقمك في «بيانات النشاط» تحت", "Add your number under “Business details”")}</span>
+            {me.phone && (me.phone_verified_at
+              ? <Pill tone="on" dot>{bi("مؤكَّد", "Verified")}</Pill>
+              : phoneLink
+                ? <Btn sm variant="green" icon="play" href={phoneLink} target="_blank" rel="noopener">{bi("افتح تليجرام وشارك رقمك", "Open Telegram and share")}</Btn>
+                : <Btn sm variant="ghost" icon="phone" type="button" onClick={verifyPhone} disabled={!P.hasPlatformBot}>{bi("أكّد عن طريق تليجرام", "Verify via Telegram")}</Btn>)}
+          </div>
+          {phoneErr && <p className="m-0 text-[12.5px] text-red-300">{phoneErr}</p>}
+          <p className="m-0 text-[12px] leading-relaxed text-ink-3">
+            {bi("تأكيد الهاتف مجاني: بتضغط «شارك رقمي» في بوت المنصة على تليجرام، وتليجرام بيبعت رقم حسابك نفسه — لازم يكون نفس الرقم المسجّل هنا. ومعاه بيتربط تليجرام لتنبيهات اشتراكك.",
+                "Phone verification is free: tap “Share my number” in the platform bot on Telegram, which sends your own account's number — it must match the one here. It also links Telegram for your subscription alerts.")}
+          </p>
+        </div>
+      </Card>
+
+      {/* بيانات النشاط — بلا كلمة مرور: ليست بيانات دخول */}
+      <Card className="max-w-[560px]">
+        <SectionTitle icon="user">{bi("بيانات النشاط", "Business details")}</SectionTitle>
+        <Form action="/account/profile" className="flex flex-col gap-5">
+          <EntityPicker defaultValue={me.entity_type || ""} />
+          <div className="grid gap-5 sm:grid-cols-[120px_1fr]">
+            <Field label={bi("السن", "Age")}>
+              <Input type="number" name="age" required min="18" max="100" inputMode="numeric" dir="ltr" defaultValue={me.age || ""} />
+            </Field>
+            <PhoneField cc={pcc} value={pnum}
+                        hint={me.phone_verified_at ? bi("تغيير الرقم يلغي تأكيده.", "Changing the number removes its verification.") : null} />
+          </div>
+          <div><Btn icon="check" type="submit">{t("save")}</Btn></div>
+        </Form>
+      </Card>
+
+      {oauthOn && (
+        <Card className="max-w-[560px]">
+          <SectionTitle icon="link">{bi("طرق الدخول", "Sign-in methods")}</SectionTitle>
+          <div className="flex flex-col gap-2.5">
+            {["google", "facebook"].filter((p) => P.oauth[p]).map((p) => (
+              <div key={p} className="flex items-center gap-3 rounded-xl bg-white/[0.03] px-3.5 py-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+                <b className="flex-1 text-[13.5px] text-ink">{p === "google" ? "Google" : "Facebook"}</b>
+                {(P.identities || []).includes(p)
+                  ? <Pill tone="on" dot>{bi("مربوط", "Linked")}</Pill>
+                  : <Btn sm variant="ghost" icon="link" href={`/auth/${p}?link=1`}>{bi("اربط", "Link")}</Btn>}
+              </div>
+            ))}
+          </div>
+          <p className="mb-0 mt-3 text-[12px] leading-relaxed text-ink-3">
+            {bi("بعد الربط تقدر تدخل بضغطة من غير كلمة المرور.", "Once linked, you can sign in with one tap — no password needed.")}
+          </p>
+        </Card>
+      )}
 
       {/* أخبار وعروض بالبريد — موافقة صريحة، ورسائل الحساب المهمة لا تتأثر */}
       <Card className="max-w-[560px]">

@@ -15,6 +15,7 @@ import database as db                        # noqa: E402
 import media_store                           # noqa: E402
 import flow_engine                           # noqa: E402
 import app as web                            # noqa: E402
+from _signup import signup, STRONG_PW  # noqa: E402
 
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 2048
@@ -218,8 +219,7 @@ class PrivacyTests(unittest.TestCase):
             cl.get("/register")
             with cl.session_transaction() as s:
                 tok = s.get("_csrf")
-            cl.post("/register", data={"username": name, "password": "tst_" + os.urandom(6).hex(),
-                                       "csrf_token": tok}, follow_redirects=True)
+            cl.post("/register", data=signup(name, tok), follow_redirects=True)
         with cls.owner.session_transaction() as s:
             cls.owner_uid = s.get("uid")
         cls.bot_id = db.create_bot(cls.owner_uid, "priv", "tk-priv", "flow", {})

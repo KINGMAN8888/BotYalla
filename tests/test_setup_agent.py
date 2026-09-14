@@ -15,6 +15,7 @@ import database as db          # noqa: E402
 import ai_agent as ai          # noqa: E402
 import tg_helpers as tg        # noqa: E402
 import app as A                # noqa: E402
+from _signup import signup, STRONG_PW  # noqa: E402
 
 TESTER = "بنعمل ملابس تفصيل و انت بوت خدمة عملاء واضبط الاعدادات"
 
@@ -163,7 +164,7 @@ class RoutesTests(unittest.TestCase):
                       "VALUES(1,'root','x','admin',0)")
         cls.c = A.app.test_client()
         cls.c.get("/register")
-        cls.c.post("/register", data={"username": "agentuser", "password": "secret123", "csrf_token": cls.tk()})
+        cls.c.post("/register", data=signup("agentuser", cls.tk()))
         cls.uid = db.get_user_by_name("agentuser")["id"]
         cls.c.post("/bot/create", data={"name": "رغد", "token": "123456:ABCDEFGHIJKLMNOPQRSTUV",
                                         "template": "customer_service", "csrf_token": cls.tk()})
@@ -212,7 +213,7 @@ class RoutesTests(unittest.TestCase):
         other.get("/register")
         with other.session_transaction() as s:
             s["_csrf"] = "o" * 32
-        other.post("/register", data={"username": "intruder", "password": "secret123", "csrf_token": "o" * 32})
+        other.post("/register", data=signup("intruder", "o" * 32))
         r = other.post(f"/bot/{self.bid}/ai/session/{d['sid']}/apply", headers={"X-CSRF-Token": "o" * 32})
         self.assertEqual(r.status_code, 404)
 

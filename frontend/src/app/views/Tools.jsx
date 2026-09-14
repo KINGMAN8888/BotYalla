@@ -5,6 +5,7 @@ import {
   Grid, Stat, Pill, Empty, PageHead, SectionTitle, num,
 } from "../kit.jsx";
 import { Flashes } from "../AppShell.jsx";
+import { PasswordField } from "../auth.jsx";
 import { AssetPicker } from "../media.jsx";
 
 /* ---------------------------------------------------------- باني الفلو */
@@ -507,80 +508,7 @@ export function Analytics() {
   );
 }
 
-/* ------------------------------------------------------------ المصادقة */
-export function Auth({ mode }) {
-  const isLogin = mode === "login";
-  return (
-    <div className="mx-auto flex min-h-screen max-w-[440px] flex-col justify-center px-5 py-16">
-      <Flashes />
-      <a href={BY.urls.landing} className="mb-6 flex justify-center no-underline">
-        <img src={BY.urls.logo} alt={BY.brand} className="h-11 w-auto" />
-      </a>
-      <Card className="!p-8">
-        <h1 className="m-0 text-center text-[24px] font-extrabold tracking-tight text-ink">
-          {isLogin ? t("login") : t("register")}
-        </h1>
-        <p className="mb-7 mt-2 text-center text-[14px] text-ink-3">
-          {isLogin ? t("login_sub") : t("register_sub")}
-        </p>
-        <Form action="">
-          <Field label={t("username")} className="mb-4">
-            <Input name="username" required autoFocus autoComplete="username"
-                   minLength={isLogin ? undefined : 3} />
-          </Field>
-          {!isLogin && (
-            <Field label={`${t("email")} (${t("optional")})`} hint={t("email_hint")} className="mb-4">
-              <Input type="email" name="email" autoComplete="email" dir="ltr" />
-            </Field>
-          )}
-          {/* موافقة صريحة على الأخبار — غير محددة افتراضياً، ولا أثر لها بلا إيميل */}
-          {!isLogin && (
-            <label className="mb-4 flex cursor-pointer items-start gap-2.5 text-[12.5px] leading-relaxed text-ink-3">
-              <input type="checkbox" name="email_news" value="1" className="mt-1 size-4 shrink-0 accent-[#7C6CF6]" />
-              <span>{bi("ابعتولي أخبار BotYalla وعروضها على إيميلي — أقدر ألغيها في أي وقت.",
-                        "Email me BotYalla news and offers — I can unsubscribe anytime.")}</span>
-            </label>
-          )}
-          <Field label={t("password")}
-                 hint={isLogin ? undefined : t("pw_hint")}>
-            <Input type="password" name="password" required minLength={isLogin ? undefined : 6}
-                   autoComplete={isLogin ? "current-password" : "new-password"} />
-          </Field>
-          <div className="mt-6">
-            <Btn block icon={isLogin ? "lock" : "rocket"} type="submit">
-              {isLogin ? t("login") : t("register")}
-            </Btn>
-          </div>
-        </Form>
-
-        {isLogin && (
-          <p className="mt-4 text-center text-[13px]">
-            <a href={BY.urls.forgot} className="text-ink-3 underline-offset-4 hover:text-ink hover:underline">
-              {t("forgot_link")}
-            </a>
-          </p>
-        )}
-
-        {!isLogin && (
-          <div className="mt-5 flex flex-wrap justify-center gap-x-5 gap-y-2 text-[12px] text-ink-3">
-            <span className="inline-flex items-center gap-1.5">
-              <Icon name="check" size={13} className="text-au-teal" />{t("lp_trust_1")}</span>
-            <span className="inline-flex items-center gap-1.5">
-              <Icon name="check" size={13} className="text-au-teal" />{t("free_forever")}</span>
-          </div>
-        )}
-
-        <p className="mt-6 text-center text-[13px] text-ink-3">
-          {isLogin ? t("no_account") : t("have_account")}{" "}
-          <a href={isLogin ? BY.urls.register : BY.urls.login}
-             className="font-bold text-au-cyan underline-offset-4 hover:underline">
-            {isLogin ? t("signup_link") : t("signin_link")}
-          </a>
-        </p>
-      </Card>
-    </div>
-  );
-}
+/* الدخول والتسجيل وتأكيد البريد: app/auth.jsx */
 
 /* استرجاع كلمة المرور: طلب الرابط (forgot) ثم ضبط كلمة جديدة (reset).
    نموذج POST عادي إلى نفس المسار — Flask يتحقق ويحوّل ويعرض flash. */
@@ -601,10 +529,7 @@ export function Recover({ mode }) {
         </p>
         <Form action="">
           {isReset ? (
-            <Field label={t("password")} hint={t("pw_hint")}>
-              <Input type="password" name="password" required minLength={6} autoFocus
-                     autoComplete="new-password" />
-            </Field>
+            <PasswordField />
           ) : (
             <Field label={t("email")}>
               <Input type="email" name="email" required autoFocus autoComplete="email" dir="ltr" />

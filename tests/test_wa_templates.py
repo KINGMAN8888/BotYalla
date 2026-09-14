@@ -13,6 +13,7 @@ os.environ.setdefault("SECRET_KEY", "tpl-test")
 
 import database as db                        # noqa: E402
 import app as web                            # noqa: E402
+from _signup import signup, STRONG_PW  # noqa: E402
 import channels.wa_templates as WT           # noqa: E402
 
 WABA = "102290129340398"
@@ -177,9 +178,8 @@ class RouteTests(unittest.TestCase):
         cls.c.get("/register")                       # يولّد توكن CSRF في الجلسة
         with cls.c.session_transaction() as s:
             tok = s.get("_csrf")
-        pw = f"tpl_{secrets.token_hex(8)}"
-        cls.c.post("/register", data={"username": "tpl", "password": pw,
-                                      "csrf_token": tok}, follow_redirects=True)
+        pw = STRONG_PW
+        cls.c.post("/register", data=signup("tpl", tok), follow_redirects=True)
         with cls.c.session_transaction() as s:
             cls.tok, cls.uid = s.get("_csrf"), s.get("uid")
         assert cls.uid, "لم يكتمل التسجيل"
