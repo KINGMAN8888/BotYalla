@@ -25,9 +25,15 @@ def call(method, **params):
                                    "format": "json", **params}).encode()
     req = urllib.request.Request(API + method, data=data, method="POST",
                                  headers={"Content-Type": "application/x-www-form-urlencoded",
-                                          "Cache-Control": "no-cache"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        out = json.loads(r.read().decode("utf-8"))
+                                          "Cache-Control": "no-cache",
+                                          "User-Agent": "BotYalla/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            out = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"HTTP 403 Error on {method}: {e.reason}\nResponse Body: {body}")
+    
     if out.get("stat") != "ok":
         raise SystemExit(f"UptimeRobot {method} failed: {out.get('error') or out}")
     return out
