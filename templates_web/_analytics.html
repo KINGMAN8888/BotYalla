@@ -1,0 +1,131 @@
+{# ==========================================================================
+   القياس والتتبّع — يُضمَّن في <head> بعد window.BY مباشرة.
+
+   لا شيء هنا يُطبع إن لم تُضبط أداة في `.env` (راجع analytics.py). وكل وسم
+   <script> يحمل nonce — `script-src` بلا 'unsafe-inline' إطلاقاً، فسكربت
+   يحقنه مهاجم لن يعمل. لا تُزِل nonce من أي سطر هنا مهما قال المزوّد.
+   ========================================================================== #}
+{% if an.gtm or an.ga4 or an.meta or an.tiktok or an.clarity %}
+
+{% if an.gtm %}
+{# Google Tag Manager — عند ضبطه يُحقن وحده، وبقية الوسوم تُدار من داخل الحاوية.
+   `j.setAttribute('nonce', …)` ليس زينة: بدونه لا يورّث GTM الـnonce للوسوم
+   التي يحقنها هو، فتُحجب كلها بصمت وتبدو الحاوية «مركّبة ولا ترسل شيئاً». #}
+<script nonce="{{ csp_nonce }}">
+(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});
+var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';
+j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;
+j.setAttribute('nonce','{{ csp_nonce }}');
+f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','{{ an.gtm }}');
+</script>
+{% else %}
+
+{% if an.ga4 %}
+{# GA4 مباشرة (بلا GTM) #}
+<script nonce="{{ csp_nonce }}" async src="https://www.googletagmanager.com/gtag/js?id={{ an.ga4 }}"></script>
+<script nonce="{{ csp_nonce }}">
+window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}
+gtag('js',new Date());gtag('config','{{ an.ga4 }}');
+</script>
+{% endif %}
+
+{% if an.meta %}
+{# Meta Pixel — بكسل الصورة الاحتياطي في <noscript> متروك عمداً: زائر بلا
+   جافاسكربت لا يكمل التسجيل أصلاً، ووجوده يضيف طلباً لكل صفحة بلا مقابل. #}
+<script nonce="{{ csp_nonce }}">
+!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
+n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;t.setAttribute('nonce','{{ csp_nonce }}');s=b.getElementsByTagName(e)[0];
+s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');
+fbq('init','{{ an.meta }}');fbq('track','PageView');
+</script>
+{% endif %}
+
+{% if an.tiktok %}
+<script nonce="{{ csp_nonce }}">
+!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];
+ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];
+ttq.setAndDefer=function(e,n){e[n]=function(){e.push([n].concat(Array.prototype.slice.call(arguments,0)))}};
+for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);
+ttq.instance=function(e){for(var n=ttq._i[e]||[],i=0;i<ttq.methods.length;i++)ttq.setAndDefer(n,ttq.methods[i]);return n};
+ttq.load=function(e,n){var s="https://analytics.tiktok.com/i18n/pixel/events.js";
+ttq._i=ttq._i||{};ttq._i[e]=[];ttq._i[e]._u=s;ttq._t=ttq._t||{};ttq._t[e]=+new Date;
+ttq._o=ttq._o||{};ttq._o[e]=n||{};var o=d.createElement("script");o.type="text/javascript";
+o.async=!0;o.src=s+"?sdkid="+e+"&lib="+t;o.setAttribute('nonce','{{ csp_nonce }}');
+var a=d.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};
+ttq.load('{{ an.tiktok }}');ttq.page()}(window,document,'ttq');
+</script>
+{% endif %}
+
+{% endif %}{# /an.gtm #}
+
+{% if an.clarity %}
+{# Microsoft Clarity — تسجيلات الجلسات والخرائط الحرارية. تُحقن حتى مع GTM
+   لأنها ليست وسم تحويل، ووجودها المستقل يضمن التقاط الجلسة من أول ثانية. #}
+<script nonce="{{ csp_nonce }}">
+(function(c,l,a,r,i,t,y){c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+t.setAttribute('nonce','{{ csp_nonce }}');
+y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);})(window,document,'clarity','script','{{ an.clarity }}');
+</script>
+{% endif %}
+
+{# ---------- موزّع الأحداث ----------
+   مصدر واحد لكل الأحداث: `window.BY.track` (طابور من الخادم، راجع analytics.py)
+   و`window.byTrack(name, params)` للأحداث التي تقع في المتصفح.
+   كل حدث يُرسَل إلى dataLayer دائماً، وإلى المزوّدين الموجودين فعلاً —
+   فلا يكسر غيابُ أحدهم إرسال الباقي. #}
+<script nonce="{{ csp_nonce }}">
+(function(){
+  window.dataLayer = window.dataLayer || [];
+  // ترجمة أسمائنا الداخلية إلى الأحداث القياسية عند كل مزوّد. ما ليس في
+  // الجدول يُرسَل كحدث مخصّص — فإضافة حدث جديد لا تتطلب تعديل هذا الملف.
+  var META = {sign_up:'CompleteRegistration', view_pricing:'ViewContent',
+              subscribe_intent:'InitiateCheckout', subscribe_submit:'AddPaymentInfo',
+              purchase:'Purchase'};
+  var TT   = {sign_up:'CompleteRegistration', view_pricing:'ViewContent',
+              subscribe_intent:'InitiateCheckout', subscribe_submit:'AddPaymentInfo',
+              purchase:'CompletePayment'};
+
+  function fire(name, params){
+    if (!name) return;
+    params = params || {};
+    try { window.dataLayer.push(Object.assign({event: name}, params)); } catch (e) {}
+    try { if (window.gtag) window.gtag('event', name, params); } catch (e) {}
+    try {
+      if (window.fbq) {
+        var m = {};
+        if (params.value != null) { m.value = params.value; m.currency = params.currency || 'EGP'; }
+        if (params.plan) m.content_name = params.plan;
+        if (META[name]) window.fbq('track', META[name], m);
+        else window.fbq('trackCustom', name, m);
+      }
+    } catch (e) {}
+    try {
+      if (window.ttq) {
+        var t = {};
+        if (params.value != null) { t.value = params.value; t.currency = params.currency || 'EGP'; }
+        if (params.plan) t.content_name = params.plan;
+        window.ttq.track(TT[name] || name, t);
+      }
+    } catch (e) {}
+  }
+
+  window.byTrack = fire;
+
+  // الطابور القادم من الخادم (تسجيل، إنشاء بوت، دفعة مُعتمدة…)
+  try {
+    var q = (window.BY && window.BY.track) || [];
+    for (var i = 0; i < q.length; i++) fire(q[i].event, q[i].params);
+  } catch (e) {}
+
+  // ضغط زرّ واتساب — مندوب على المستند فيغطّي الترويسة والتذييل وأي رابط
+  // يضيفه React لاحقاً، بلا تعديل في الواجهة.
+  document.addEventListener('click', function(ev){
+    var a = ev.target && ev.target.closest && ev.target.closest('a[href*="wa.me"]');
+    if (a) fire('whatsapp_click', {});
+  }, true);
+})();
+</script>
+{% endif %}

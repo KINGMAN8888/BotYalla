@@ -54,6 +54,7 @@ import email_campaigns as EC
 import accounts as ACC
 import urllib.request as _ureq
 import legal_content as LEGAL
+import analytics as AN
 from xml.sax.saxutils import escape as _xesc
 import time as _time
 import logging
@@ -284,16 +285,37 @@ def _email_gate():
 # يحقنه مهاجم لن يحمله ولن يعمل. أما `style-src` فيبقى 'unsafe-inline' لأن
 # React يكتب أنماطاً في خاصية style ولا سبيل لتمرير nonce إليها.
 # `img-src` يسمح بـ https: لأن صور الترحيب والمنتجات روابط يضعها أصحاب البوتات.
-_CSP = ("default-src 'self'; "
-        "script-src 'self' 'nonce-{n}'; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com; "
-        "img-src 'self' data: https:; "
-        "connect-src 'self'; "
-        "form-action 'self'; "
-        "base-uri 'self'; "
-        "object-src 'none'; "
-        "frame-ancestors 'none'")
+_CSP_BASE = {
+    "default-src":     ["'self'"],
+    "script-src":      ["'self'", "'nonce-{n}'"],
+    "style-src":       ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+    "font-src":        ["'self'", "https://fonts.gstatic.com"],
+    "img-src":         ["'self'", "data:", "https:"],
+    "connect-src":     ["'self'"],
+    "form-action":     ["'self'"],
+    "base-uri":        ["'self'"],
+    "object-src":      ["'none'"],
+    "frame-ancestors": ["'none'"],
+}
+
+def _build_csp():
+    """السياسة = الأساس أعلاه + مصادر أدوات القياس **المضبوطة وحدها**.
+
+    بلا أداة مضبوطة تخرج السياسة حرفياً كما كانت قبل إضافة القياس. وكل أداة
+    تفتح نطاقاتها هي فقط (راجع analytics.csp_sources) — فضبط Clarity وحده لا
+    يفتح نطاقات فيسبوك. ⚠️ لا تُضِف 'unsafe-inline' إلى script-src أبداً:
+    كل سكربتاتنا (وGTM) تحمل nonce، وفتح inline يُبطل حماية REVIEW.md §3.1."""
+    d = {k: list(v) for k, v in _CSP_BASE.items()}
+    for directive, srcs in AN.csp_sources().items():
+        cur = d.setdefault(directive, [])
+        for s in srcs:
+            if s not in cur:
+                cur.append(s)
+    return "; ".join(f"{k} {' '.join(v)}" for k, v in d.items())
+
+# تُبنى مرة عند الإقلاع: المعرّفات من البيئة ولا تتغيّر أثناء التشغيل، وإعادة
+# البناء في كل طلب تكلفة بلا فائدة. تغيير `.env` يحتاج إعادة تشغيل الخدمة.
+_CSP = _build_csp()
 
 @app.before_request
 def _csp_nonce():
@@ -316,7 +338,35 @@ def _security_headers(resp):
 
 @app.context_processor
 def _nonce_ctx():
-    return {"csp_nonce": getattr(g, "nonce", "")}
+    # `an` = معرّفات أدوات القياس للقالب _analytics.html. فارغة كلها ⇒ لا يُطبع
+    # سطر واحد من سكربتات التتبّع.
+    return {"csp_nonce": getattr(g, "nonce", ""), "an": AN.ids()}
+
+def _track_events():
+    """أحداث القياس التي ستُطلق على هذه الصفحة — تدخل الحمولة كـ`BY.track`.
+
+    مصدران: طابور الجلسة (تسجيل، إنشاء بوت، نيّة دفع…)، و«تحويل مؤكَّد لم
+    يُبلَّغ به» المخزّن على حساب المستخدم. الثاني موجود لأن اعتماد الدفعة يقع في
+    جلسة الأدمن لا العميل، فلا سبيل لإطلاق `purchase` لحظتها.
+
+    `pop_setting` تقرأ وتحذف في معاملة واحدة، فتبويبان مفتوحان لا يضاعفان
+    التحويل. وأي خطأ هنا يُبتلع: القياس لا يُسقط صفحة على مستخدم أبداً."""
+    if not AN.configured():
+        return []
+    events = AN.drain(session)
+    u = uid()
+    if u:
+        try:
+            raw = db.pop_setting(u, "track_purchase")
+            if raw:
+                d = json.loads(raw)
+                events.append({"event": "purchase",
+                               "params": {"plan": d.get("plan"), "cycle": d.get("cycle"),
+                                          "value": d.get("value"), "currency": "EGP",
+                                          "transaction_id": str(d.get("id", ""))}})
+        except Exception:
+            log.warning("could not read the pending purchase conversion", exc_info=True)
+    return events
 
 def _static_v(filename):
     """رابط ملف ثابت بإصدار من تاريخ تعديله (`?v=`). nginx يقدّم /static/ بـ
@@ -435,6 +485,16 @@ def _rate_limited(ip, limit=8, window=300, bucket="login"):
     cnt += 1
     _login_attempts[key] = (cnt, first)
     return cnt > limit
+
+# حدّ التسجيل لكل IP في 10 دقائق — مكان واحد لأنه مطبَّق على مسارين (النموذج
+# العادي ومسار جوجل/فيسبوك).
+#
+# ⚠️ لماذا 20 لا 5: شبكات الموبايل المصرية تستخدم CGNAT، فمئات المستخدمين خلف
+# IP واحد. بحدّ 5 تكفي خمسة تسجيلات من فودافون لتُغلق الصفحة أمام الباقين —
+# وفي ذروة حملة إعلانية هذا يعني دفع ثمن نقرات ثم رفض أصحابها. خطر إساءة
+# الاستخدام هنا محدود: التسجيل لا يكلّف المنصة مالاً، والبريد يُؤكَّد لاحقاً،
+# و`limit_req` في nginx هو الحاجز الخارجي ضد الإغراق الآلي.
+_REG_LIMIT, _REG_WINDOW = 20, 600
 
 def login_required(f):
     @functools.wraps(f)
@@ -612,6 +672,10 @@ def _finish_signup(user_id, d, lang, news):
     ref_code = session.pop("ref", None)      # التُقط من ?ref= على أي صفحة
     if ref_code:
         db.attach_referral(user_id, ref_code)
+    # حدث التحويل الأساسي للإعلانات. يُطلق على الصفحة التالية لأن كل مسارات
+    # التسجيل تنتهي بـ redirect (اللوحة أو تأكيد البريد).
+    AN.queue(session, "sign_up", method=("social" if d.get("oauth") else "password"),
+             src=src or None)
     notify_admins(f"🆕 تسجيل مستخدم جديد / New user: {urow['username']} (#{user_id})"
                   + (f" — عبر إحالة {ref_code}" if ref_code else ""))
     if db.email_gate(urow):
@@ -627,7 +691,7 @@ def register():
     lang = session.get("lang", i18n.DEFAULT)
     if request.method == "POST":
         # التسجيل مُحدَّد كالدخول: بدونه يمكن إغراق المنصة بحسابات آلياً.
-        if _rate_limited(request.remote_addr or "?", limit=5, window=600, bucket="register"):
+        if _rate_limited(request.remote_addr or "?", limit=_REG_LIMIT, window=_REG_WINDOW, bucket="register"):
             flash("محاولات كثيرة. انتظر قليلاً." if lang != "en" else "Too many attempts. Please wait.", "error")
             return react_page("register", "register", _auth_props())
         d, errs = _signup_check(request.form, lang)
@@ -939,7 +1003,7 @@ def register_complete():
         return redirect(url_for("register"))
     view = {"provider": pend["p"], "email": pend["email"], "name": pend["name"]}
     if request.method == "POST":
-        if _rate_limited(request.remote_addr or "?", limit=5, window=600, bucket="register"):
+        if _rate_limited(request.remote_addr or "?", limit=_REG_LIMIT, window=_REG_WINDOW, bucket="register"):
             flash("محاولات كثيرة. انتظر قليلاً." if lang != "en" else "Too many attempts. Please wait.", "error")
             return redirect(url_for("register_complete"))
         ident = db.get_identity(pend["p"], pend["sub"])
@@ -955,6 +1019,7 @@ def register_complete():
             if not err:
                 db.add_identity(pend["p"], pend["sub"], user_id, d["email"])
                 db.set_setting(user_id, "pw_set", "0")      # بلا كلمة مرور — يضبطها بـ«نسيت كلمة المرور»
+                d["oauth"] = pend["p"]                      # لتمييز مصدر التسجيل في حدث القياس
                 session.pop("oauth_new", None)
                 return _finish_signup(user_id, d, lang, request.form.get("email_news") == "1")
             errs[{"email_taken": "email", "phone_taken": "phone"}.get(err, "username")] = ACC.msg(err, lang)
@@ -1238,6 +1303,10 @@ def bot_create():
             flash((f"تم إنشاء بوت واتساب «{name}» 🎉 — تأكد أن Webhook في Meta يشير إلى /wh/whatsapp ثم شغّله."
                    if session.get("lang") != "en" else
                    f"WhatsApp bot «{name}» created 🎉 — point the Meta webhook to /wh/whatsapp, then start it."), "ok")
+        # ★ لحظة التفعيل الحقيقية. `sign_up` وحده لا يعني شيئاً: مستخدم سجّل ولم
+        # ينشئ بوتاً لم يحدث معه شيء. النسبة bot_created/sign_up هي المؤشر الذي
+        # يُحكم به على جودة الحملة — لا عدد التسجيلات.
+        AN.queue(session, "bot_created", channel=channel, template=template)
         # صفحة البوت نفسها لا اللوحة: فيها رابطه ورمز QR — أول ما يحتاجه صاحبه
         return redirect(url_for("bot_detail", bot_id=new_id, new=1))
     except Exception as e:
@@ -2255,6 +2324,7 @@ def owner_status(bot_id):
 def pricing():
     sub = db.get_subscription(uid()) if uid() else {"plan":"free","status":"active"}
     lang = session.get("lang", i18n.DEFAULT)
+    AN.queue(session, "view_pricing")
     return react_page("pricing", "pricing_title",
                       {"plans": [dict(p, name=plans.plan_name(p["id"], lang))
                                  for p in priced_plans(lang)], "sub": sub})
@@ -2275,6 +2345,10 @@ def subscribe(plan_id):
     # معاينة نقل الرصيد قبل الدفع — بنفس ما تستعمله `finalize_payment` عند
     # الاعتماد (سعر القائمة للدورة). تقديرية: الأيام تُحسب فعلياً يوم الاعتماد.
     _carry = db.carry_over_days(uid(), plan_id, _pr["list_price"], plans.cycle_days(cyc))
+    # بداية السلة: القيمة من الخادم (`_plan_pricing`) لا من الواجهة — نفس المبدأ
+    # المطبَّق على الدفع نفسه، فلا رقم في تقارير الإعلانات يخالف ما يدفعه العميل.
+    AN.queue(session, "subscribe_intent", plan=plan_id, cycle=cyc,
+             value=float(_pr["price"]), currency="EGP")
     return react_page("subscribe", "pay_title",
                       {"planId": plan_id, "plan": dict(p, id=plan_id, **_pr), "plat": plat,
                        "cycle": cyc, "days": plans.cycle_days(cyc),
@@ -2380,6 +2454,10 @@ def subscribe_pay(plan_id):
     flash(("✅ تم استلام إثبات الدفع (#{}). سيتم تفعيل اشتراكك بعد المراجعة والموافقة."
            if lang!="en" else
            "✅ Payment proof received (#{}). Your subscription will activate after review and approval.").format(pid), "ok")
+    # ليس `purchase`: الاعتماد يدوي وقد يُرفض. `purchase` يُطلق عند التفعيل
+    # الفعلي (راجع `_track_purchase`)، وهذا الحدث الوسيط يقيس نيّة الدفع.
+    AN.queue(session, "subscribe_submit", plan=plan_id, cycle=q["cycle"],
+             value=float(q["total"]), currency="EGP")
     return redirect(url_for("billing"))
 
 @app.route("/billing")
@@ -3892,7 +3970,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
 
     payload = {
         "view": view, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
-        "csrf": _csrf_token(),
+        "csrf": _csrf_token(), "track": _track_events(),
         "user": {"name": session.get("uname"), "role": role,
                  # لمطالبة لطيفة بإضافة إيميل — بدونه لا استرجاع للحساب
                  "hasEmail": bool((getattr(g, "user", None) or {}).get("email")),
@@ -4143,7 +4221,8 @@ def _public_payload(page, lang):
     contact.append({"l": "youssefalsherief.tech", "h": "https://youssefalsherief.tech/"})
     return {
         "page": page, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
-        "year": _dt.date.today().year, "email": email,
+        "year": _dt.date.today().year, "email": email, "track": _track_events(),
+        "social": AN.social_links(),
         "t": {k: i18n.t(k, lang) for k in i18n.T
               if k.startswith(_PUBLIC_T_PREFIXES) or k in _PUBLIC_T_EXTRA},
         "icons": {n: _icon_svg(n) for n in _LANDING_ICONS},
@@ -4212,12 +4291,19 @@ def _home_jsonld(lang, plist, faq):
                                        "price": f"{float(p['price']):.2f}", "priceCurrency": "EGP",
                                        "billingDuration": "P1M", "unitText": "MONTH"}
         offers.append(o)
+    # `sameAs` يربط الكيان بحساباته الرسمية، فيعرف جوجل أن الصفحات كلها لجهة
+    # واحدة (لوحة المعرفة وبحث العلامة). يُحذف كلياً إن لم تُضبط `SOCIAL_LINKS`:
+    # حقل فارغ أسوأ من غائب.
+    org = {"@type": "Organization", "@id": base + "/#org", "name": "BotYalla", "url": base + "/",
+           "logo": base + _static_v("brand/icon-512.png"), "email": email,
+           "founder": {"@type": "Person", "name": "Youssef Alsherief",
+                       "url": "https://youssefalsherief.tech/"},
+           "contactPoint": [contact]}
+    same_as = [s["url"] for s in AN.social_links()]
+    if same_as:
+        org["sameAs"] = same_as
     return {"@context": "https://schema.org", "@graph": [
-        {"@type": "Organization", "@id": base + "/#org", "name": "BotYalla", "url": base + "/",
-         "logo": base + _static_v("brand/icon-512.png"), "email": email,
-         "founder": {"@type": "Person", "name": "Youssef Alsherief",
-                     "url": "https://youssefalsherief.tech/"},
-         "contactPoint": [contact]},
+        org,
         {"@type": "WebSite", "@id": base + "/#site", "url": base + "/", "name": "BotYalla",
          "inLanguage": ["ar", "en"], "publisher": {"@id": base + "/#org"}},
         {"@type": "SoftwareApplication", "name": "BotYalla",

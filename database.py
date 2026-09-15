@@ -1350,6 +1350,17 @@ def get_setting(user_id, key, default=None):
         r = c.execute("SELECT value FROM settings WHERE user_id=? AND key=?", (user_id, key)).fetchone()
         return r[0] if r else default
 
+def pop_setting(user_id, key, default=None):
+    """يقرأ المفتاح ويحذفه في **معاملة واحدة** — استعمال لمرة واحدة.
+
+    القراءة ثم الحذف على اتصالين يسمحان لطلبين متزامنين (تبويبان مفتوحان) بقراءة
+    نفس القيمة قبل حذفها، فيُطلَق الحدث مرتين ويتضاعف تحويلٌ واحد في تقارير
+    الإعلانات. هنا `DELETE … RETURNING` يضمن أن رابحاً واحداً فقط يحصل عليها."""
+    with get_conn() as c:
+        r = c.execute("DELETE FROM settings WHERE user_id=? AND key=? RETURNING value",
+                      (user_id, key)).fetchone()
+        return r[0] if r else default
+
 
 # ---------- platform settings (global) ----------
 def set_platform(key, value):
@@ -1545,6 +1556,17 @@ def finalize_payment(pid, status):
              "promo=%s referral=%s",
              row["id"], status, row["user_id"], row["plan"], row["amount"],
              row.get("expires_at"), row.get("carried_days", 0), promo, ref)
+    # تحويل مؤكَّد لم يُبلَّغ به بعد. هنا لا في مسار الويب وحده لأن الاعتماد يأتي
+    # أيضاً من زرّ تليجرام — ولأن الاعتماد يقع في **جلسة الأدمن** لا العميل، فلا
+    # سبيل لإطلاق الحدث لحظتها. app.py يلتقطه ويمسحه عند أول صفحة يفتحها العميل
+    # (راجع `_claim_purchase`). بعد الـcommit: لا نعلن تحويلاً لم يثبت.
+    if status == "approved" and row["plan"] != WALLET_PLAN and not addon_bot_id(row["plan"]):
+        try:
+            set_setting(row["user_id"], "track_purchase", json.dumps(
+                {"id": row["id"], "plan": row["plan"], "value": float(row["amount"] or 0),
+                 "cycle": row.get("billing_cycle") or "monthly"}))
+        except Exception:
+            log.warning("could not queue the purchase conversion for payment #%s", row["id"])
     return row
 
 def img_hash_seen(img_hash, exclude_id=None):

@@ -105,6 +105,8 @@
 <script nonce="{{ csp_nonce }}">document.documentElement.className += " js";</script>
 <script nonce="{{ csp_nonce }}">window.BY = {{ by_json|safe }};</script>
 {% if seo.jsonld %}<script nonce="{{ csp_nonce }}" type="application/ld+json">{{ seo.jsonld|safe }}</script>{% endif %}
+{# القياس بعد window.BY مباشرة: موزّع الأحداث يقرأ BY.track، فترتيبهما مقصود #}
+{% include "_analytics.html" %}
 </head>
 <body>
 

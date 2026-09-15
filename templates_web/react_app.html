@@ -19,6 +19,10 @@
 {% if needs_chart %}<script nonce="{{ csp_nonce }}" defer src="{{ static_v('chart.min.js') }}"></script>{% endif %}
 <script nonce="{{ csp_nonce }}">document.documentElement.className += " js";</script>
 <script nonce="{{ csp_nonce }}">window.BY = {{ by_json|safe }};</script>
+{# القياس بعد window.BY مباشرة: موزّع الأحداث يقرأ BY.track، فترتيبهما مقصود.
+   داخل اللوحة أيضاً لا في الصفحات العامة وحدها — لأن أهم حدثين (`bot_created`
+   و`purchase`) يقعان هنا بعد الدخول. #}
+{% include "_analytics.html" %}
 <style nonce="{{ csp_nonce }}">
   html{background:#05070D;}
   body{margin:0;font-family:{% if lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}

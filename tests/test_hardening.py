@@ -86,14 +86,28 @@ class RateLimitTests(unittest.TestCase):
         web._last_prune = 0
 
     def test_registration_is_throttled(self):
+        """الحدّ موجود، وعند القيمة المعلنة بالضبط — لا أقلّ منها ولا بلا حدّ.
+
+        يُقاس من `web._REG_LIMIT` لا من رقم مكتوب هنا: الحدّ رُفع من 5 إلى 20
+        لأن شبكات الموبايل المصرية تستعمل CGNAT (مئات المستخدمين خلف IP واحد)،
+        وتثبيت الرقم في الاختبار يعني أن أي ضبط لاحق إمّا يكسره بلا سبب حقيقي
+        أو يمرّ بلا حارس. والطرفان مفحوصان: ما دون الحدّ يمرّ وما فوقه يُحجب —
+        فلا يصير «الحدّ» صفراً (فيطرد مستخدمين شرعيين) ولا ما لا نهاية."""
         c = _client()
-        blocked = 0
-        for i in range(8):
+        limit = web._REG_LIMIT
+        blocked_before = blocked_after = 0
+        for i in range(limit + 3):
             r = c.post("/register", data={"username": f"zz{i}", "password": TEST_PW,
                                           "csrf_token": "tk"}, follow_redirects=True)
             if "انتظر قليلاً" in r.get_data(as_text=True):
-                blocked += 1
-        self.assertGreater(blocked, 0, "التسجيل بلا حدّ يسمح بإغراق المنصة بحسابات")
+                if i < limit:
+                    blocked_before += 1
+                else:
+                    blocked_after += 1
+        self.assertEqual(blocked_before, 0,
+                         "الحجب قبل بلوغ الحدّ يطرد مستخدمين شرعيين خلف CGNAT")
+        self.assertGreater(blocked_after, 0,
+                           "التسجيل بلا حدّ يسمح بإغراق المنصة بحسابات")
 
     def test_the_promo_endpoint_is_throttled(self):
         db.create_user("promoprobe", auth.hash_password(TEST_PW))
