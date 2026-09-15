@@ -49,7 +49,7 @@ class _EnvTestCase(unittest.TestCase):
     """يضبط متغيّرات البيئة ويعيدها كما كانت — الوحدة تقرأها عند كل نداء."""
 
     KEYS = ("GTM_ID", "GA4_ID", "META_PIXEL_ID", "TIKTOK_PIXEL_ID", "CLARITY_ID",
-            "SOCIAL_LINKS")
+            "GTM_MANAGES", "SOCIAL_LINKS")
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in self.KEYS}
@@ -155,6 +155,37 @@ class InjectionTests(_EnvTestCase):
         html = _client().get("/").get_data(as_text=True)
         self.assertIn("GTM-TEST01", html)
         self.assertIn("setAttribute('nonce'", html)
+
+    def test_every_configured_pixel_fires_even_with_gtm(self):
+        """معرّف مضبوط = الأداة تعمل. حتى مع GTM.
+
+        كان السلوك السابق: ضبط `GTM_ID` يوقف حقن بقية البكسلات لتُدار من داخل
+        الحاوية. النتيجة أن من يضبط خمسة معرّفات يقيس واحداً — وهو لا يعرف
+        السبب لأن كل شيء يبدو مضبوطاً. المعرّف نيّةٌ صريحة بالقياس الآن."""
+        os.environ.update({"GTM_ID": "GTM-TEST01", "GA4_ID": "G-TEST01",
+                           "META_PIXEL_ID": "123456789012345",
+                           "TIKTOK_PIXEL_ID": "CTEST01", "CLARITY_ID": "abcd123456"})
+        html = _client().get("/").get_data(as_text=True)
+        for needle in ("GTM-TEST01", "G-TEST01", "123456789012345",
+                       "CTEST01", "abcd123456"):
+            self.assertIn(needle, html, f"{needle} مضبوط ولم يُحقن — لن يقيس شيئاً")
+
+    def test_gtm_manages_suppresses_only_the_named_tool(self):
+        """`GTM_MANAGES` يمنع الازدواج لمن أنشأ الوسم داخل الحاوية — وحده."""
+        os.environ.update({"GTM_ID": "GTM-TEST01", "GA4_ID": "G-TEST01",
+                           "META_PIXEL_ID": "123456789012345",
+                           "GTM_MANAGES": "meta"})
+        html = _client().get("/").get_data(as_text=True)
+        self.assertNotIn("123456789012345", html, "حُقن مرتين: مباشرةً ومن الحاوية")
+        self.assertIn("G-TEST01", html, "أداة غير مذكورة في GTM_MANAGES توقّفت")
+        # لكن نطاق ميتا يبقى مفتوحاً: وسم الحاوية يحتاجه وإلا حُجب بصمت.
+        self.assertIn("connect.facebook.net", web._build_csp())
+
+    def test_gtm_manages_is_ignored_without_a_container(self):
+        """بلا `GTM_ID` لا حاوية تتولّى شيئاً — فإيقاف الحقن يعني توقّف القياس."""
+        os.environ.update({"META_PIXEL_ID": "123456789012345", "GTM_MANAGES": "meta"})
+        self.assertEqual(AN.gtm_manages(), set())
+        self.assertIn("123456789012345", _client().get("/").get_data(as_text=True))
 
     def test_the_dispatcher_is_present_for_client_side_events(self):
         self.assertIn("window.byTrack", self._page())

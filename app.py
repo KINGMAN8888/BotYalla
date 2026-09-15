@@ -338,9 +338,10 @@ def _security_headers(resp):
 
 @app.context_processor
 def _nonce_ctx():
-    # `an` = معرّفات أدوات القياس للقالب _analytics.html. فارغة كلها ⇒ لا يُطبع
-    # سطر واحد من سكربتات التتبّع.
-    return {"csp_nonce": getattr(g, "nonce", ""), "an": AN.ids()}
+    # `an` = ما **يُحقن مباشرةً** لا كل ما هو مضبوط: أداة أُنشئ وسمها داخل حاوية
+    # GTM (`GTM_MANAGES`) تخرج بمعرّف فارغ فلا تُحقن مرتين. و`ids()` تبقى كاملة
+    # في CSP لأن وسم الحاوية يحتاج نطاقه مفتوحاً هو الآخر.
+    return {"csp_nonce": getattr(g, "nonce", ""), "an": AN.inject()}
 
 def _track_events():
     """أحداث القياس التي ستُطلق على هذه الصفحة — تدخل الحمولة كـ`BY.track`.
