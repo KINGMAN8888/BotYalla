@@ -3,14 +3,14 @@ import time
 import os
 import sys
 
-# Append the project path to sys.path so we can import auth
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from auth import hash_password
 
 DB_PATH = 'botyalla.db'
 
-def add_meta_reviewer():
-    username = 'meta_reviewer@botyalla.com'
+def reset_meta_reviewer():
+    target_usernames = ['meta_reviewer', 'meta_reviewer@botyalla.com']
+    final_username = 'meta_reviewer@botyalla.com'
     password = 'MetaReview2024!'
     
     pw_hash = hash_password(password)
@@ -20,40 +20,45 @@ def add_meta_reviewer():
     c = conn.cursor()
     
     try:
-        # 1. Ensure the user exists and is an admin
-        c.execute("SELECT id FROM users WHERE username = ?", (username,))
-        row = c.fetchone()
+        # 1. Delete existing users that match either username to avoid conflicts
+        for uname in target_usernames:
+            c.execute("SELECT id FROM users WHERE username = ?", (uname,))
+            row = c.fetchone()
+            if row:
+                user_id = row[0]
+                print(f"Deleting conflicting user '{uname}' (ID: {user_id})...")
+                c.execute("DELETE FROM users WHERE id = ?", (user_id,))
+                c.execute("DELETE FROM settings WHERE user_id = ?", (user_id,))
         
-        if row:
-            user_id = row[0]
-            print(f"User {username} exists (ID: {user_id}). Updating role to admin...")
-            c.execute("UPDATE users SET role = 'admin', pw_hash = ? WHERE id = ?", (pw_hash, user_id))
-        else:
-            print(f"Creating new user {username} with admin role...")
-            c.execute(
-                "INSERT INTO users (username, pw_hash, role, is_blocked, created_at) VALUES (?, ?, ?, ?, ?)",
-                (username, pw_hash, 'admin', 0, now)
-            )
-            user_id = c.lastrowid
-            
-        # 2. Verify the email by adding to settings
-        print("Verifying email...")
+        # 2. Create the fresh admin user
+        print(f"Creating fresh user '{final_username}' with admin role...")
         c.execute(
-            "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
-            (user_id, 'email_verified_at', str(now))
+            "INSERT INTO users (username, pw_hash, role, is_blocked, created_at) VALUES (?, ?, ?, ?, ?)",
+            (final_username, pw_hash, 'admin', 0, now)
         )
+        new_user_id = c.lastrowid
         
-        # 3. Remove any verify_required flag if it exists just to be safe
-        c.execute("DELETE FROM settings WHERE user_id = ? AND key = 'verify_required'", (user_id,))
+        # 3. Add email verification and actual email to settings
+        settings_to_insert = [
+            (new_user_id, 'email', final_username),
+            (new_user_id, 'email_verified_at', str(now))
+        ]
         
+        for user_id, key, value in settings_to_insert:
+            c.execute(
+                "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+                (user_id, key, value)
+            )
+            
         conn.commit()
-        print(f"SUCCESS! {username} is now an ADMIN and their email is VERIFIED.")
-        print(f"Password: {password}")
+        print(f"✅ SUCCESS! '{final_username}' is now recreated as a clean ADMIN with verified email.")
+        print(f"🔑 Password: {password}")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Error: {e}")
+        conn.rollback()
     finally:
         conn.close()
 
 if __name__ == '__main__':
-    add_meta_reviewer()
+    reset_meta_reviewer()
