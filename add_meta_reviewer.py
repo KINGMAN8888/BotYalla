@@ -20,22 +20,38 @@ def add_meta_reviewer():
     c = conn.cursor()
     
     try:
+        # 1. Ensure the user exists and is an admin
+        c.execute("SELECT id FROM users WHERE username = ?", (username,))
+        row = c.fetchone()
+        
+        if row:
+            user_id = row[0]
+            print(f"User {username} exists (ID: {user_id}). Updating role to admin...")
+            c.execute("UPDATE users SET role = 'admin', pw_hash = ? WHERE id = ?", (pw_hash, user_id))
+        else:
+            print(f"Creating new user {username} with admin role...")
+            c.execute(
+                "INSERT INTO users (username, pw_hash, role, is_blocked, created_at) VALUES (?, ?, ?, ?, ?)",
+                (username, pw_hash, 'admin', 0, now)
+            )
+            user_id = c.lastrowid
+            
+        # 2. Verify the email by adding to settings
+        print("Verifying email...")
         c.execute(
-            "INSERT INTO users (username, pw_hash, role, is_blocked, created_at) VALUES (?, ?, ?, ?, ?)",
-            (username, pw_hash, 'admin', 0, now)
+            "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+            (user_id, 'email_verified_at', str(now))
         )
+        
+        # 3. Remove any verify_required flag if it exists just to be safe
+        c.execute("DELETE FROM settings WHERE user_id = ? AND key = 'verify_required'", (user_id,))
+        
         conn.commit()
-        print(f"✅ User '{username}' created successfully with full ADMIN privileges.")
-        print(f"🔑 Password: {password}")
-    except sqlite3.IntegrityError:
-        print(f"⚠️ User '{username}' already exists. Updating role to admin and resetting password...")
-        c.execute(
-            "UPDATE users SET role = 'admin', pw_hash = ? WHERE username = ?", 
-            (pw_hash, username)
-        )
-        conn.commit()
-        print(f"✅ User '{username}' updated to ADMIN successfully.")
-        print(f"🔑 New Password: {password}")
+        print(f"SUCCESS! {username} is now an ADMIN and their email is VERIFIED.")
+        print(f"Password: {password}")
+    except Exception as e:
+        print(f"Error: {e}")
     finally:
         conn.close()
 
