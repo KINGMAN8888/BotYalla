@@ -219,6 +219,23 @@ def offline_reply(text, lang="ar"):
             "أقدر أساعدك في كل حاجة عن BotYalla: بتعمل إيه، الباقات والأسعار، أو إزاي تبدأ. تحب تعرف إيه؟"), btns
 
 
+def official_bot():
+    """صفّ بوت «مساعد BotYalla الرسمي»: أقدم بوت يملكه حساب إدارة ومفعّل عليه
+    `platform_kb` ويرد بغير الفلو. بوت المنصة على تليجرام يخدم عملاءه بنفس الصف —
+    ذكاء وترحيب وتقييم وصندوق وارد وتنبيهات واحدة للقناتين. None = لا مساعد رسمي بعد."""
+    with db.get_conn() as c:
+        rows = c.execute(
+            "SELECT b.id FROM bots b JOIN users u ON u.id=b.owner_id "
+            "WHERE u.role IN ('admin','support') AND json_extract(b.config_json,'$.platform_kb') IN (1, 'true') "
+            "AND COALESCE(json_extract(b.config_json,'$.response_mode'),'flow') <> 'flow' "
+            "ORDER BY b.id").fetchall()
+    for r in rows:
+        row = db.get_bot(r[0])
+        if row:
+            return dict(row)
+    return None
+
+
 def welcome(lang="ar"):
     return WELCOME.get(lang, WELCOME["ar"])
 

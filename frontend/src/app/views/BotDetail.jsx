@@ -436,6 +436,16 @@ function BrainCard({ bot, ai, cfg }) {
                      placeholder={t("brain_starter_ph")} maxLength={20} />
             ))}
           </div>
+          <label className="mt-4 flex cursor-pointer items-start gap-3 text-[13px] leading-relaxed text-ink-2">
+            <input type="checkbox" name="ai_rating" value="1" defaultChecked={cfg.ai_rating !== false} className="mt-1" />
+            <span>{t("brain_rating")}</span>
+          </label>
+          {(ai.ratings || {}).total > 0 && (
+            <p className="mt-2 mb-0 text-[12.5px] font-bold text-au-teal">
+              {fill("brain_ratings", { n: num(ai.ratings.total), a: num(ai.ratings.great),
+                                       b: num(ai.ratings.good), c: num(ai.ratings.bad) })}
+            </p>
+          )}
           <p className="mt-4 mb-0 flex items-start gap-2 text-[12px] leading-relaxed text-ink-3">
             <Icon name="shield" size={14} className="mt-0.5 shrink-0 text-au-teal" />{t("brain_policy")}
           </p>

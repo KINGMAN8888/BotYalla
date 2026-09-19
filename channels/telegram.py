@@ -2,6 +2,10 @@ from .base import Channel
 from telegram import Bot, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 class TelegramChannel(Channel):
+    # file_id يُحفظ لكل (ملف، بوت). بوت المنصة يخدم صفّ بوت المساعد الرسمي (واتساب) فمفتاح
+    # الحفظ نفسه يحمل media_id واتساب — قناته تضبط False فترفع الملف كل مرة ولا تلمس المرجع.
+    cache_refs = True
+
     def __init__(self, bot: Bot):
         self.bot = bot
 
@@ -40,7 +44,7 @@ class TelegramChannel(Channel):
         kb = markup if markup is not None else (
             ReplyKeyboardMarkup([[o] for o in options], resize_keyboard=True, one_time_keyboard=True)
             if options else ReplyKeyboardRemove())
-        ref = db.get_asset_ref(asset["id"], bot_id)
+        ref = db.get_asset_ref(asset["id"], bot_id) if self.cache_refs else None
         for _ in (0, 1):
             src = ref or open(asset_store.path_of(asset["fname"]), "rb")
             try:
@@ -52,7 +56,7 @@ class TelegramChannel(Channel):
                 else:
                     m = await self.bot.send_photo(photo=src, **kw)
                     fid = m.photo[-1].file_id if m.photo else None
-                if fid and not ref:
+                if fid and not ref and self.cache_refs:
                     db.set_asset_ref(asset["id"], bot_id, fid)
                 if long_caption:
                     await self.bot.send_message(chat_id=chat_id, text=caption, reply_markup=kb)

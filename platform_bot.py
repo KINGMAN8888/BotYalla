@@ -11,6 +11,7 @@ import plans
 import i18n
 import mailer
 import support_desk
+import inbox_relay
 
 log = logging.getLogger("platform_bot")
 
@@ -86,13 +87,39 @@ async def on_ticket_close(update, ctx):
             pass
 
 
+async def on_conv_back(update, ctx):
+    """زرّ «رجّع المحادثة للبوت» تحت تنبيه محادثة — لمن يحق له الرد عليها وحده."""
+    q = update.callback_query
+    try:
+        _, bot_id, peer = q.data.split(":", 2)
+        bot_id = int(bot_id)
+    except (ValueError, AttributeError):
+        await q.answer(); return
+    if not inbox_relay.back_to_bot(bot_id, peer, q.from_user.id):
+        await q.answer("غير مصرّح / Not authorized", show_alert=True)
+        return
+    await q.answer("✅ البوت رجع يرد / Bot is back")
+    try:
+        await q.message.reply_text("🤖 البوت رجع يرد على المحادثة دي.")
+    except Exception:
+        pass
+
+
 async def on_admin_reply(update, ctx):
-    """Reply من الأدمن على تنبيه تذكرة (#T<id>) ← يُحفظ ويصل للعميل."""
+    """Reply على تنبيه: محادثة عميل (#C<bot>:<peer>) ← يصل العميل على قناته، أو تذكرة
+    (#T<id>) ← يُحفظ ويصل صاحبها. صلاحية كل نوع تُفحص داخله."""
     msg = update.message
-    if (msg is None or msg.from_user is None or msg.reply_to_message is None
-            or not _is_admin(msg.from_user.id)):
+    if msg is None or msg.from_user is None or msg.reply_to_message is None:
         return
     ref = msg.reply_to_message
+    conv = inbox_relay.parse(ref.text or ref.caption)
+    if conv:
+        # صاحب البوت (لا أدمن المنصة فقط) — inbox_relay.can_reply يفحص المرسل
+        ok, note = await inbox_relay.relay_reply(conv[0], conv[1], msg.from_user.id, msg.text or "")
+        await msg.reply_text(note)
+        return
+    if not _is_admin(msg.from_user.id):
+        return
     tid = support_desk.ticket_id_from(ref.text or ref.caption)
     body = (msg.text or "").strip()[:support_desk.BODY_MAX]
     if not tid or not body:
@@ -112,6 +139,44 @@ async def on_admin_reply(update, ctx):
         via.append("الإيميل")
     await msg.reply_text(f"✅ ردّك اتسجّل على #T{tid} وظهر للعميل في صفحة الدعم"
                          + (f" + {' و'.join(via)}" if via else "") + ".")
+
+# ---------------------------------------------------------- مساعد المنصة على تليجرام
+async def to_assistant(update, ctx, kind="text", text=None):
+    """يمرّر رسالة زائر بوت المنصة لـ«مساعد BotYalla الرسمي» (`platform_kb.official_bot`)
+    عبر المحرك نفسه: ذكاء · ترحيب · شكر وتقييم · STOP · صندوق وارد · تنبيه دعم بـ Reply.
+    يرجّع False لو لا مساعد رسمي مفعّل (فيبقى السلوك القديم)."""
+    import flow_engine, platform_kb
+    from channels.telegram import TelegramChannel
+    msg = update.message
+    if msg is None or msg.chat is None or msg.chat.type != "private":
+        return False
+    row = platform_kb.official_bot()
+    if not row:
+        return False
+    ch = TelegramChannel(ctx.bot)
+    ch.cache_refs = False
+    user = update.effective_user
+    await flow_engine.handle_message(row, ch, {
+        "id": str(msg.message_id), "peer": f"tg:{msg.chat.id}", "kind": kind,
+        "text": (text if text is not None else msg.text) or "",
+        "name": (user.full_name if user else "") or ""})
+    return True
+
+
+async def on_visitor_text(update, ctx):
+    """أي نص خاص ليس أمراً ولا Reply على تنبيه (#C/#T — لها on_admin_reply) يذهب للمساعد."""
+    msg = update.message
+    if msg is None or not msg.text:
+        return
+    ref = msg.reply_to_message
+    if ref is not None and (inbox_relay.parse(ref.text or ref.caption)
+                            or support_desk.ticket_id_from(ref.text or ref.caption)):
+        return
+    try:
+        await to_assistant(update, ctx)
+    except Exception:
+        log.exception("platform assistant failed")
+
 
 def stats_text():
     st = db.platform_stats()
@@ -167,12 +232,16 @@ def register_admin_commands(app: Application):
                 await update.message.reply_text(i18n.t("tg_link_bad", "ar"))
             return
         if not await guard(update):
-            await update.message.reply_text("👋 هذا بوت إدارة المنصة (للمالك فقط).")
+            # زائر عادي: مساعد BotYalla الرسمي يرحّب به (إن فُعّل)، وإلا الرسالة القديمة
+            src = ("/start " + args[0]) if args else "/start"
+            if not await to_assistant(update, ctx, kind="start", text=src):
+                await update.message.reply_text("👋 هذا بوت إدارة المنصة (للمالك فقط).")
             return
         await update.message.reply_text(
             "🛡️ أهلاً بك في لوحة إدارة BotYalla\n\n"
             "الأوامر:\n/stats — إحصائيات المنصة\n/pending — المدفوعات المعلّقة\n"
-            "/users — آخر المستخدمين\n/revenue — الإيرادات\n/help — المساعدة")
+            "/users — آخر المستخدمين\n/revenue — الإيرادات\n/help — المساعدة\n\n"
+            "💬 أي رسالة عادية تكتبها هنا يرد عليها مساعد BotYalla الرسمي — جرّبه كأنك عميل.")
 
     async def cmd_stats(update, ctx):
         if not await guard(update): return
@@ -237,6 +306,11 @@ def register_admin_commands(app: Application):
     app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CommandHandler(["revenue","sales"], cmd_revenue))
     app.add_handler(CommandHandler("help", cmd_start))
+    # آخر معالج في المجموعة 0: نص خاص عادي ← المساعد الرسمي
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE
+                                   & ~filters.REPLY, on_visitor_text))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE
+                                   & filters.REPLY, on_visitor_text), group=1)
 
 def register(app: Application):
     async def on_decision(update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -276,6 +350,7 @@ def register(app: Application):
         # إشعار المستخدم عبر بوتاته غير متاح هنا؛ الحالة تظهر في لوحته.
     app.add_handler(CallbackQueryHandler(on_decision, pattern=r"^pay_(approve|reject):"))
     app.add_handler(CallbackQueryHandler(on_ticket_close, pattern=r"^tk_close:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_conv_back, pattern=r"^cv_bot:\d+:(wa|tg):-?\d+$"))
     app.add_handler(MessageHandler(filters.TEXT & filters.REPLY & ~filters.COMMAND, on_admin_reply))
     register_admin_commands(app)
     # تحديثات managed_bot (ورسالة managed_bot_created) — مجموعة -1 مستقلة: المعالج

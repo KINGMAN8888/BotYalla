@@ -1361,9 +1361,10 @@ def bot_detail(bot_id):
                                       "limit": None if staff else plans.ai_setups_limit(plan_id)},
                            "replies": {"used": db.ai_usage_of(uid())["replies"], "limit": replies_limit},
                            "price": FE.ai_reply_price(), "wallet": db.wallet_balance(uid()),
-                           "hasKey": bool(db.get_platform("ai_key", "")),
+                           "hasKey": bool(ai.key_chain(db.get_platform)),
                            "modeAllowed": staff or bool(replies_limit),
                            "canOfficial": current_role() == "admin" and db.bot_owner_is_staff(bot_id),
+                           "ratings": db.rating_summary(bot_id),
                            "engine": _uses_engine(b)}},
                       title=b["name"])
 
@@ -2143,8 +2144,15 @@ def export_csv(bot_id, kind):
 @require_roles("admin")
 def settings():
     if request.method == "POST":
-        db.set_platform("ai_provider", request.form.get("ai_provider", "gemini"))
-        db.set_platform("ai_key", request.form.get("ai_key", "").strip())
+        primary = request.form.get("ai_provider", "gemini")
+        if primary not in ai.PROVIDER_NAMES:
+            primary = "gemini"
+        db.set_platform("ai_provider", primary)
+        # مفتاح لكل مزوّد (سلسلة احتياطية مجانية)، و`ai_key` = مفتاح الأساسي للتوافق
+        for p in ai.PROVIDER_NAMES:
+            if f"ai_key_{p}" in request.form:
+                db.set_platform(f"ai_key_{p}", request.form.get(f"ai_key_{p}", "").strip()[:300])
+        db.set_platform("ai_key", db.get_platform(f"ai_key_{primary}", "") or "")
         flash("تم حفظ إعدادات الذكاء الاصطناعي للمنصة ✅" if session.get("lang")!="en"
               else "Platform AI settings saved ✅", "ok")
         return redirect(url_for("settings"))
@@ -2155,6 +2163,12 @@ def settings():
     return react_page("settings", "ai_settings",
                       {"aiProvider": db.get_platform("ai_provider", "gemini"),
                        "aiKey": db.get_platform("ai_key", ""),
+                       "aiKeys": {p: db.get_platform(f"ai_key_{p}", "") or
+                                  (db.get_platform("ai_key", "") if p == db.get_platform("ai_provider", "gemini") else "")
+                                  for p in ai.PROVIDER_NAMES},
+                       "aiProviders": [{"id": p, "name": ai.PROVIDER_NAMES[p]}
+                                       for p in ("groq", "cerebras", "gemini", "openrouter", "nvidia")],
+                       "aiModels": {p: db.get_platform(f"ai_models_{p}", "") for p in ai.PROVIDERS},
                        "aiLastError": last_err if isinstance(last_err, dict) else {},
                        "aiLastOk": int(db.get_platform("ai_last_ok_at", "0") or 0)})
 
@@ -2165,14 +2179,20 @@ def settings_ai_test():
     """يجرّب مفتاح المنصة بطلب صغير ويرجّع رسالة المزوّد نفسها (سبب الفشل الحقيقي)."""
     if _rate_limited(request.remote_addr or "?", limit=10, window=300, bucket="ai_test"):
         return jsonify(ok=False, msg="rate limited"), 429
-    key = db.get_platform("ai_key", "")
-    provider = db.get_platform("ai_provider", "gemini")
-    ok, msg = ai.check_key(provider, key)
-    if key:
-        msg = msg.replace(key, "***")
+    # كل مزوّد له مفتاح على حدة: يكتشف نماذجه المتاحة الآن ويحفظها، ثم طلب صغير بها
+    chain = ai.key_chain(db.get_platform)
+    results = []
+    for spec in chain:
+        r = ai.check_provider(spec["p"], spec["key"])
+        r["msg"] = r["msg"].replace(spec["key"], "***")
+        if r["models"]:
+            db.set_platform(f"ai_models_{spec['p']}", json.dumps(r["models"]))
+        results.append(r)
+    ok = any(r["ok"] for r in results)
     if ok:
         FE._note_ai(True)
-    return jsonify(ok=ok, msg=msg, provider=provider)
+    msg = " · ".join(f"{r['name']}: {'OK' if r['ok'] else r['msg']}" for r in results) or "no key"
+    return jsonify(ok=ok, msg=msg, provider=db.get_platform("ai_provider", "gemini"), results=results)
 
 # (المسار القديم POST /bot/<id>/ai-setup حُذف: لا تستعمله الواجهة، وكان بلا حصة ولا حدّ
 #  فيحرق مفتاح الذكاء الاصطناعي للمنصة بطلبين لكل استدعاء. وكيل الإعداد /ai/session يغنيه.)
@@ -2187,7 +2207,7 @@ def _plan_id():
 def _setup_provider():
     """مفتاح المنصة ومزوّدها. الباقة المجانية تحصل على الوكيل الحقيقي نفسه
     بحصة صغيرة (plans.FEATURES) — لا مولّد نصوص ثابت يُقدَّم على أنه ذكاء."""
-    return (db.get_platform("ai_key", "") or None), db.get_platform("ai_provider", "gemini")
+    return (ai.key_chain(db.get_platform) or None), "auto"
 
 
 def _setup_quota():
@@ -3594,6 +3614,7 @@ def bot_brain(bot_id):
         if s and s not in starters:
             starters.append(s)
     cfg["ai_starters"] = starters[:3]
+    cfg["ai_rating"] = request.form.get("ai_rating") == "1"
     # «مساعد BotYalla الرسمي»: يتكلّم باسم المنصة بأسعارها الحيّة — للأدمن على بوت يملكه
     # حساب إدارة فقط (والمحرك يعيد الفحص بصاحب البوت عند كل رد)
     if not db.bot_owner_is_staff(bot_id):
@@ -3686,7 +3707,7 @@ def inbox_send(bot_id):
     if _rate_limited(f"u{uid()}:b{bot_id}", limit=40, window=60, bucket="inbox"):
         return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)})
     # واتساب: لا نص حر بعد 24 ساعة من آخر رسالة للعميل — المخالفة تُقيّد الرقم
-    if (b.get("channel") or "telegram") == "whatsapp" and \
+    if (b.get("channel") or "telegram") == "whatsapp" and peer.startswith("wa:") and \
             int(_time.time()) - db.peer_last_in(bot_id, peer) > WA_WINDOW:
         return jsonify({"ok": False, "window": True, "error": i18n.t("inbox_wa_window", lang)})
     ok, err = manager.send_to_peer(bot_id, peer, text=text or None, asset=asset)
@@ -4768,6 +4789,10 @@ def _migrate_ai_key():
         if old:
             db.set_platform("ai_key", old)
             db.set_platform("ai_provider", db.get_setting(1, "ai_provider", "gemini"))
+    # مفتاح لكل مزوّد (2026-09-19): المفتاح القديم يصير مفتاح مزوّده الأساسي
+    prov = db.get_platform("ai_provider", "gemini") or "gemini"
+    if db.get_platform("ai_key", "") and not db.get_platform(f"ai_key_{prov}", ""):
+        db.set_platform(f"ai_key_{prov}", db.get_platform("ai_key", ""))
 
 def bootstrap():
     setup_logging()

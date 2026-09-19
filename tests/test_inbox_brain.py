@@ -254,11 +254,16 @@ class BrainTests(Base):
         self.assertIsNone(ai._clean_action({"type": "lead", "data": {}}, ai.ALL_ACTIONS))
         self.assertIsNone(ai._clean_action({"type": "lead", "data": {"a": "b"}}, ai.HYBRID_ACTIONS))
 
-    def test_handoff_switches_to_human(self):
+    def test_handoff_alerts_but_keeps_answering(self):
+        # 2026-09-19: التحويل كان يُسكت البوت 12 ساعة فيلقى العميل صمتاً حتى يرد أحد. الآن
+        # التنبيه يصل والبوت يكمل؛ التولّي الفعلي يبدأ بأول رد بشري (test_paid_reply_takes_over).
         self.cfg(response_mode="ai")
-        ai._call = lambda *a: json.dumps({"reply": "هحوّلك لزميلي حالاً.", "action": {"type": "handoff"}})
+        ai._call = lambda *a: json.dumps({"reply": "بلّغت الفريق وهيرد عليك هنا.", "action": {"type": "handoff"}})
         self.say("tg:26", "text", "عايز أكلم حد")
-        self.assertEqual(db.get_conversation(self.bid, "tg:26")["mode"], "human")
+        self.assertNotEqual((db.get_conversation(self.bid, "tg:26") or {}).get("mode"), "human")
+        ai._call = lambda *a: json.dumps({"reply": "لسه معاك، اسأل براحتك.", "action": None})
+        self.say("tg:26", "text", "طب الأسعار؟")
+        self.assertIn("لسه معاك، اسأل براحتك.", self.ch.texts())
 
     def test_concurrent_allowance_edge_is_atomic(self):
         m = time.strftime("%Y-%m")

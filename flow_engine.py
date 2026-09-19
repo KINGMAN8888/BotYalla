@@ -36,6 +36,7 @@ DEFAULT_CS_FLOW = {
 }
 
 RESPONSE_MODES = ("flow", "hybrid", "ai")
+_BG = set()                     # مهام خلفية قصيرة (علامة القراءة) — مرجع يمنع جمعها قبل انتهائها
 HUMAN_IDLE = 12 * 3600          # تولٍّ منسيّ يعود للبوت بعدها
 START_SOURCES = ("qr", "link", "poster", "share")
 AI_PRICE_FALLBACK = 25          # قرشاً للرد فوق الحصة — لو ضاع الإعداد
@@ -148,6 +149,9 @@ async def notify_human_inbound(bot_row, channel, peer, text):
     if int(conv.get("unread") or 0) != 1:
         return
     name = conv.get("name") or peer
+    import inbox_relay
+    if await inbox_relay.alert(bot_row, peer, "💬 رسالة جديدة من عميل متولّي محادثته في"):
+        return
     await notify_owner(bot_row, channel,
                        f"💬 رسالة جديدة من {name} في «{_cfg_of(bot_row).get('business_name', '')}»"
                        f" — المحادثة معك الآن:\n{(text or '📎')[:300]}")
@@ -236,8 +240,9 @@ def _note_ai(ok, err=None, key=""):
             db.set_platform("ai_last_ok_at", str(int(time.time())))
         else:
             msg = f"{type(err).__name__}: {err}"[:300]
-            if key:
-                msg = msg.replace(key, "***")
+            for k in ([x.get("key", "") for x in key] if isinstance(key, list) else [key]):
+                if k:
+                    msg = msg.replace(k, "***")
             db.set_platform("ai_last_error", json.dumps({"at": int(time.time()), "msg": msg},
                                                         ensure_ascii=False))
     except Exception:
@@ -295,19 +300,95 @@ OPT_TEXT = {
 }
 
 
+# ------------------------------------------------------------ الشكر والتقييم
+# «شكراً» ليست سؤالاً: رد فوري بلا ذكاء اصطناعي (أسرع ومجاني)، ثم طلب تقييم بثلاثة أزرار
+# مرة كل 24 ساعة. التقييم حدث `rating` (3 ممتاز · 2 كويس · 1 محتاج تحسين) في التحليلات،
+# والسلبي يطلب ملاحظة تُحفظ عميلاً محتملاً وتصل صاحب البوت على تليجرام ليرد عليها.
+_THANKS = ("شكرا", "شكر", "متشكر", "متشكرين", "تسلم", "تسلمي", "تسلموا", "ميرسي", "مرسي",
+           "ربنا يخليك", "جزاك الله", "الله يعطيك العافيه", "thanks", "thank you", "thx", "ty",
+           "مع السلامه", "باي", "bye", "goodbye")
+RATING = {"ar": ["ممتاز 🌟", "كويس 👍", "محتاج تحسين"],
+          "en": ["Excellent 🌟", "Good 👍", "Needs work"]}
+_RATING_SCORE = {o: 3 - i for opts in RATING.values() for i, o in enumerate(opts)}
+RATING_EVERY = 24 * 3600
+RATING_WAIT = 3600               # زر تقييم يُقبل خلال ساعة من طلبه
+COMMENT_WAIT = 15 * 60           # الملاحظة بعد تقييم سلبي
+_rating_asked = {}
+_comment_wait = {}
+
+
+def _norm_ar(s):
+    s = (s or "").strip().lower()
+    for a, b in (("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ة", "ه"), ("ى", "ي"), ("ـ", "")):
+        s = s.replace(a, b)
+    return re.sub(r"[ً-ْ!.،,؟?🙏❤️♥️😍🌹👍]+", " ", s).strip()
+
+
+def is_thanks(text):
+    """شكر/وداع قصير فقط — «شكراً بس بكام الباقة؟» سؤال يذهب للذكاء الاصطناعي."""
+    t = _norm_ar(text)
+    if not t or len(t) > 40 or "؟" in (text or "") or "?" in (text or ""):
+        return False
+    return any(w in t for w in _THANKS)
+
+
+async def _closing(bot_row, cfg, channel, peer, text):
+    """يرد على الشكر والتقييم وملاحظته. True = تم الرد ولا حاجة للذكاء الاصطناعي."""
+    key, now = (bot_row["id"], peer), time.time()
+    lang = _lang_of(text)
+    raw = text.strip()
+    if now - _comment_wait.get(key, 0) < COMMENT_WAIT and raw not in _RATING_SCORE:
+        _comment_wait.pop(key, None)
+        db.add_lead(bot_row["id"], _peer_num(peer), {"التقييم": "محتاج تحسين", "ملاحظة العميل": raw[:500]})
+        import inbox_relay
+        await inbox_relay.alert(bot_row, peer, "⚠️ تقييم سلبي وملاحظة من عميل في", raw[:200])
+        await channel.remove_keyboard(peer, "Thanks — your note reached our team and we'll use it to improve 🙏"
+                                      if lang == "en" else
+                                      "وصلت ملاحظتك لفريقنا، وشكراً إنك بتساعدنا نتحسّن 🙏")
+        return True
+    if raw in _RATING_SCORE and now - _rating_asked.get(key, 0) < RATING_WAIT:
+        score = _RATING_SCORE[raw]
+        lang = "en" if raw in RATING["en"] else "ar"
+        db.log_event(bot_row["id"], "rating", score)
+        _rating_asked[key] = now - RATING_WAIT      # زر واحد يُحتسب — الضغطة الثانية سؤال عادي
+        if score == 1:
+            _comment_wait[key] = now
+            await channel.remove_keyboard(peer, "Sorry it wasn't better 🙏 What should we improve?"
+                                          if lang == "en" else
+                                          "آسفين إن التجربة ماكانتش أحسن 🙏 قولنا إيه اللي نقدر نحسّنه؟")
+        else:
+            await channel.remove_keyboard(peer, "Thank you for the rating 🌟 We're always here for you."
+                                          if lang == "en" else
+                                          "شكراً لتقييمك 🌟 يسعدنا نخدمك دايماً.")
+        return True
+    if not is_thanks(raw):
+        return False
+    ask = cfg.get("ai_rating", True) is not False and now - _rating_asked.get(key, 0) > RATING_EVERY
+    if ask:
+        _rating_asked[key] = now
+        await channel.send_buttons(peer, "You're welcome 🙏 Happy to help! How was your experience with us?"
+                                   if lang == "en" else
+                                   "العفو 🙏 سعدنا بخدمتك! قبل ما تمشي، قيّم تجربتك معانا:", RATING[lang])
+    else:
+        await channel.remove_keyboard(peer, "You're welcome 🙏 We're here any time."
+                                      if lang == "en" else "العفو 🙏 تحت أمرك في أي وقت.")
+    return True
+
+
 async def _ai_answer(bot_row, cfg, raw_channel, peer, text, extra=None):
     """يرد بالذكاء الاصطناعي. يرجّع True لو أُرسل رد، وإلا False ليرجع المستدعي للفلو.
 
     الحجز من الحصة/المحفظة يحدث **بعد** نجاح التوليد وقبل الإرسال مباشرة: فشل
     المزوّد لا يُحتسب على صاحب النشاط، ورد لم يُحجز له رصيد لا يُرسل أبداً."""
     import ai_agent
-    key = db.get_platform("ai_key", "")
+    import ai_agent as _ai
+    key = _ai.key_chain(db.get_platform)          # المزوّد الأساسي ثم الاحتياطي المجاني
     if not key:
         _note_ai(False, RuntimeError("no platform AI key — add it in /settings"))
         return False
     if not _ai_can_try(bot_row):
         return False
-    provider = db.get_platform("ai_provider", "gemini")
+    provider = "auto"
     ch = LoggedChannel(raw_channel, bot_row["id"], "ai")
     await ch.send_typing(peer)
     history = db.recent_history(bot_row["id"], peer, 12)
@@ -388,11 +469,16 @@ async def _ai_action(bot_row, cfg, raw_channel, peer, action):
                                f"\n📱 {action.get('phone') or '—'}\n📍 {action.get('address') or '—'}"
                                f"\n{lines}\n💰 {total:g} ج")
     elif kind == "handoff":
-        db.set_conversation_mode(bot_id, peer, "human")
-        conv = db.get_conversation(bot_id, peer) or {}
-        await notify_owner(bot_row, raw_channel,
-                           f"🙋 العميل {conv.get('name') or peer} في «{biz}» يطلب التحدث مع موظف."
-                           f"\n{str(action.get('reason') or '')[:200]}\nافتح صندوق الوارد للرد عليه.")
+        # لا نُسكت البوت هنا: العميل الذي طلب موظفاً ثم سأل ولم يرد أحد كان يلقى صمتاً
+        # 12 ساعة. التنبيه يصل صاحب البوت (Reply عليه من تليجرام يرد مباشرة)، والتولّي
+        # الفعلي يبدأ بأول رد بشري (صندوق الوارد أو تليجرام) — حتى ذلك يكمل البوت.
+        import inbox_relay
+        reason = str(action.get("reason") or "")[:200]
+        if not await inbox_relay.alert(bot_row, peer, "🙋 عميل محتاج دعم في", reason, throttle=True):
+            conv = db.get_conversation(bot_id, peer) or {}
+            await notify_owner(bot_row, raw_channel,
+                               f"🙋 العميل {conv.get('name') or peer} في «{biz}» يطلب التحدث مع موظف."
+                               f"\n{reason}\nافتح صندوق الوارد للرد عليه.")
     elif kind == "notify":
         await notify_owner(bot_row, raw_channel,
                            f"❓ سؤال لم يجد الذكاء الاصطناعي إجابته في «{biz}»:\n"
@@ -442,6 +528,12 @@ async def handle_message(bot_row, channel, msg):
                        media_id=media_id, name=msg.get("name", ""))
     except Exception:
         log.exception("could not log inbound message")
+
+    # واتساب: علامتا القراءة و«يكتب…» فوراً (في الخلفية — لا تؤخّر الرد) — العميل يرى أن
+    # رسالته وصلت وأن الرد قادم بدل شاشة صامتة أثناء توليد الذكاء الاصطناعي
+    if not human and msg.get("id") and hasattr(raw, "mark_read"):
+        t = asyncio.create_task(raw.mark_read(msg["id"]))
+        _BG.add(t); t.add_done_callback(_BG.discard)
 
     # إيقاف/استئناف العروض يُسجَّل في كل وضع (حتى أثناء تولّي صاحب النشاط)
     word = (msg.get("text") or "").strip().lower() if msg["kind"] != "media" else ""
@@ -576,6 +668,11 @@ async def _ai_mode(bot_row, cfg, raw, channel, peer, msg, f):
     in_flow = bool(db.get_chat_state(bot_id, peer))
     first = not db.bot_user_exists(bot_id, peer)
     text = msg.get("text", "")
+    # الشكر والتقييم: رد فوري مجاني قبل أي استدعاء للنموذج
+    if not first and await _closing(bot_row, cfg, channel, peer, text):
+        db.clear_chat_state(bot_id, peer)
+        db.touch_bot_user(bot_id, peer)
+        return True
     if not await _ai_answer(bot_row, cfg, raw, peer, text):
         # بوت المنصة الرسمي لا يسقط لفلو «اسمك؟»: يرد من حقائق المنصة الثابتة
         if _platform_facts(bot_row, cfg) is not None:

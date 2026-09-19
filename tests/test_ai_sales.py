@@ -44,8 +44,10 @@ class Base(unittest.TestCase):
         # الفئات تتشارك قاعدة الملف — الإنشاء مرة واحدة
         def bot(owner, name, token, biz):
             mine = [b for b in db.list_bots(owner) if b["name"] == name]
+            # واتساب كبوت المالك الحقيقي — ويختبر أن حملته لا تشمل زوّار تليجرام
             return mine[0]["id"] if mine else db.create_bot(
-                owner, name, token, "customer_service", {"business_name": biz, "flow": FLOW})
+                owner, name, token, "customer_service", {"business_name": biz, "flow": FLOW},
+                channel="whatsapp")
         cls.bid = bot(cls.owner, "shop", "tk-sales", "رغد")
         cls.official = bot(1, "BotYalla", "tk-official", "BotYalla")
 
@@ -197,6 +199,48 @@ class ReliabilityTests(Base):
         self.assertNotIn("SECRET", captured["url"])
         self.assertEqual(captured["headers"]["x-goog-api-key"], "SECRET")
 
+    def test_chain_moves_to_next_free_provider_and_cools_the_limited_one(self):
+        ai._cool.clear()
+        seen = []
+        orig = ai._post_json
+
+        def fake(url, payload, headers, timeout=30):
+            seen.append(payload.get("model") or url.split("/models/")[-1].split(":")[0])
+            if "groq" in url:
+                raise ai.AIError("HTTP 429: rate limit", retry=True)
+            if "cerebras" in url:
+                raise ai.AIError("HTTP 401: invalid api key")
+            return {"choices": [{"message": {"content": '<think>hmm</think> sure: {"reply":"أهلاً"} done'}}]}
+        ai._post_json = fake
+        self.addCleanup(setattr, ai, "_post_json", orig)
+        chain = [{"p": "groq", "key": "g", "models": ["a", "b"]},
+                 {"p": "cerebras", "key": "c", "models": ["x", "y"]},
+                 {"p": "openrouter", "key": "o", "models": ["free-1"]}]
+        self.assertEqual(ai._loads(ai._call("auto", chain, "s", "u")), {"reply": "أهلاً"})
+        self.assertEqual(seen, ["a", "b", "x", "free-1"], "مفتاح مرفوض يجب أن يتخطّى نماذج مزوّده كلها")
+        seen.clear()
+        ai._call("auto", chain, "s", "u")                    # Groq مبرَّد دقيقة: لا يُنتظر رفضه
+        self.assertEqual(seen, ["x", "free-1"])
+        ai._cool.clear()
+
+    def test_key_chain_order_and_legacy_key(self):
+        vals = {"ai_provider": "gemini", "ai_key": "old", "ai_key_nvidia": "n",
+                "ai_key_groq": "g", "ai_models_groq": '["gpt-oss"]'}
+        chain = ai.key_chain(lambda k, d=None: vals.get(k, d))
+        self.assertEqual([(x["p"], x["key"]) for x in chain], [("gemini", "old"), ("groq", "g"), ("nvidia", "n")])
+        self.assertEqual(chain[1]["models"], ["gpt-oss"])
+        self.assertEqual(ai.key_chain(lambda k, d=None: d), [])
+
+    def test_discover_keeps_available_models(self):
+        orig = ai._get_json
+        self.addCleanup(setattr, ai, "_get_json", orig)
+        ai._get_json = lambda url, h, timeout=20: {"data": [{"id": "llama-3.3-70b-versatile"},
+                                                             {"id": "whisper-large"}]}
+        self.assertEqual(ai.discover("groq", "k"), ["llama-3.3-70b-versatile"])
+        ai._get_json = lambda url, h, timeout=20: {"data": [{"id": "vendor/new-model:free"},
+                                                             {"id": "vendor/embed:free"}]}
+        self.assertEqual(ai.discover("openrouter", "k"), ["vendor/new-model:free"])
+
     def test_customer_escapes_fallback_flow_when_ai_returns(self):
         self.cfg(self.bid, response_mode="ai")
         peer = "tg:40"
@@ -227,13 +271,187 @@ class ReliabilityTests(Base):
         self.say(self.official, peer, "text", "ابدأ مجاناً")
         self.assertIn("https://botyalla.test/register", self.ch.sent[-1][1])
         self.say(self.official, peer, "text", "عايز أكلم موظف")
-        self.assertEqual(db.get_conversation(self.official, peer)["mode"], "human")
+        self.assertIn("فريقنا", self.ch.sent[-1][1])
+        self.assertNotEqual(db.get_conversation(self.official, peer)["mode"], "human",
+                            "التحويل أسكت البوت قبل أي رد بشري")
 
     def test_missing_key_is_recorded(self):
         self.cfg(self.bid, response_mode="ai")
         db.set_platform("ai_key", "")
         self.say(self.bid, "tg:42", "text", "سؤال")
         self.assertIn("no platform AI key", json.loads(db.get_platform("ai_last_error"))["msg"])
+
+
+class ThanksRatingTests(Base):
+    def setUp(self):
+        super().setUp()
+        FE._rating_asked.clear(); FE._comment_wait.clear()
+        self.cfg(self.bid, response_mode="ai", ai_rating=True)
+        self.seen = self.capture("أهلاً!")
+
+    def test_thanks_asks_rating_without_ai_then_records_it(self):
+        peer = "wa:201000000050"
+        self.say(self.bid, peer, "text", "بكام؟")
+        calls = len(self.seen["calls"])
+        self.say(self.bid, peer, "text", "شكراً ليك 🙏")
+        self.assertEqual(len(self.seen["calls"]), calls, "الشكر استدعى النموذج")
+        self.assertEqual(self.ch.sent[-1][0], "buttons")
+        self.assertEqual(self.ch.sent[-1][2], FE.RATING["ar"])
+        self.say(self.bid, peer, "text", "ممتاز 🌟")
+        self.assertIn("شكراً لتقييمك", self.ch.sent[-1][1])
+        self.assertGreaterEqual(db.rating_summary(self.bid)["great"], 1)
+        # شكر ثانٍ خلال 24 ساعة: «العفو» بلا تقييم جديد
+        self.say(self.bid, peer, "text", "شكرا")
+        self.assertEqual(self.ch.sent[-1], ("text", "العفو 🙏 تحت أمرك في أي وقت."))
+
+    def test_low_rating_collects_note_as_lead(self):
+        peer = "wa:201000000051"
+        self.say(self.bid, peer, "text", "سؤال")
+        self.say(self.bid, peer, "text", "متشكر")
+        leads = len(db.list_leads(self.bid))
+        self.say(self.bid, peer, "text", "محتاج تحسين")
+        self.assertIn("إيه اللي نقدر نحسّنه", self.ch.sent[-1][1])
+        self.say(self.bid, peer, "text", "الرد كان بطيء")
+        self.assertEqual(len(db.list_leads(self.bid)), leads + 1)
+        self.assertIn("الرد كان بطيء", json.dumps(db.list_leads(self.bid)[0], ensure_ascii=False))
+
+    def test_thanks_with_question_goes_to_ai_and_rating_word_is_not_hijacked(self):
+        peer = "wa:201000000052"
+        self.say(self.bid, peer, "text", "أهلاً")
+        n, before = len(self.seen["calls"]), db.rating_summary(self.bid)["total"]
+        self.say(self.bid, peer, "text", "شكرا بس بكام الباقة؟")
+        self.say(self.bid, peer, "text", "ممتاز 🌟")        # بلا طلب تقييم ← سؤال عادي
+        self.assertEqual(len(self.seen["calls"]), n + 2)
+        self.assertEqual(db.rating_summary(self.bid)["total"], before)
+
+    def test_rating_can_be_turned_off(self):
+        self.cfg(self.bid, ai_rating=False)
+        peer = "wa:201000000053"
+        self.say(self.bid, peer, "text", "سؤال")
+        self.say(self.bid, peer, "text", "thanks")
+        self.assertEqual(self.ch.sent[-1][0], "text")
+
+
+class RelayTests(Base):
+    def setUp(self):
+        super().setUp()
+        import inbox_relay
+        self.R = inbox_relay
+        inbox_relay._last_alert.clear()
+        db.set_platform("admin_chat_id", "999")
+        self.alerts, self.sent = [], []
+
+        async def notify(chat, text, reply_markup=None):
+            self.alerts.append((chat, text)); return True
+
+        async def send(row, peer, text=None, asset=None):
+            self.sent.append((row["id"], peer, text)); return True, None
+        from bot_manager import manager
+        self.m = manager
+        self._orig = (manager.notify_text_async, manager._send_to_peer)
+        manager.notify_text_async, manager._send_to_peer = notify, send
+
+    def tearDown(self):
+        super().tearDown()
+        self.m.notify_text_async, self.m._send_to_peer = self._orig
+
+    def test_handoff_alerts_admin_with_tag_and_bot_keeps_going(self):
+        self.cfg(self.official, response_mode="ai", platform_kb=True)
+        self.capture("بلّغت الفريق.", action={"type": "handoff", "reason": "يطلب موظف"})
+        peer = "wa:201000000060"
+        self.say(self.official, peer, "text", "عايز أكلم حد")
+        self.assertEqual(len(self.alerts), 1)
+        chat, text = self.alerts[0]
+        self.assertEqual(chat, "999")
+        self.assertIn(self.R.tag(self.official, peer), text)
+        self.assertIn("عايز أكلم حد", text)
+        self.assertNotEqual((db.get_conversation(self.official, peer) or {}).get("mode"), "human")
+        self.say(self.official, peer, "text", "لسه محتاج حد")   # تنبيه واحد كل 20 دقيقة
+        self.assertEqual(len(self.alerts), 1)
+
+    def test_owner_replies_from_telegram(self):
+        peer = "wa:201000000061"
+        db.add_bot_user(self.official, 201000000061, "x", peer=peer)
+        ok, note = asyncio.run(self.R.relay_reply(self.official, peer, 999, "أهلاً، معاك يوسف"))
+        self.assertTrue(ok, note)
+        self.assertEqual(self.sent[-1], (self.official, peer, "أهلاً، معاك يوسف"))
+        self.assertEqual(db.get_conversation(self.official, peer)["mode"], "human")
+        self.assertEqual(db.list_messages(self.official, peer)[-1]["sender"], "human")
+        self.assertTrue(self.R.back_to_bot(self.official, peer, 999))
+        self.assertEqual(db.get_conversation(self.official, peer)["mode"], "bot")
+
+    def test_stranger_cannot_reply_even_with_the_tag(self):
+        peer = "wa:201000000062"
+        db.add_bot_user(self.official, 201000000062, "x", peer=peer)
+        ok, _ = asyncio.run(self.R.relay_reply(self.official, peer, 12345, "hack"))
+        self.assertFalse(ok)
+        self.assertEqual(self.sent, [])
+        self.assertFalse(self.R.back_to_bot(self.official, peer, 12345))
+        # أدمن المنصة لا يرد على بوت عميل عادي
+        ok, _ = asyncio.run(self.R.relay_reply(self.bid, peer, 999, "x"))
+        self.assertFalse(ok)
+
+    def test_whatsapp_window_applies(self):
+        peer = "wa:201000000063"
+        db.add_bot_user(self.official, 201000000063, "x", peer=peer)
+        with db.get_conn() as c:
+            c.execute("UPDATE bot_users SET last_in_at=0 WHERE peer=?", (peer,))
+        ok, note = asyncio.run(self.R.relay_reply(self.official, peer, 999, "مرحبا"))
+        self.assertFalse(ok)
+        self.assertIn("24", note)
+
+    def test_parse(self):
+        self.assertEqual(self.R.parse("...\n#C12:wa:2010"), (12, "wa:2010"))
+        self.assertEqual(self.R.parse("#C3:tg:-100"), (3, "tg:-100"))
+        self.assertIsNone(self.R.parse("#T5"))
+
+
+class PlatformTelegramTests(Base):
+    def test_official_bot_lookup(self):
+        self.cfg(self.official, response_mode="ai", platform_kb=True)
+        self.assertEqual(platform_kb.official_bot()["id"], self.official)
+        self.cfg(self.official, response_mode="flow")
+        self.assertIsNone(platform_kb.official_bot())
+
+    def test_whatsapp_campaign_skips_telegram_visitors(self):
+        db.add_bot_user(self.official, 777001, "tg visitor", peer="tg:777001")
+        db.add_bot_user(self.official, 201000000070, "wa", peer="wa:201000000070")
+        peers = db.list_bot_peers(self.official)
+        self.assertIn("wa:201000000070", peers)
+        self.assertNotIn("tg:777001", peers)
+        self.assertNotIn(777001, db.list_bot_user_ids(self.official))
+
+    def test_telegram_visitor_reply_goes_through_platform_bot(self):
+        from bot_manager import manager
+        sent = []
+
+        class FakeBot:
+            async def send_message(self, chat_id, text, reply_markup=None):
+                sent.append((chat_id, text))
+
+        class FakeApp:
+            bot = FakeBot()
+        orig = manager._platform
+        manager._platform = FakeApp()
+        try:
+            ok, err = asyncio.run(manager._send_to_peer(db.get_bot(self.official), "tg:555", "مرحبا"))
+        finally:
+            manager._platform = orig
+        self.assertTrue(ok, err)
+        self.assertEqual(sent, [(555, "mرحبا".replace("m", "م"))])
+
+    def test_whatsapp_read_receipt_is_requested(self):
+        self.cfg(self.bid, response_mode="ai")
+        self.capture("تمام")
+        marked = []
+
+        class WA(Mock):
+            async def mark_read(self, mid, typing=True): marked.append(mid)
+        self.ch = WA()
+        asyncio.run(FE.handle_message(db.get_bot(self.bid), self.ch,
+                                      {"id": "wamid.X", "peer": "wa:201000000071", "kind": "text",
+                                       "text": "سؤال", "name": "x"}))
+        self.assertEqual(marked, ["wamid.X"])
 
 
 class OptOutTests(Base):
@@ -292,14 +510,19 @@ class RouteTests(Base):
         c.post(f"/bot/{self.official}/brain", data=self.form())
         self.assertFalse(json.loads(db.get_bot(self.official)["config_json"])["platform_kb"])
 
-    def test_admin_tests_the_key(self):
+    def test_admin_tests_the_keys(self):
         c = self.client(1)
-        ai._call = lambda *a: json.dumps({"ok": True})
+        orig = ai.check_provider
+        self.addCleanup(setattr, ai, "check_provider", orig)
+        ai.check_provider = lambda p, k: {"provider": p, "name": p, "ok": True, "msg": "OK",
+                                          "model": "m-1", "models": ["m-1", "m-2"], "ms": 900}
         r = c.post("/settings/ai-test", headers={"X-CSRF-Token": "c" * 32})
-        self.assertEqual(r.get_json()["ok"], True)
+        self.assertTrue(r.get_json()["ok"])
+        self.assertEqual(json.loads(db.get_platform("ai_models_gemini")), ["m-1", "m-2"])
 
-        def bad(*a): raise ai.AIError("HTTP 400: API key not valid test-key")
-        ai._call = bad
+        ai.check_provider = lambda p, k: {"provider": p, "name": p, "ok": False,
+                                          "msg": f"HTTP 400: API key not valid {k}", "model": "",
+                                          "models": None, "ms": 0}
         r = c.post("/settings/ai-test", headers={"X-CSRF-Token": "c" * 32})
         self.assertFalse(r.get_json()["ok"])
         self.assertIn("API key not valid", r.get_json()["msg"])
@@ -307,6 +530,21 @@ class RouteTests(Base):
         self.assertEqual(c.get("/settings").status_code, 200)
         owner = self.client(self.owner).post("/settings/ai-test", headers={"X-CSRF-Token": "c" * 32})
         self.assertIn(owner.status_code, (302, 403))
+
+    def test_admin_saves_several_free_providers(self):
+        c = self.client(1)
+        c.post("/settings", data={"csrf_token": "c" * 32, "ai_provider": "groq", "ai_key_groq": " gsk_1 ",
+                                  "ai_key_cerebras": "csk_2", "ai_key_gemini": "test-key",
+                                  "ai_key_openrouter": "", "ai_key_nvidia": ""})
+        chain = ai.key_chain(db.get_platform)
+        self.assertEqual([x["p"] for x in chain], ["groq", "cerebras", "gemini"])
+        self.assertEqual(chain[0]["key"], "gsk_1")
+        self.assertEqual(db.get_platform("ai_key"), "gsk_1")
+        c.post("/settings", data={"csrf_token": "c" * 32, "ai_provider": "evil", "ai_key_gemini": "test-key",
+                                  "ai_key_groq": "", "ai_key_cerebras": ""})
+        self.assertEqual(db.get_platform("ai_provider"), "gemini")
+        db.set_platform("ai_provider", "gemini")
+        self.assertEqual(db.get_platform("ai_key"), "test-key")
 
     def test_bot_page_renders_both_languages(self):
         c = self.client(1)

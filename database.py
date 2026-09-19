@@ -1211,15 +1211,21 @@ def is_opted_out(bot_id, peer):
                       (bot_id, peer)).fetchone()
         return bool(r and r[0])
 
+# عملاء قناة البوت نفسها فقط: صفّ المساعد الرسمي (واتساب) يحمل أيضاً عملاء بوت المنصة على
+# تليجرام (`tg:`) — حملة واتساب لهم تفشل وتُحسب تكلفتها على قائمة أطول مما يصل (§3.22).
+_SAME_CHANNEL = ("substr(COALESCE(peer,'tg:'),1,3) = (SELECT CASE WHEN channel='whatsapp' "
+                 "THEN 'wa:' ELSE 'tg:' END FROM bots WHERE id=bot_users.bot_id)")
+
 def list_bot_user_ids(bot_id):
     with get_conn() as c:
-        return [r[0] for r in c.execute("SELECT tg_user_id FROM bot_users WHERE bot_id=? AND opted_out=0",
-                                        (bot_id,)).fetchall()]
+        return [r[0] for r in c.execute("SELECT tg_user_id FROM bot_users WHERE bot_id=? AND opted_out=0 AND "
+                                        + _SAME_CHANNEL, (bot_id,)).fetchall()]
 
 def list_bot_peers(bot_id, within_seconds=None):
-    """يرجّع peers المشتركين. within_seconds يقصرها على من راسل البوت مؤخراً.
-    من طلب إيقاف الرسائل (`opted_out`) لا يُرجَع أبداً."""
-    q = "SELECT peer FROM bot_users WHERE bot_id=? AND peer IS NOT NULL AND opted_out=0"
+    """يرجّع peers المشتركين على قناة البوت. within_seconds يقصرها على من راسل البوت
+    مؤخراً. من طلب إيقاف الرسائل (`opted_out`) لا يُرجَع أبداً."""
+    q = ("SELECT peer FROM bot_users WHERE bot_id=? AND peer IS NOT NULL AND opted_out=0 AND "
+         + _SAME_CHANNEL)
     args = [bot_id]
     if within_seconds:
         q += " AND last_in_at IS NOT NULL AND last_in_at >= ?"
@@ -1234,6 +1240,14 @@ def log_event(bot_id, kind, value=0):
     with get_conn() as c:
         c.execute("INSERT INTO events(bot_id,kind,value,day,created_at) VALUES(?,?,?,?,?)",
                   (bot_id, kind, value, _day(), int(time.time())))
+
+def rating_summary(bot_id):
+    """تقييمات العملاء بعد المحادثة (حدث `rating`: 3 ممتاز · 2 كويس · 1 محتاج تحسين)."""
+    with get_conn() as c:
+        rows = c.execute("SELECT value, COUNT(*) n FROM events WHERE bot_id=? AND kind='rating' "
+                         "GROUP BY value", (bot_id,)).fetchall()
+    by = {int(r["value"]): r["n"] for r in rows}
+    return {"total": sum(by.values()), "great": by.get(3, 0), "good": by.get(2, 0), "bad": by.get(1, 0)}
 
 def source_counts(bot_id):
     """من أين دخل العملاء (qr · link · poster · share) — أحداث src_* في التحليلات."""

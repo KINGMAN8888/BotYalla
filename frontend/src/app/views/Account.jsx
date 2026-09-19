@@ -510,7 +510,21 @@ export function Account() {
 }
 
 /* ---------------------------------------------------------- إعدادات الـ AI */
-/* اختبار المفتاح المحفوظ + آخر خطأ سجّله «عقل البوت» — سبب الفشل بلا دخول للسيرفر */
+/* مزوّدون مجانيون في سلسلة واحدة: الأساسي أولاً ثم كل من له مفتاح — لو نفدت حصة مزوّد
+   ينتقل الرد للتالي تلقائياً. «اختبر المفاتيح» يكتشف نماذج كل مزوّد المتاحة الآن ويحفظها. */
+const AI_FREE = {
+  groq:       { url: "https://console.groq.com/keys", host: "console.groq.com",
+                note: ["مجاني بلا بطاقة · أسرع مزوّد (ثانية تقريباً) · حدود في الدقيقة", "Free, no card · fastest (~1s) · per-minute limits"] },
+  cerebras:   { url: "https://cloud.cerebras.ai/platform", host: "cloud.cerebras.ai",
+                note: ["مجاني بلا بطاقة · سريع جداً · حصة يومية كبيرة", "Free, no card · very fast · large daily quota"] },
+  gemini:     { url: "https://aistudio.google.com/apikey", host: "aistudio.google.com",
+                note: ["طبقة مجانية بحدود في الدقيقة", "Free tier with per-minute limits"] },
+  openrouter: { url: "https://openrouter.ai/keys", host: "openrouter.ai",
+                note: ["نماذج :free مجانية (DeepSeek · Gemma · Nemotron) · حد يومي", "Free :free models (DeepSeek · Gemma · Nemotron) · daily cap"] },
+  nvidia:     { url: "https://build.nvidia.com/settings/api-keys", host: "build.nvidia.com",
+                note: ["رصيد مجاني للتجربة · DeepSeek · Kimi · GLM", "Free trial credits · DeepSeek · Kimi · GLM"] },
+};
+
 function AiKeyTest() {
   const [res, setRes] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -531,13 +545,22 @@ function AiKeyTest() {
   return (
     <div className="mt-6 border-t border-white/10 pt-5">
       <Btn variant="ghost" icon="bolt" type="button" onClick={run} disabled={busy}>
-        {busy ? bi("جارٍ الاختبار…", "Testing…") : bi("اختبر المفتاح المحفوظ", "Test the saved key")}
+        {busy ? bi("جارٍ اختبار كل المزوّدين…", "Testing every provider…") : bi("اختبر المفاتيح المحفوظة", "Test the saved keys")}
       </Btn>
-      {res && (
-        <p className={"mt-3 mb-0 text-[13px] font-bold " + (res.ok ? "text-au-teal" : "text-red-300")}>
-          {res.ok ? bi("✓ المفتاح شغّال والذكاء الاصطناعي بيرد.", "✓ The key works and the AI is answering.")
-                  : bi("✗ فشل: ", "✗ Failed: ") + (res.msg || "")}
-        </p>
+      {res && !(res.results || []).length && (
+        <p className="mt-3 mb-0 text-[13px] font-bold text-red-300">{bi("✗ ", "✗ ") + (res.msg || "")}</p>
+      )}
+      {res && (res.results || []).length > 0 && (
+        <ul className="mt-3 mb-0 flex flex-col gap-2 p-0">
+          {res.results.map((r) => (
+            <li key={r.provider} className="list-none rounded-xl bg-white/[0.03] px-3.5 py-2.5 text-[13px]
+                                             shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+              <b className={r.ok ? "text-au-teal" : "text-red-300"}>{(r.ok ? "✓ " : "✗ ") + r.name}</b>
+              {r.ok ? <span className="text-ink-3"> · {r.model} · {(r.ms / 1000).toFixed(1)}s</span>
+                    : <span className="text-ink-3"> · {r.msg}</span>}
+            </li>
+          ))}
+        </ul>
       )}
       <p className="mt-3 mb-0 text-[12.5px] leading-relaxed text-ink-3">
         {P.aiLastOk ? bi("آخر رد ناجح: ", "Last successful reply: ") + when(P.aiLastOk) : bi("لا يوجد رد ناجح مسجّل بعد.", "No successful reply recorded yet.")}
@@ -550,43 +573,39 @@ function AiKeyTest() {
 }
 
 export function Settings() {
+  const provs = P.aiProviders || [];
+  const keys = P.aiKeys || {};
   return (
     <>
       <PageHead icon="sparkles" title={t("ai_settings")} sub={t("ai_settings_sub")} />
-      <Card className="mb-6 max-w-[640px]">
-        <SectionTitle icon="key">{t("api_key")}</SectionTitle>
+      <Card className="mb-6 max-w-[720px]">
+        <SectionTitle icon="key">{bi("مزوّدو الذكاء الاصطناعي (مجاناً)", "AI providers (free)")}</SectionTitle>
+        <p className="mt-0 mb-5 text-[13px] leading-relaxed text-ink-3">
+          {bi("حط مفتاح مجاني من مزوّد واحد أو أكتر. البوت بيبدأ بالأساسي، ولو حصته المجانية خلصت أو اتعطّل بينتقل للي بعده تلقائياً — فكل ما تزوّد مفاتيح، بيبقى أسرع وما يقفش. ننصح بـ Groq أو Cerebras كأساسي (الأسرع).",
+              "Add a free key from one or more providers. The bot starts with the primary; if its free quota runs out or it fails, it moves to the next automatically — more keys, faster and never stuck. Groq or Cerebras make the best primary (fastest).")}
+        </p>
         <Form action="">
-          <Field label={t("provider")} className="mb-4">
+          <Field label={bi("المزوّد الأساسي", "Primary provider")} className="mb-5">
             <Select name="ai_provider" defaultValue={P.aiProvider}>
-              <option value="gemini">Google Gemini Flash</option>
-              <option value="groq">Groq — Llama 3.3</option>
+              {provs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </Select>
           </Field>
-          <Field label={t("api_key")}
-                 hint={bi("يُحفظ لكل المنصة ويُستخدم لتوليد إعدادات بوتات جميع المستخدمين. اتركه فارغاً لاستخدام المولّد الاحتياطي المجاني.",
-                          "Saved platform-wide and used to generate bot settings for all users. Leave empty for the free fallback generator.")}>
-            <Input name="ai_key" defaultValue={P.aiKey} placeholder={t("paste_key")} autoComplete="off" />
-          </Field>
+          <div className="flex flex-col gap-4">
+            {provs.map((p) => {
+              const f = AI_FREE[p.id] || {};
+              return (
+                <Field key={p.id} label={p.name}
+                       hint={<>{bi(...(f.note || ["", ""]))} · <a href={f.url} target="_blank" rel="noopener"
+                               className="text-au-cyan underline-offset-4 hover:underline">{f.host} ↗</a></>}>
+                  <Input name={`ai_key_${p.id}`} defaultValue={keys[p.id] || ""} placeholder={t("paste_key")}
+                         autoComplete="off" dir="ltr" />
+                </Field>
+              );
+            })}
+          </div>
           <div className="mt-6"><Btn icon="check" type="submit">{t("save")}</Btn></div>
         </Form>
         <AiKeyTest />
-      </Card>
-
-      <Card className="max-w-[640px]">
-        <SectionTitle icon="globe">{t("how_free_key")}</SectionTitle>
-        <ul className="flex flex-col gap-3 text-[14px] text-ink-2">
-          <li>
-            <b className="text-au-cyan">Google Gemini:</b>{" "}
-            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener"
-               className="text-au-cyan underline-offset-4 hover:underline">Google AI Studio ↗</a>
-            {" — "}{bi("1500 طلب/يوم مجاناً", "1,500 req/day free")}
-          </li>
-          <li>
-            <b className="text-au-cyan">Groq:</b>{" "}
-            <a href="https://console.groq.com/keys" target="_blank" rel="noopener"
-               className="text-au-cyan underline-offset-4 hover:underline">console.groq.com ↗</a>
-          </li>
-        </ul>
       </Card>
     </>
   );

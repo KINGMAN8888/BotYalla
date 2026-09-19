@@ -118,6 +118,26 @@ class WhatsAppChannel(Channel):
             log.exception("WhatsApp API call failed")
             return None
 
+    async def mark_read(self, message_id, typing=True):
+        """علامتا القراءة الزرقاوان + «يكتب…» فوراً للعميل حتى يصل الرد (حتى 25ث أو الرد).
+        ليست رسالة: لا تمرّ بعدّاد الاستهلاك (`on_send`) ولا تُحاسَب من Meta."""
+        if not message_id:
+            return None
+        p = {"messaging_product": "whatsapp", "status": "read", "message_id": message_id}
+        if typing:
+            p["typing_indicator"] = {"type": "text"}
+        try:
+            c = await _http()
+            r = await c.post(f"{META_API}/{self.phone_id}/messages", json=p,
+                             headers={"Authorization": f"Bearer {self.token}",
+                                      "Content-Type": "application/json"})
+            if r.status_code >= 400:
+                log.info("WhatsApp mark_read %s: %s", r.status_code, r.text[:200])
+            return r.status_code < 400
+        except Exception:
+            log.info("WhatsApp mark_read failed", exc_info=True)
+            return None
+
     def _to(self, peer):
         return peer[3:] if peer.startswith("wa:") else peer
 

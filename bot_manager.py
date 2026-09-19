@@ -492,7 +492,15 @@ class BotManager:
         from channels.telegram import TelegramChannel
         is_wa = (row.get("channel") or "telegram") == "whatsapp"
         own = None
-        if is_wa:
+        if is_wa and peer.startswith("tg:"):
+            # عميل كلّم بوت المنصة على تليجرام وسُجّل على صفّ المساعد الرسمي (بوت واتساب):
+            # الرد يخرج من بوت المنصة نفسه — لا من رقم واتساب لا يعرف هذا العميل
+            if self._platform is None:
+                return False, "send"
+            is_wa = False
+            ch = TelegramChannel(self._platform.bot)
+            ch.cache_refs = False
+        elif is_wa:
             ch = _wa_channel(row)
         else:
             app = self._apps.get(row["id"])
