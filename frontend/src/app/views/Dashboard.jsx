@@ -172,6 +172,131 @@ function BotCard({ b, i }) {
   );
 }
 
+/* «اربط رقمك بضغطة» — WhatsApp Embedded Signup (BotYalla مزوّد خدمة تقنية معتمد من Meta).
+   نافذة Meta الرسمية: العميل يختار نشاطه ورقمه، والمتصفح يستلم code + المعرّفات، والخادم وحده
+   يبدّل ويتحقّق ويسجّل (/whatsapp/es/finish). لا كلمات سر ولا توكنات في المتصفح. */
+let _fbLoading = null;
+function loadFacebook(cfg) {
+  if (window.FB) return Promise.resolve(window.FB);
+  if (_fbLoading) return _fbLoading;
+  _fbLoading = new Promise((resolve, reject) => {
+    window.fbAsyncInit = () => {
+      window.FB.init({ appId: cfg.appId, autoLogAppEvents: true, xfbml: false, version: cfg.version });
+      resolve(window.FB);
+    };
+    const s = document.createElement("script");
+    s.src = "https://connect.facebook.net/en_US/sdk.js";
+    s.async = true; s.defer = true; s.crossOrigin = "anonymous";
+    s.onerror = () => { _fbLoading = null; reject(new Error("sdk")); };
+    document.body.appendChild(s);
+  });
+  return _fbLoading;
+}
+
+function WaOneTap({ cfg }) {
+  const [state, setState] = useState({ busy: false, msg: null, ok: null });
+  const session = useRef(null);
+
+  useEffect(() => {
+    const onMsg = (ev) => {
+      let host = "";
+      try { host = new URL(ev.origin).hostname; } catch { return; }
+      if (!/(^|\.)facebook\.com$/.test(host)) return;          // رسائل نافذة Meta وحدها
+      let d = ev.data;
+      try { if (typeof d === "string") d = JSON.parse(d); } catch { return; }
+      if (!d || d.type !== "WA_EMBEDDED_SIGNUP") return;
+      if (String(d.event || "").startsWith("FINISH")) session.current = d.data || {};
+      else if (d.event === "CANCEL") session.current = { cancelled: true, step: d.data && d.data.current_step };
+      else if (d.event === "ERROR") session.current = { error: (d.data && d.data.error_message) || "error" };
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
+  const formVal = (name) => {
+    const el = document.querySelector(`form [name="${name}"]`);
+    return el ? el.value : "";
+  };
+
+  async function finish(code) {
+    // رسالة الجلسة قد تصل بعد callback الدخول بلحظات — ننتظرها حتى 5 ثوانٍ
+    for (let i = 0; i < 25 && !session.current; i++) await new Promise((r) => setTimeout(r, 200));
+    const s = session.current || {};
+    if (s.error) return setState({ busy: false, ok: false, msg: bi("Meta: ", "Meta: ") + s.error });
+    if (!s.phone_number_id || !s.waba_id) {
+      return setState({ busy: false, ok: false, msg: bi(
+        "النافذة اتقفلت قبل ما تختار رقم — جرّب تاني وكمّل لحد آخر خطوة.",
+        "The window closed before a number was selected — try again and finish all steps.") });
+    }
+    setState({ busy: true, ok: null, msg: bi("بنربط رقمك ونجهّز البوت…", "Connecting your number and preparing the bot…") });
+    try {
+      const r = await fetch("/whatsapp/es/finish", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf },
+        body: JSON.stringify({ code, waba_id: s.waba_id, phone_id: s.phone_number_id,
+                               name: formVal("name"), template: formVal("template") }),
+      });
+      let d = null;
+      try { d = await r.json(); } catch { /* صفحة خطأ */ }
+      if (d && d.ok) { window.location.href = d.url; return; }
+      setState({ busy: false, ok: false, msg: (d && d.error) || `HTTP ${r.status}` });
+    } catch {
+      setState({ busy: false, ok: false, msg: bi("مفيش اتصال بالسيرفر — جرّب تاني.", "No connection to the server — try again.") });
+    }
+  }
+
+  async function start() {
+    session.current = null;
+    setState({ busy: true, ok: null, msg: bi("بنفتح نافذة Meta…", "Opening the Meta window…") });
+    let FB;
+    try { FB = await loadFacebook(cfg); } catch {
+      return setState({ busy: false, ok: false, msg: bi(
+        "تعذّر تحميل فيسبوك — لو عندك مانع إعلانات أو إضافة خصوصية اقفلها للصفحة دي وجرّب تاني.",
+        "Could not load Facebook — if you use an ad/privacy blocker, allow this page and retry.") });
+    }
+    FB.login((resp) => {
+      const code = resp && resp.authResponse && resp.authResponse.code;
+      if (!code) {
+        setState({ busy: false, ok: false, msg: bi("اتلغى الربط من نافذة Meta.", "The connection was cancelled in the Meta window.") });
+        return;
+      }
+      finish(code);
+    }, {
+      config_id: cfg.configId, response_type: "code", override_default_response_type: true,
+      extras: { setup: {}, featureType: "", sessionInfoVersion: "3" },
+    });
+  }
+
+  return (
+    <div className="mb-5 rounded-xl p-4 bg-[linear-gradient(120deg,rgb(37_211_102/0.16),rgb(34_211_238/0.06))]
+                    shadow-[inset_0_0_0_1px_rgb(37_211_102/0.4)]">
+      <b className="flex flex-wrap items-center gap-2 text-[14.5px] text-ink">
+        <img src="/static/whatsapp.png" alt="" className="size-5 object-contain" />
+        {bi("اربط رقم واتساب بضغطة", "Connect your WhatsApp number in one tap")}
+        <Pill tone="on">{bi("موصى به", "Recommended")}</Pill>
+      </b>
+      <p className="mt-2 mb-0 text-[12.5px] leading-relaxed text-ink-2">
+        {bi("نافذة Meta الرسمية بتفتح: سجّل دخولك بفيسبوك، اختار نشاطك ورقم البوت، وخلاص — البوت بيتعمل ويتربط لوحده. BotYalla مزوّد خدمة تقنية معتمد من Meta، ورسايل رقمك بتتحاسب على حسابك في Meta مباشرة.",
+            "The official Meta window opens: sign in with Facebook, pick your business and the bot's number — the bot is created and connected automatically. BotYalla is a Meta-approved Tech Provider, and your number's messages are billed to your own Meta account.")}
+      </p>
+      <p className="mt-2 mb-0 text-[12px] leading-relaxed text-ink-3">
+        <Icon name="shield" size={12} className="me-1 align-[-2px]" />
+        {bi("اكتب اسم النشاط ونوع البوت في الخطوة اللي تحت الأول. الرقم لازم يكون مش شغّال على تطبيق واتساب العادي (أو تتبع خطوات النقل اللي Meta بتعرضها).",
+            "Fill in the business name and bot type in the step below first. The number must not be active on the regular WhatsApp app (or follow Meta's migration steps).")}
+      </p>
+      <Btn icon="link" type="button" className="mt-3" onClick={start} disabled={state.busy}>
+        {state.busy ? bi("جارٍ الربط…", "Connecting…") : bi("اربط رقمي الآن", "Connect my number")}
+      </Btn>
+      {state.msg && (
+        <p role="status" aria-live="polite"
+           className={"mt-3 mb-0 text-[12.5px] font-bold " + (state.ok === false ? "text-red-300" : "text-ink-2")}>
+          {state.msg}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /* «سيبها علينا»: خطوات Meta صعبة على غير التقنيين، والربط مشمول في باقات واتساب.
    يُرسل بـ fetch لا بنموذج لأنه داخل نموذج الإنشاء (النماذج لا تتداخل) — ولذلك حقوله
    بلا name ولا required: لا تُرسَل مع البوت ولا تعطّل إنشاءه، وEnter فيها لا يُنشئ بوتاً. */
@@ -379,30 +504,47 @@ function CreateWizard({ collapsed = false }) {
         </>
       ) : (
         <>
+          {/* الربط بضغطة أولاً (Embedded Signup) — ثم «سيبها علينا» ثم اليدوي للمطورين */}
+          {P.waEs && <WaOneTap cfg={P.waEs} />}
           {/* مشمولة في باقات واتساب: الفريق يربطها بدل العميل (باقته هو، لا صلاحية الفريق) */}
           {P.waPlan && <WaAssist />}
-          <Btn variant="ghost" sm icon="link" href="https://developers.facebook.com/apps"
-               target="_blank" rel="noopener">
-            {bi("افتح لوحة مطوري Meta", "Open Meta developers")}
-          </Btn>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <Field label="Phone Number ID">
-              <Input name="wa_phone_id" required autoComplete="off" spellCheck="false"
-                     inputMode="numeric" placeholder="123456789012345" />
-            </Field>
-            <Field label="Access Token">
-              <Input name="wa_token" required autoComplete="off" spellCheck="false"
-                     placeholder="EAAG…" />
-            </Field>
-          </div>
-          <p className="mt-3 text-[12.5px] text-ink-3">
-            {bi("بعد الإنشاء اضبط Webhook في Meta على العنوان أسفل، ثم شغّل البوت.",
-                "After creating it, point the Meta webhook to the URL below, then start the bot.")}
-            {" "}
-            <code className="rounded bg-white/10 px-1.5 py-0.5">
-              {typeof window !== "undefined" ? window.location.origin : ""}/wh/whatsapp
-            </code>
-          </p>
+          {(() => {
+            const manual = (
+              <>
+                <Btn variant="ghost" sm icon="link" href="https://developers.facebook.com/apps"
+                     target="_blank" rel="noopener">
+                  {bi("افتح لوحة مطوري Meta", "Open Meta developers")}
+                </Btn>
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  {/* بلا required حين يوجد الربط بضغطة: الحقول داخل قسم مطوي، والخادم يتحقق */}
+                  <Field label="Phone Number ID">
+                    <Input name="wa_phone_id" required={!P.waEs} autoComplete="off" spellCheck="false"
+                           inputMode="numeric" placeholder="123456789012345" />
+                  </Field>
+                  <Field label="Access Token">
+                    <Input name="wa_token" required={!P.waEs} autoComplete="off" spellCheck="false"
+                           placeholder="EAAG…" />
+                  </Field>
+                </div>
+                <p className="mt-3 text-[12.5px] text-ink-3">
+                  {bi("بعد الإنشاء اضبط Webhook في Meta على العنوان أسفل، ثم شغّل البوت.",
+                      "After creating it, point the Meta webhook to the URL below, then start the bot.")}
+                  {" "}
+                  <code className="rounded bg-white/10 px-1.5 py-0.5">
+                    {typeof window !== "undefined" ? window.location.origin : ""}/wh/whatsapp
+                  </code>
+                </p>
+              </>
+            );
+            return P.waEs ? (
+              <details className="rounded-xl bg-black/20 p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+                <summary className="cursor-pointer text-[13px] font-bold text-ink-2">
+                  {bi("ربط يدوي بـ Phone Number ID و Token (للمطورين)", "Manual connection with Phone Number ID & token (developers)")}
+                </summary>
+                <div className="mt-4">{manual}</div>
+              </details>
+            ) : manual;
+          })()}
         </>
       ),
     },

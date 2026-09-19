@@ -12,6 +12,20 @@ export default function Trust() {
         </h2>
         <p className="m-0 text-[clamp(14px,1.3vw,17px)] leading-[1.8] text-ink-2">{t("lp2_trust_sub")}</p>
       </Reveal>
+      {/* اعتماد Meta (مزوّد خدمة تقنية) — حقيقة موثّقة لا شعار: بلا شعار Meta ولا «شريك» */}
+      <Reveal className="mb-5">
+        <div className="flex flex-col items-start gap-4 rounded-[24px] p-6 sm:flex-row sm:items-center
+                        bg-[linear-gradient(120deg,rgb(37_211_102/0.14),rgb(34_211_238/0.06))]
+                        shadow-[inset_0_0_0_1px_rgb(37_211_102/0.35)]">
+          <span className="grid size-12 shrink-0 place-items-center rounded-[14px] bg-white/[0.06]">
+            <img src="/static/whatsapp.png" alt="" className="size-7 object-contain" />
+          </span>
+          <div>
+            <h3 className="m-0 mb-1.5 text-[18px] font-extrabold text-ink">{t("lp2_meta_t")}</h3>
+            <p className="m-0 text-[14px] leading-[1.75] text-ink-2">{t("lp2_meta_d")}</p>
+          </div>
+        </div>
+      </Reveal>
       <div className="grid grid-cols-1 gap-px overflow-hidden rounded-[28px] bg-white/[0.07] sm:grid-cols-2 lg:grid-cols-3">
         {items.map((x, i) => (
           <Reveal key={i} delay={(i % 3) * 0.07} className="h-full">

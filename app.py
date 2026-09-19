@@ -55,6 +55,7 @@ import accounts as ACC
 import urllib.request as _ureq
 import legal_content as LEGAL
 import analytics as AN
+import wa_signup as WAS
 from xml.sax.saxutils import escape as _xesc
 import time as _time
 import logging
@@ -307,7 +308,11 @@ def _build_csp():
     يفتح نطاقات فيسبوك. ⚠️ لا تُضِف 'unsafe-inline' إلى script-src أبداً:
     كل سكربتاتنا (وGTM) تحمل nonce، وفتح inline يُبطل حماية REVIEW.md §3.1."""
     d = {k: list(v) for k, v in _CSP_BASE.items()}
-    for directive, srcs in AN.csp_sources().items():
+    extra = {}
+    for part in (AN.csp_sources(), WAS.csp_sources()):
+        for directive, srcs in part.items():
+            extra.setdefault(directive, []).extend(srcs)
+    for directive, srcs in extra.items():
         cur = d.setdefault(directive, [])
         for s in srcs:
             if s not in cur:
@@ -1157,6 +1162,8 @@ def dashboard():
                        # «فريقنا يربط واتساب لك» مشمولة في باقات واتساب — باقة العميل نفسه لا
                        # صلاحية الفريق. `open` = طلبه المفتوح إن وُجد (طلب واحد لكل عميل)
                        "waPlan": wa_plan,
+                       # ربط واتساب بضغطة (Embedded Signup) — لمن تتيح باقته واتساب
+                       "waEs": WAS.client_config() if wa_ok else None,
                        "waAssist": {"open": db.open_ticket_of_kind(uid(), "wa_setup") if wa_plan else None},
                        "onboarding": _onboarding(bots),
                        # الإنشاء بضغطة متاح فقط لو بوت المنصة يعمل وفيه «وضع إدارة البوتات»
@@ -1226,6 +1233,17 @@ def _public_bot(b):
     b = dict(b)
     if not str(b.get("token") or "").startswith("wa:"):
         b["token"] = ""
+    # توكن واتساب (Meta) ورمز PIN التسجيل سرّان تشغيليّان كتوكن تليجرام — لا تقرأهما الواجهة
+    # (الصف يحمل الإعداد مرتين: `config_json` نصاً و`config` محلولاً — نمسح من الاثنين)
+    try:
+        cfg = json.loads(b.get("config_json") or "{}")
+        if any(k in cfg for k in ("wa_token", "wa_pin")):
+            cfg.pop("wa_token", None); cfg.pop("wa_pin", None)
+            b["config_json"] = json.dumps(cfg, ensure_ascii=False)
+    except (TypeError, ValueError):
+        pass
+    if isinstance(b.get("config"), dict):
+        b["config"] = {k: v for k, v in b["config"].items() if k not in ("wa_token", "wa_pin")}
     return b
 
 @app.route("/bot/create", methods=["POST"])
@@ -2329,7 +2347,7 @@ def config_restore(bot_id, vid):
     db.save_config_version(bot_id, cur, "restore")
     # الحقول التشغيلية لا تُستعاد من نسخة قديمة: ربط المالك والتوكنات وهوية البوت
     for k in ("owner_chat_id", "wa_token", "tg_bot_id", "bot_username", "bot_name",
-              "pending_owner_code", "wa_waba_id", "wa_waba_hint", "created_via",
+              "pending_owner_code", "wa_waba_id", "wa_waba_hint", "created_via", "wa_pin",
               "ai_consent_at", "tg_synced_at", "tg_sync_ok", "tg_sync_errors"):
         if k in cur:
             old[k] = cur[k]
@@ -3060,6 +3078,66 @@ def wa_assist():
     log.info("wa_setup ticket #T%s opened by user=%s", tid, uid())
     _alert_ticket(tid, body)
     return jsonify({"ok": True, "id": tid, "existing": False})
+
+@app.route("/whatsapp/es/finish", methods=["POST"])
+@login_required
+def wa_es_finish():
+    """نهاية «اربط واتساب بضغطة»: المتصفح يرسل code + المعرّفات من نافذة Meta، والخادم يبدّل
+    ويتحقّق ويشترك ويسجّل (wa_signup.connect) ثم يُنشئ البوت في حساب المستخدم **بحدود باقته**.
+    يرجّع JSON: {ok, url} أو {ok:false, error, step}."""
+    ar = session.get("lang") != "en"
+    if not WAS.configured():
+        return jsonify(ok=False, error="not configured"), 404
+    if _rate_limited(f"u{uid()}", limit=6, window=600, bucket="wa_es"):
+        return jsonify(ok=False, error=("محاولات كتير — استنى دقايق وجرّب تاني." if ar else
+                                        "Too many attempts — wait a few minutes.")), 429
+    data = request.get_json(silent=True) or {}
+    staff = current_role() in ("admin", "support")
+    if not staff:
+        sub = db.get_subscription(uid())
+        plan_id = sub["plan"] if sub["status"] == "active" else "free"
+        if not plans.plan(plan_id).get("whatsapp"):
+            return jsonify(ok=False, upgrade=True, error=("واتساب متاح في باقة «واتساب» فأعلى." if ar else
+                                                          "WhatsApp starts at the «WhatsApp» plan.")), 403
+        if db.count_user_bots(uid()) >= plans.plan(plan_id)["max_bots"]:
+            return jsonify(ok=False, upgrade=True, error=("وصلت للحد الأقصى لبوتات باقتك." if ar else
+                                                          "You reached your plan's bot limit.")), 403
+    template = data.get("template") if data.get("template") in T.TEMPLATES else "customer_service"
+    secret = db.get_platform("wa_app_secret", "") or ""
+    try:
+        res = WAS.connect(str(data.get("code") or ""), data.get("waba_id"), data.get("phone_id"), secret)
+    except WAS.SignupError as e:
+        log.warning("embedded signup failed at %s for user=%s: %s", e.step, uid(), e)
+        return jsonify(ok=False, step=e.step, error=(
+            f"Meta رفضت الربط ({e.step}): {e}" if ar else f"Meta refused the connection ({e.step}): {e}"))
+    except Exception:
+        log.exception("embedded signup crashed for user=%s", uid())
+        return jsonify(ok=False, error=("حصل خطأ غير متوقع — جرّب تاني أو اطلب الربط من فريقنا." if ar else
+                                        "Unexpected error — retry or ask our team to connect it.")), 500
+    name = (str(data.get("name") or "").strip() or res["name"] or res["number"])[:60]
+    info = {"username": res["number"], "name": res["name"] or name}
+    cfg = T.initial_config(name, template, info, "")
+    cfg.update(wa_token=res["token"], wa_waba_id=res["waba_id"], wa_pin=res["pin"],
+               created_via="embedded_signup")
+    if res["warning"]:
+        cfg["wa_setup_warning"] = res["warning"][:500]
+    try:
+        new_id = db.create_bot(uid(), name, f"wa:{res['phone_id']}", template, cfg, "whatsapp")
+    except Exception:
+        log.exception("embedded signup: create bot failed for user=%s", uid())
+        return jsonify(ok=False, error=("الرقم ده مربوط ببوت تاني بالفعل." if ar else
+                                        "This number is already connected to another bot."))
+    log.info("embedded signup: user=%s bot=%s waba=%s registered=%s", uid(), new_id, res["waba_id"],
+             res["registered"])
+    notify_admins(f"🤖 بوت واتساب جديد بالربط بضغطة / New WhatsApp bot (Embedded Signup): «{name}» "
+                  f"{res['number']} — {session.get('uname')}" + (f"\n⚠️ {res['warning']}" if res["warning"] else ""))
+    AN.queue(session, "bot_created", channel="whatsapp", template=template)
+    flash((f"✅ اتربط رقم {res['number']} ببوت «{name}». راجع رسالة الترحيب واضغط «تشغيل»." if ar else
+           f"✅ {res['number']} is connected to «{name}». Review the welcome message and press «Start».")
+          + ((" ⚠️ " + ("ملحوظة من Meta: " if ar else "Note from Meta: ") + res["warning"]) if res["warning"] else ""),
+          "ok" if not res["warning"] else "error")
+    return jsonify(ok=True, url=url_for("bot_detail", bot_id=new_id, new=1), warning=res["warning"])
+
 
 @app.route("/admin/tickets/<int:tid>/wa-connect", methods=["POST"])
 @require_roles("admin", "support")

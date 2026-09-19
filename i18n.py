@@ -1111,6 +1111,9 @@ T.update({
  # الثقة
  "lp2_trust_t":      {"ar": "مبني على الثقة من أول سطر", "en": "Built on trust from the first line"},
  "lp2_trust_sub":    {"ar": "مابنطلبش منك غير اللي محتاجينه فعلاً — وبنقولك بالظبط بنعمل إيه بيه.", "en": "We only ask for what we actually need — and tell you exactly what we do with it."},
+ "lp2_meta_t":       {"ar": "مزوّد خدمة تقنية معتمد من Meta لواتساب للأعمال", "en": "Meta-approved Tech Provider for WhatsApp Business"},
+ "lp2_meta_d":       {"ar": "رقمك بيتربط من نافذة Meta الرسمية بضغطة، من غير كلمات سر ولا وسطاء — ورسايلك بتتحاسب على حسابك في Meta مباشرة.",
+                      "en": "Your number connects through Meta's official window in one tap — no passwords, no middlemen — and your messages are billed to your own Meta account."},
  "lp2_tr1_t":        {"ar": "حسابك محمي", "en": "Your account is protected"},
  "lp2_tr1_d":        {"ar": "كلمات مرور مشفّرة، واسترجاع آمن بالإيميل، وخروج تلقائي من كل الأجهزة لما تغيّر كلمة المرور.", "en": "Hashed passwords, secure email recovery, and automatic sign-out everywhere when you change your password."},
  "lp2_tr2_t":        {"ar": "دفعك بيتراجع بإيد إنسان", "en": "A human reviews every payment"},
