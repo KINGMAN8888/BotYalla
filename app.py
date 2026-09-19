@@ -1363,6 +1363,7 @@ def bot_detail(bot_id):
                            "price": FE.ai_reply_price(), "wallet": db.wallet_balance(uid()),
                            "hasKey": bool(db.get_platform("ai_key", "")),
                            "modeAllowed": staff or bool(replies_limit),
+                           "canOfficial": current_role() == "admin" and db.bot_owner_is_staff(bot_id),
                            "engine": _uses_engine(b)}},
                       title=b["name"])
 
@@ -3563,6 +3564,20 @@ def bot_brain(bot_id):
             cfg["ai_consent_at"] = int(_time.time())
     cfg["response_mode"] = mode
     cfg["ai_persona"] = request.form.get("ai_persona", "").strip()[:600]
+    # رسالة البداية وأزرارها (≤3، ≤20 حرفاً — حدّ زر الرد في واتساب)
+    cfg["ai_welcome"] = request.form.get("ai_welcome", "").strip()[:900]
+    starters = []
+    for s in request.form.getlist("ai_starter"):
+        s = " ".join(s.split())[:20].strip()
+        if s and s not in starters:
+            starters.append(s)
+    cfg["ai_starters"] = starters[:3]
+    # «مساعد BotYalla الرسمي»: يتكلّم باسم المنصة بأسعارها الحيّة — للأدمن على بوت يملكه
+    # حساب إدارة فقط (والمحرك يعيد الفحص بصاحب البوت عند كل رد)
+    if not db.bot_owner_is_staff(bot_id):
+        cfg.pop("platform_kb", None)
+    elif current_role() == "admin":
+        cfg["platform_kb"] = request.form.get("platform_kb") == "1"
     kb = {k: request.form.get(f"kb_{k}", "") for k in
           ("about", "hours", "location", "delivery", "payment", "policies")}
     kb["faqs"] = [{"q": q, "a": a} for q, a in zip(request.form.getlist("kb_q"),

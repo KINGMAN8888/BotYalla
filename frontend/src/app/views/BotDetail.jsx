@@ -409,6 +409,38 @@ function BrainCard({ bot, ai, cfg }) {
           {!ai.hasKey && mode !== "flow" && <span className="font-bold text-yellow-200">{t("brain_nokey")}</span>}
         </div>
 
+        {ai.canOfficial && (
+          <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl bg-au-teal/10 p-4
+                            shadow-[inset_0_0_0_1px_rgb(45_212_191/0.35)]">
+            <input type="checkbox" name="platform_kb" value="1" defaultChecked={!!cfg.platform_kb} className="mt-1" />
+            <span className="flex flex-col gap-1">
+              <span className="flex items-center gap-2 text-[14px] font-extrabold text-ink">
+                <Icon name="sparkles" size={15} className="text-au-teal" />{t("brain_official")}
+              </span>
+              <span className="text-[12.5px] leading-relaxed text-ink-3">{t("brain_official_d")}</span>
+            </span>
+          </label>
+        )}
+
+        <details className="mt-5 rounded-2xl bg-black/20 p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]" open={mode !== "flow"}>
+          <summary className="cursor-pointer text-[14px] font-extrabold text-ink">{t("brain_welcome_t")}</summary>
+          <p className="mt-2 mb-4 text-[12.5px] leading-relaxed text-ink-3">{t("brain_welcome_hint")}</p>
+          <Field label={t("brain_welcome_t")}>
+            <Textarea name="ai_welcome" defaultValue={cfg.ai_welcome || ""} maxLength={900}
+                      placeholder={t("brain_welcome_ph")} className="!min-h-[96px]" />
+          </Field>
+          <span className="mt-4 mb-2 block text-[13px] font-bold text-ink-2">{t("brain_starters")}</span>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <Input key={i} name="ai_starter" defaultValue={(cfg.ai_starters || [])[i] || ""}
+                     placeholder={t("brain_starter_ph")} maxLength={20} />
+            ))}
+          </div>
+          <p className="mt-4 mb-0 flex items-start gap-2 text-[12px] leading-relaxed text-ink-3">
+            <Icon name="shield" size={14} className="mt-0.5 shrink-0 text-au-teal" />{t("brain_policy")}
+          </p>
+        </details>
+
         <details className="mt-5 rounded-2xl bg-black/20 p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]" open={mode !== "flow"}>
           <summary className="cursor-pointer text-[14px] font-extrabold text-ink">{t("brain_kb_title")}</summary>
           <p className="mt-2 mb-4 text-[12.5px] leading-relaxed text-ink-3">{t("brain_kb_hint")}</p>

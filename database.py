@@ -198,6 +198,9 @@ def _migrate(c):
         # آخر رسالة واردة من العميل — واتساب يمنع المراسلة الحرة بعد 24 ساعة منها.
         c.execute("ALTER TABLE bot_users ADD COLUMN last_in_at INTEGER")
         c.execute("UPDATE bot_users SET last_in_at=created_at WHERE last_in_at IS NULL")
+    if "opted_out" not in ucols:
+        # العميل طلب إيقاف الرسائل الترويجية (STOP) — سياسة Meta: لا حملات له بعدها.
+        c.execute("ALTER TABLE bot_users ADD COLUMN opted_out INTEGER NOT NULL DEFAULT 0")
 
     # ---- الدورة الفوترية (شهري/سنوي) ----
     # الافتراضي 'monthly' فكل صفّ قائم يبقى على ما هو عليه بلا لمس.
@@ -1194,13 +1197,29 @@ def touch_bot_user(bot_id, peer):
         c.execute("UPDATE bot_users SET last_in_at=? WHERE bot_id=? AND peer=?",
                   (int(time.time()), bot_id, peer))
 
+def set_opt_out(bot_id, peer, out=True):
+    """إيقاف/استئناف الرسائل الترويجية لعميل. من طلب الإيقاف يخرج من كل بثّ وحملة
+    (`list_bot_peers` · `list_bot_user_ids`) — وهي القائمة نفسها التي تُحسب عليها
+    تكلفة الحملة، فلا يُخصم على من لن يُرسل إليه (AGENTS.md §3.22)."""
+    with get_conn() as c:
+        c.execute("UPDATE bot_users SET opted_out=? WHERE bot_id=? AND peer=?",
+                  (1 if out else 0, bot_id, peer))
+
+def is_opted_out(bot_id, peer):
+    with get_conn() as c:
+        r = c.execute("SELECT opted_out FROM bot_users WHERE bot_id=? AND peer=?",
+                      (bot_id, peer)).fetchone()
+        return bool(r and r[0])
+
 def list_bot_user_ids(bot_id):
     with get_conn() as c:
-        return [r[0] for r in c.execute("SELECT tg_user_id FROM bot_users WHERE bot_id=?", (bot_id,)).fetchall()]
+        return [r[0] for r in c.execute("SELECT tg_user_id FROM bot_users WHERE bot_id=? AND opted_out=0",
+                                        (bot_id,)).fetchall()]
 
 def list_bot_peers(bot_id, within_seconds=None):
-    """يرجّع peers المشتركين. within_seconds يقصرها على من راسل البوت مؤخراً."""
-    q = "SELECT peer FROM bot_users WHERE bot_id=? AND peer IS NOT NULL"
+    """يرجّع peers المشتركين. within_seconds يقصرها على من راسل البوت مؤخراً.
+    من طلب إيقاف الرسائل (`opted_out`) لا يُرجَع أبداً."""
+    q = "SELECT peer FROM bot_users WHERE bot_id=? AND peer IS NOT NULL AND opted_out=0"
     args = [bot_id]
     if within_seconds:
         q += " AND last_in_at IS NOT NULL AND last_in_at >= ?"

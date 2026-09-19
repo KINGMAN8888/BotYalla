@@ -228,6 +228,57 @@ def _ai_can_try(bot_row):
     return price > 0 and db.wallet_balance(bot_row["owner_id"]) >= price
 
 
+def _platform_facts(bot_row, cfg):
+    """حقائق BotYalla الحيّة لبوت المنصة الرسمي فقط: الخيار مفعّل **و** صاحب البوت أدمن/دعم —
+    فلا يستطيع عميل أن يجعل بوته يتكلّم باسم المنصة بتعديل إعداده."""
+    if not cfg.get("platform_kb") or not db.bot_owner_is_staff(bot_row["id"]):
+        return None
+    try:
+        import platform_kb
+        return platform_kb.facts()
+    except Exception:
+        log.exception("platform facts failed for bot #%s", bot_row["id"])
+        return None
+
+
+def _lang_of(text):
+    import ai_agent
+    return "en" if ai_agent._is_en(text) else "ar"
+
+
+def _welcome_of(bot_row, cfg, f, text=""):
+    """رسالة البداية في وضع «عقل البوت» وأزرارها: ما كتبه صاحب البوت أولاً، ثم رسالة
+    بوت المنصة الرسمي الجاهزة، ثم ترحيب الفلو القديم."""
+    lang = _lang_of(text)
+    official = bool(cfg.get("platform_kb")) and db.bot_owner_is_staff(bot_row["id"])
+    kb = None
+    if official:
+        import platform_kb as kb
+    text_ = ((cfg.get("ai_welcome") or "").strip() or (kb.welcome(lang) if kb else "") or
+             f.get("start_message") or cfg.get("welcome") or
+             f"👋 أهلاً بك في «{cfg.get('business_name', '')}»! اسألني عن أي حاجة.")
+    opts = [s for s in (cfg.get("ai_starters") or []) if isinstance(s, str) and s.strip()]
+    if not opts and kb:
+        opts = kb.starters(lang)
+    return text_, opts[:3]
+
+
+# إيقاف الرسائل الترويجية — سياسة Meta: أي طلب إيقاف يُحترم فوراً وفي كل وضع.
+# كلمات صريحة فقط: «إلغاء» وحدها تعني إلغاء النموذج الجاري لا الاشتراك.
+OPT_OUT_WORDS = {"stop", "unsubscribe", "stop promotions", "optout", "opt out", "opt-out",
+                 "إلغاء الاشتراك", "الغاء الاشتراك", "ايقاف الرسائل", "إيقاف الرسائل",
+                 "ايقاف العروض", "إيقاف العروض", "وقف الرسائل", "وقف العروض"}
+OPT_IN_WORDS = {"تفعيل العروض", "تفعيل الرسائل", "resume offers", "subscribe offers"}
+OPT_TEXT = {
+    ("out", "ar"): "✅ تم إيقاف الرسائل الترويجية، ومش هيوصلك مننا عروض تاني.\n"
+                   "لو احتجت أي حاجة ابعتلنا في أي وقت، ولو حبيت ترجع للعروض ابعت «تفعيل العروض».",
+    ("out", "en"): "✅ Done — you won't receive promotional messages from us anymore.\n"
+                   "Message us any time you need help, or send «resume offers» to get offers again.",
+    ("in", "ar"): "✅ تم تفعيل العروض من جديد. أهلاً بيك تاني 👋",
+    ("in", "en"): "✅ Offers are back on. Welcome back 👋",
+}
+
+
 async def _ai_answer(bot_row, cfg, raw_channel, peer, text, extra=None):
     """يرد بالذكاء الاصطناعي. يرجّع True لو أُرسل رد، وإلا False ليرجع المستدعي للفلو.
 
@@ -241,6 +292,9 @@ async def _ai_answer(bot_row, cfg, raw_channel, peer, text, extra=None):
     ch = LoggedChannel(raw_channel, bot_row["id"], "ai")
     await ch.send_typing(peer)
     history = db.recent_history(bot_row["id"], peer, 12)
+    facts = _platform_facts(bot_row, cfg)
+    if facts:
+        extra = dict(extra or {}, platform=facts)
     try:
         out = await asyncio.to_thread(ai_agent.brain_reply, cfg, bot_row, history, text,
                                       key, provider, extra)
@@ -256,8 +310,10 @@ async def _ai_answer(bot_row, cfg, raw_channel, peer, text, extra=None):
         log.info("AI reply dropped for bot #%s — allowance and wallet exhausted", bot_row["id"])
         return False
     inner = raw_channel._c if isinstance(raw_channel, LoggedChannel) else raw_channel
+    tips = (out or {}).get("suggestions") or []
     try:
-        res = await ch.send_text(peer, reply)
+        # أزرار الرد السريع: واتساب ≤3 أزرار بعنوان ≤20 حرفاً (القناة تتحقق)، تليجرام لوحة تختفي بعد الضغط
+        res = await (ch.send_buttons(peer, reply, tips) if tips else ch.send_text(peer, reply))
         # واتساب يرجّع None حين يُرفض الإرسال (نافذة 24 ساعة · خطأ Meta · حدّ الباقة)،
         # وتليجرام لا يرجّع شيئاً عند النجاح ويرمي عند الفشل — تمييز LoggedChannel._log نفسه
         delivered = not (res is None and getattr(inner, "phone_id", None) is not None)
@@ -320,6 +376,10 @@ async def _ai_action(bot_row, cfg, raw_channel, peer, action):
         await notify_owner(bot_row, raw_channel,
                            f"❓ سؤال لم يجد الذكاء الاصطناعي إجابته في «{biz}»:\n"
                            f"{str(action.get('note') or '')[:400]}")
+    elif kind == "optout":
+        # قد تكون أول رسالة للعميل — صفّه لم يُنشأ بعد، والإيقاف بلا صفّ يضيع
+        db.add_bot_user(bot_id, _peer_num(peer), "", peer=peer)
+        db.set_opt_out(bot_id, peer, True)
     elif kind == "product":
         name = str(action.get("name", "")).strip().lower()
         for p in cfg.get("products") or []:
@@ -361,6 +421,17 @@ async def handle_message(bot_row, channel, msg):
                        media_id=media_id, name=msg.get("name", ""))
     except Exception:
         log.exception("could not log inbound message")
+
+    # إيقاف/استئناف العروض يُسجَّل في كل وضع (حتى أثناء تولّي صاحب النشاط)
+    word = (msg.get("text") or "").strip().lower() if msg["kind"] != "media" else ""
+    opt = "out" if word in OPT_OUT_WORDS else "in" if word in OPT_IN_WORDS else None
+    if opt:
+        db.add_bot_user(bot_id, _peer_num(peer), msg.get("name", ""), peer=peer)
+        db.set_opt_out(bot_id, peer, opt == "out")
+        if not human:
+            db.clear_chat_state(bot_id, peer)
+            await channel.remove_keyboard(peer, OPT_TEXT[(opt, _lang_of(word))])
+            return
 
     # 2) صاحب النشاط يتولّى المحادثة: لا بوت ولا ذكاء اصطناعي
     if human:
@@ -424,20 +495,25 @@ async def _begin(bot_row, cfg, channel, peer, msg, f, steps):
     await _present(bot_row, channel, peer, f, steps, 0, {})
 
 
-async def _greet(bot_row, cfg, channel, peer, text):
-    """رسالة البداية — بصورة/فيديو الترحيب من المكتبة إن وُجد، أو رابط صورة قديم."""
+async def _greet(bot_row, cfg, channel, peer, text, options=None):
+    """رسالة البداية — بصورة/فيديو الترحيب من المكتبة إن وُجد، أو رابط صورة قديم.
+    `options`: أزرار بداية (وضع «عقل البوت») — تحت الوسائط مباشرة لو أمكن."""
     if not text:
         return
     asset = _asset(bot_row, cfg.get("welcome_asset"))
     if asset:
         try:
-            await channel.send_media(peer, asset, bot_row["id"], caption=text)
+            await channel.send_media(peer, asset, bot_row["id"], caption=text, options=options or None)
             return
         except Exception:
             log.exception("welcome media failed for bot #%s", bot_row["id"])
     img = cfg.get("welcome_image")
     if img:
-        await channel.send_image(peer, img, caption=text)
+        await channel.send_image(peer, img, caption=None if options else text)
+        if not options:
+            return
+    if options:
+        await channel.send_buttons(peer, text, options)
     else:
         await channel.remove_keyboard(peer, text)
 
@@ -465,9 +541,8 @@ async def _ai_mode(bot_row, cfg, raw, channel, peer, msg, f):
         db.add_bot_user(bot_id, _peer_num(peer), msg.get("name", ""), peer=peer)
         db.log_event(bot_id, "start")
         db.clear_chat_state(bot_id, peer)
-        greeting = (f.get("start_message") or cfg.get("welcome") or
-                    f"👋 أهلاً بك في «{cfg.get('business_name', '')}»! اسألني عن أي حاجة.")
-        await _greet(bot_row, cfg, channel, peer, greeting)
+        greeting, starters = _welcome_of(bot_row, cfg, f, msg.get("text", ""))
+        await _greet(bot_row, cfg, channel, peer, greeting, starters)
         return True
     if kind == "unsupported":
         await channel.send_text(peer, "📝 اكتب لي سؤالك أو طلبك نصاً وأنا أساعدك.")
