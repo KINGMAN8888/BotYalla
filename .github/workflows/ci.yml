@@ -1,0 +1,56 @@
+# فحص آلي على كل دفعة: أسرار ← اختبارات ← بناء الواجهة.
+# المستودع عام، فالحارس الأول هو فحص الأسرار: الاختبارات تكشف كسر السلوك،
+# والسرّ المدفوع لا يكشفه شيء بعد فوات الأوان.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:                      # دفعة جديدة تُلغي جريان الدفعة السابقة لنفس الفرع
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: فحص الأسرار
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tools/scan_secrets.sh
+
+  tests:
+    name: الاختبارات
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      # عملية لكل ملف (العزل الذي بُنيت عليه الاختبارات: database.DB_PATH يُقرأ عند
+      # الاستيراد) — ويفشل على الكسر الجديد دون المكسور سلفاً. لا pytest tests/.
+      - run: PYTHON=python bash tools/ci_tests.sh
+        env:
+          BOTYALLA_OCR: "0"
+
+  frontend:
+    name: بناء الواجهة
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend

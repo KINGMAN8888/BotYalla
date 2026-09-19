@@ -1,0 +1,2 @@
+# سكربتات الصدفة تُنفَّذ على خادم لينكس — CRLF يكسرها ($'\r': command not found)
+*.sh text eol=lf
