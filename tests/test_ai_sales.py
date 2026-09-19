@@ -798,20 +798,70 @@ class RouteTests(Base):
     def test_key_test_is_bounded_per_provider(self):
         # كان اختبار الخمسة ورا بعض بمهلة 30ث لكل طلب يتجاوز مهلة nginx (60ث) فيرجع 504
         seen = []
-        orig_p, orig_g = ai._post_json, ai._get_json
+        orig_p, orig_g, orig_t = ai._post_json, ai._get_json, ai.time
         self.addCleanup(setattr, ai, "_post_json", orig_p)
         self.addCleanup(setattr, ai, "_get_json", orig_g)
-        ai._get_json = lambda url, h, timeout=20: {"data": [{"id": m} for m in ai.PROVIDERS["openrouter"]["models"]]}
+        self.addCleanup(setattr, ai, "time", orig_t)
+        ai._get_json = lambda url, h, timeout=20: {"data": [{"id": m} for m in ai.PROVIDERS["nvidia"]["models"]]}
+
+        class Clock:                                   # كل محاولة «تأخذ» 12 ثانية كاملة
+            now = 1000.0
+            def time(self): return self.now
+        clock = Clock()
+        ai.time = clock
 
         def slow(url, payload, headers, timeout=None):
             seen.append(ai._speed.timeout)
-            raise ai.AIError("network: timed out", retry=True)
+            clock.now += ai.TEST_TIMEOUT
+            raise ai.AIError("network: The read operation timed out", retry=True)
         ai._post_json = slow
-        r = ai.check_provider("openrouter", "k")
+        r = ai.check_provider("nvidia", "k")
         self.assertFalse(r["ok"])
-        self.assertEqual(len(seen), ai.TEST_MODELS, "الاختبار جرّب كل النماذج")
+        self.assertLessEqual(clock.now - 1000.0, ai.TEST_BUDGET, "الاختبار تجاوز ميزانيته (مهلة nginx)")
         self.assertEqual(set(seen), {ai.TEST_TIMEOUT})
         self.assertIsNone(getattr(ai._speed, "timeout", None), "المهلة القصيرة تسرّبت لردود العملاء")
+
+    def test_key_test_finds_a_working_model_and_drops_unavailable_ones(self):
+        # ما حدث مع NVIDIA: الأول بطيء (مهلة) · الثاني 404 «Not found for account» · الثالث يعمل
+        orig_p, orig_g = ai._post_json, ai._get_json
+        self.addCleanup(setattr, ai, "_post_json", orig_p)
+        self.addCleanup(setattr, ai, "_get_json", orig_g)
+        models = ai.PROVIDERS["nvidia"]["models"]
+        ai._get_json = lambda url, h, timeout=20: {"data": [{"id": m} for m in models]}
+
+        def fake(url, payload, headers, timeout=None):
+            m = payload["model"]
+            if m == models[0]:
+                raise ai.AIError("network: The read operation timed out", retry=True)
+            if m == models[1]:
+                raise ai.AIError("HTTP 404: Function 'x': Not found for account 'y'")
+            return {"choices": [{"message": {"content": '{"ok": true}'}}]}
+        ai._post_json = fake
+        r = ai.check_provider("nvidia", "k")
+        self.assertTrue(r["ok"], r["msg"])
+        self.assertEqual(r["model"], models[2])
+        self.assertEqual(r["models"][0], models[2], "النموذج العامل لم يُحفظ أولاً")
+        self.assertNotIn(models[1], r["models"], "نموذج 404 بقي في القائمة")
+        self.assertIn("timed out", r["msg"])
+
+    def test_live_chain_skips_unavailable_model_for_an_hour(self):
+        ai._cool.clear()
+        orig = ai._post_json
+        self.addCleanup(setattr, ai, "_post_json", orig)
+        calls = []
+
+        def fake(url, payload, headers, timeout=None):
+            calls.append(payload["model"])
+            if payload["model"] == "gone":
+                raise ai.AIError("HTTP 404: Not found for account")
+            return {"choices": [{"message": {"content": '{"reply": "x"}'}}]}
+        ai._post_json = fake
+        chain = [{"p": "nvidia", "key": "k", "models": ["gone", "ok-model"]}]
+        ai._call("auto", chain, "s", "u")
+        ai._call("auto", chain, "s", "u")
+        self.assertEqual(calls, ["gone", "ok-model", "ok-model"])
+        self.assertGreater(ai._cool[("nvidia", "gone")] - ai.time.time(), 3000)
+        ai._cool.clear()
 
     def test_key_test_route_one_provider(self):
         c = self.client(1)

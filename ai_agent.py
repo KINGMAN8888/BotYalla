@@ -57,8 +57,8 @@ PROVIDERS = {
                               "nvidia/nemotron-3-super-120b-a12b:free", "qwen/qwen3.8-27b:free"],
                    "like": (":free",)},
     "nvidia": {"name": "NVIDIA", "url": "https://integrate.api.nvidia.com/v1", "json": False,
-               "models": ["deepseek-ai/deepseek-v4-flash-0731", "moonshotai/kimi-k2.6",
-                          "z-ai/glm-5.3-flash", "google/gemma-4-31b-it", "openai/gpt-oss-20b"],
+               "models": ["openai/gpt-oss-20b", "z-ai/glm-5.3-flash", "nvidia/nemotron-nano-3-30b-a3b",
+                          "google/gemma-4-31b-it", "deepseek-ai/deepseek-v4-flash-0731", "moonshotai/kimi-k2.6"],
                "like": ("deepseek-v4", "kimi", "glm-5", "gemma-4", "gpt-oss", "llama-3.3")},
 }
 # ترتيب السلسلة بعد المزوّد الأساسي: الأسرع أولاً
@@ -209,7 +209,9 @@ def call_chain(chain, system, user):
             errors.append(f"{PROVIDER_NAMES[s['p']]} {m}: {e}")
             if _is_auth(e):
                 dead.add(s["p"])                        # مفتاح المزوّد نفسه مرفوض
-            elif str(e).startswith("HTTP 429"):
+            elif str(e).startswith("HTTP 404"):
+                _cool[(s["p"], m)] = time.time() + 3600      # غير متاح لهذا الحساب/مسحوب
+            elif str(e).startswith(("HTTP 429", "network", "HTTP 5")):
                 _cool[(s["p"], m)] = time.time() + COOLDOWN
     raise AIError(" | ".join(errors)[:900] or "no AI provider configured")
 
@@ -272,36 +274,66 @@ TEST_TIMEOUT = 12              # مهلة كل طلب في «اختبر المف
 TEST_MODELS = 2                # نموذجان لكل مزوّد يكفيان للحكم على المفتاح
 
 
+TEST_BUDGET = 40               # ثوانٍ لكل مزوّد في الاختبار — تحت مهلة nginx (60ث) بهامش
+
+
 def check_provider(provider, api_key):
-    """اختبار مزوّد واحد من الإعدادات: {ok, msg, model, models, ms}. يكتشف النماذج ثم طلب صغير.
-    محدود الزمن: مهلة قصيرة ونموذجان فقط — أسوأ حالة ≈ 8 + 2×12 ثانية."""
+    """اختبار مزوّد واحد من الإعدادات: {ok, msg, model, models, ms}.
+
+    قائمة النماذج العامة لدى المزوّد (`discover`) لا تقول ما هو متاح **لهذا الحساب** (NVIDIA
+    يسرد نماذج يرجّع لها 404 «Not found for account»)، فالاختبار يجرّب واحداً واحداً حتى
+    يعمل أحدها في حدود `TEST_BUDGET`، ثم يرجّع `models` مرتّبة: العامل أولاً ثم ما لم يُجرَّب
+    — بلا ما رجّع 404 — فتحفظها الإعدادات وتبدأ بها ردود العملاء."""
     res = {"provider": provider, "name": PROVIDER_NAMES.get(provider, provider),
            "ok": False, "msg": "", "model": "", "models": None, "ms": 0}
-    if not (api_key or "").strip():
+    key = (api_key or "").strip()
+    if not key:
         res["msg"] = "no key"
         return res
     t0 = time.time()
+    found = None
     try:
-        res["models"] = discover(provider, api_key.strip())
+        found = discover(provider, key)
     except AIError as e:
         if _is_auth(e):
             res["msg"] = str(e)
             res["ms"] = int((time.time() - t0) * 1000)
             return res
+    candidates = _models_for({"p": provider, "key": key, "models": found}, True)
+    errors, dead, ok_model = [], set(), None
     _speed.fast, _speed.timeout = True, TEST_TIMEOUT
-    spec = {"p": provider, "key": api_key.strip()}
-    spec["models"] = _models_for({**spec, "models": res["models"]}, True)[:TEST_MODELS]
     try:
-        raw = _loads(call_chain([spec], 'Reply with JSON only: {"ok": true}', "ping"))
-        res["ok"] = isinstance(raw, dict)
-        res["msg"] = "OK" if res["ok"] else "unexpected reply"
-        res["model"] = (getattr(_used, "value", None) or ("", ""))[1]
-    except AIError as e:
-        res["msg"] = str(e)
-    except Exception as e:
-        res["msg"] = f"{type(e).__name__}: {str(e)[:200]}"
+        for m in candidates:
+            if time.time() - t0 > TEST_BUDGET - TEST_TIMEOUT:
+                errors.append("…")
+                break
+            try:
+                raw = _loads(_gemini_once(key, m, 'Reply with JSON only: {"ok": true}', "ping")
+                             if provider == "gemini" else
+                             _openai_once(provider, key, m, 'Reply with JSON only: {"ok": true}', "ping", True))
+                if isinstance(raw, dict):
+                    ok_model = m
+                    break
+                errors.append(f"{m}: unexpected reply")
+            except AIError as e:
+                errors.append(f"{m}: {e}")
+                if _is_auth(e):
+                    break                                   # المفتاح نفسه مرفوض — لا فائدة من غيره
+                if str(e).startswith("HTTP 404"):
+                    dead.add(m)
+            except Exception as e:
+                errors.append(f"{m}: {type(e).__name__}: {str(e)[:120]}")
     finally:
         _speed.fast, _speed.timeout = False, None
+    if ok_model:
+        rest = [m for m in candidates if m != ok_model and m not in dead]
+        res.update(ok=True, msg="OK", model=ok_model, models=[ok_model] + rest)
+        if errors:
+            res["msg"] = "OK — " + " | ".join(errors)[:300]
+    else:
+        res["msg"] = " | ".join(errors)[:600] or "no model answered"
+        alive = [m for m in candidates if m not in dead]
+        res["models"] = alive if (found and alive != candidates) else None
     res["ms"] = int((time.time() - t0) * 1000)
     return res
 
