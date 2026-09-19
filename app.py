@@ -1164,6 +1164,8 @@ def dashboard():
                        "waPlan": wa_plan,
                        # ربط واتساب بضغطة (Embedded Signup) — لمن تتيح باقته واتساب
                        "waEs": WAS.client_config() if wa_ok else None,
+                       # للباقات بدون واتساب: كارت مقفول يعرض الميزة ويدعو للترقية (بلا أي إعدادات Meta)
+                       "waEsLocked": (not wa_ok) and WAS.configured(),
                        "waAssist": {"open": db.open_ticket_of_kind(uid(), "wa_setup") if wa_plan else None},
                        "onboarding": _onboarding(bots),
                        # الإنشاء بضغطة متاح فقط لو بوت المنصة يعمل وفيه «وضع إدارة البوتات»
@@ -2558,7 +2560,7 @@ def admin_platform():
                   "bank_holder","bank_name","bank_account","bank_iban",
                   "platform_bot_token","admin_chat_id",
                   "support_email","support_whatsapp","support_telegram",
-                  "wa_verify_token","wa_app_secret","addon_pay_price"):
+                  "wa_verify_token","wa_app_secret","wa_es_app_secret","addon_pay_price"):
             db.set_platform(k, request.form.get(k, "").strip())
         for bad in _save_ops_settings(request.form):
             flash(bad, "error")
@@ -3103,9 +3105,12 @@ def wa_es_finish():
             return jsonify(ok=False, upgrade=True, error=("وصلت للحد الأقصى لبوتات باقتك." if ar else
                                                           "You reached your plan's bot limit.")), 403
     template = data.get("template") if data.get("template") in T.TEMPLATES else "customer_service"
-    secret = db.get_platform("wa_app_secret", "") or ""
+    # الكود صادر لتطبيق الـTech Provider (META_APP_ID) — يُبدَّل بسرّه هو، لا بسرّ تطبيق الرقم الرئيسي
+    secret = db.get_platform("wa_es_app_secret", "") or db.get_platform("wa_app_secret", "") or ""
+    coexist = data.get("coexist") is True                # رقم شغّال على تطبيق WhatsApp Business
     try:
-        res = WAS.connect(str(data.get("code") or ""), data.get("waba_id"), data.get("phone_id"), secret)
+        res = WAS.connect(str(data.get("code") or ""), data.get("waba_id"), data.get("phone_id"), secret,
+                          coexist=coexist)
     except WAS.SignupError as e:
         log.warning("embedded signup failed at %s for user=%s: %s", e.step, uid(), e)
         return jsonify(ok=False, step=e.step, error=(
@@ -3117,8 +3122,11 @@ def wa_es_finish():
     name = (str(data.get("name") or "").strip() or res["name"] or res["number"])[:60]
     info = {"username": res["number"], "name": res["name"] or name}
     cfg = T.initial_config(name, template, info, "")
-    cfg.update(wa_token=res["token"], wa_waba_id=res["waba_id"], wa_pin=res["pin"],
-               created_via="embedded_signup")
+    cfg.update(wa_token=res["token"], wa_waba_id=res["waba_id"], created_via="embedded_signup")
+    if res["pin"]:
+        cfg["wa_pin"] = res["pin"]
+    if res["coexist"]:
+        cfg["wa_coexist"] = True                         # ردود الموبايل تُسجَّل ويسكت البوت معها
     if res["warning"]:
         cfg["wa_setup_warning"] = res["warning"][:500]
     try:
@@ -3127,9 +3135,10 @@ def wa_es_finish():
         log.exception("embedded signup: create bot failed for user=%s", uid())
         return jsonify(ok=False, error=("الرقم ده مربوط ببوت تاني بالفعل." if ar else
                                         "This number is already connected to another bot."))
-    log.info("embedded signup: user=%s bot=%s waba=%s registered=%s", uid(), new_id, res["waba_id"],
-             res["registered"])
-    notify_admins(f"🤖 بوت واتساب جديد بالربط بضغطة / New WhatsApp bot (Embedded Signup): «{name}» "
+    log.info("embedded signup: user=%s bot=%s waba=%s registered=%s coexist=%s", uid(), new_id,
+             res["waba_id"], res["registered"], res["coexist"])
+    notify_admins(f"🤖 بوت واتساب جديد بالربط بضغطة{' (تعايش مع تطبيق Business)' if res['coexist'] else ''}"
+                  f" / New WhatsApp bot (Embedded Signup): «{name}» "
                   f"{res['number']} — {session.get('uname')}" + (f"\n⚠️ {res['warning']}" if res["warning"] else ""))
     AN.queue(session, "bot_created", channel="whatsapp", template=template)
     flash((f"✅ اتربط رقم {res['number']} ببوت «{name}». راجع رسالة الترحيب واضغط «تشغيل»." if ar else
@@ -4939,14 +4948,20 @@ def whatsapp_webhook():
             return request.args.get("hub.challenge", ""), 200
         abort(403)
 
-    secret = db.get_platform("wa_app_secret", "") or ""
-    if not secret:
+    # تطبيقان قد يرسلان لنفس الويبهوك: تطبيق رقم المنصة (wa_app_secret) وتطبيق الـTech Provider
+    # الذي تشترك فيه أرقام العملاء المربوطة بضغطة (wa_es_app_secret). كل طلب موقّع بسرّ تطبيقه.
+    secrets_ = [s for s in dict.fromkeys((db.get_platform("wa_app_secret", "") or "",
+                                          db.get_platform("wa_es_app_secret", "") or "")) if s]
+    if not secrets_:
         app.logger.warning("WhatsApp webhook POST rejected: wa_app_secret is not configured")
         abort(403)
 
-    expected = "sha256=" + hmac.new(
-        secret.encode("utf-8"), request.get_data(), hashlib.sha256).hexdigest()
-    if not _secrets.compare_digest(request.headers.get("X-Hub-Signature-256", ""), expected):
+    body, got = request.get_data(), request.headers.get("X-Hub-Signature-256", "")
+    ok = False
+    for secret in secrets_:                                   # بلا خروج مبكر — زمن ثابت تقريباً
+        expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        ok = _secrets.compare_digest(got, expected) or ok
+    if not ok:
         abort(403)
 
     payload = request.get_json(silent=True)

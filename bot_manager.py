@@ -37,6 +37,58 @@ def _split_wa_payload(payload):
         log.exception("malformed WhatsApp payload")
     return out
 
+_ECHO_LABEL = {"image": "[صورة]", "video": "[فيديو]", "audio": "[صوت]", "voice": "[صوت]",
+               "document": "[ملف]", "sticker": "[ملصق]", "location": "[موقع]", "contacts": "[جهة اتصال]"}
+
+
+def _split_wa_echoes(payload):
+    """ردود صاحب الرقم من تطبيق WhatsApp Business (وضع التعايش — حقل smb_message_echoes)
+    ← [(phone_number_id, [{id, peer, text}])]. `to` هو العميل، فالمحادثة wa:<to>."""
+    out = []
+    try:
+        for entry in (payload or {}).get("entry", []):
+            for change in entry.get("changes", []):
+                val = change.get("value") or {}
+                echoes = val.get("message_echoes") or []
+                phone_id = (val.get("metadata") or {}).get("phone_number_id")
+                if not (echoes and phone_id):
+                    continue
+                items = []
+                for m in echoes:
+                    to = str(m.get("to") or "").lstrip("+")
+                    if not to.isdigit():
+                        continue
+                    kind = m.get("type") or "text"
+                    text = ((m.get("text") or {}).get("body") or "") if kind == "text" else \
+                        ((m.get(kind) or {}).get("caption") or _ECHO_LABEL.get(kind, f"[{kind}]"))
+                    items.append({"id": m.get("id") or "", "peer": f"wa:{to}", "text": text[:4000]})
+                if items:
+                    out.append((str(phone_id), items))
+    except (AttributeError, TypeError):
+        log.exception("malformed WhatsApp echo payload")
+    return out
+
+
+def record_wa_echoes(payload):
+    """صاحب النشاط ردّ من موبايله: نسجّل الرد في صندوق المحادثات كرد بشري ونُسكت البوت في
+    المحادثة دي (نفس «التولّي» — يرجع للبوت تلقائياً بعد HUMAN_IDLE). لبوتات التعايش وحدها."""
+    n = 0
+    for phone_id, items in _split_wa_echoes(payload):
+        bot_row = db.get_bot_by_token(f"wa:{phone_id}")
+        if not bot_row:
+            continue
+        cfg = json.loads(bot_row["config_json"] or "{}")
+        if not cfg.get("wa_coexist"):
+            continue
+        for e in items:
+            if e["id"] and not db.mark_msg_seen(e["id"]):
+                continue
+            db.log_message(bot_row["id"], e["peer"], "out", "human", e["text"])
+            db.set_conversation_mode(bot_row["id"], e["peer"], "human")
+            n += 1
+    return n
+
+
 def _remember_waba_hint(bot_row, entry_id):
     """يخزّن entry.id كـ«مرشّح» لـ WABA ID ليقترحه على صاحب البوت.
     Meta لا توثّق أن entry.id هو WABA ID، فلا نستعمله إلا بعد تحقق فعلي
@@ -744,6 +796,10 @@ class BotManager:
             return False
 
     async def _handle_wa_webhook(self, payload):
+        try:
+            record_wa_echoes(payload)            # قبل الرسائل: رد الموبايل يُسكت البوت أولاً
+        except Exception:
+            log.exception("Error recording WhatsApp Business app echoes")
         try:
             import flow_engine
             for phone_id, entry_id, msgs in _split_wa_payload(payload):

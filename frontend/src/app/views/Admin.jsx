@@ -683,8 +683,16 @@ export function AdminPlatform() {
           </p>
           <div className="grid gap-4 sm:grid-cols-2">
             <F name="wa_verify_token" label="Verify Token" ph={bi("نص من اختيارك تكرره في Meta", "any string, repeated in Meta")} />
-            <F name="wa_app_secret" label="App Secret" ph="Meta → App settings → Basic" />
+            <F name="wa_app_secret" label={bi("App Secret — تطبيق رقم المنصة", "App Secret — platform number's app")}
+               ph="Meta → App settings → Basic" />
+            <F name="wa_es_app_secret"
+               label={bi("App Secret — تطبيق Tech Provider (الربط بضغطة)", "App Secret — Tech Provider app (one-tap)")}
+               ph={bi("لو نفس التطبيق سيبه فاضي", "leave empty if it's the same app")} />
           </div>
+          <p className="mt-3 mb-0 text-[12.5px] leading-relaxed text-ink-3">
+            {bi("الربط بضغطة بيستخدم سرّ تطبيق الـTech Provider (نفس META_APP_ID). والويبهوك بيقبل رسايل موقّعة بأي واحد من السرّين — فاضبط نفس عنوان الويبهوك ونفس Verify Token في التطبيقين.",
+                "One-tap signup uses the Tech Provider app's secret (same app as META_APP_ID). The webhook accepts messages signed with either secret — set the same webhook URL and Verify Token in both apps.")}
+          </p>
           <p className="mt-3 mb-0 text-[12.5px] text-ink-3">
             {bi("عنوان الويبهوك في Meta:", "Webhook URL in Meta:")}{" "}
             <code className="rounded bg-white/10 px-1.5 py-0.5">

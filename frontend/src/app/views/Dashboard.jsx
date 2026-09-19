@@ -193,7 +193,8 @@ function loadFacebook(cfg) {
   return _fbLoading;
 }
 
-function WaOneTap({ cfg }) {
+/* منطق الربط بضغطة — fields() تُرجع {name, template} لحظة الإرسال. */
+function useWaSignup(cfg, fields) {
   const [state, setState] = useState({ busy: false, msg: null, ok: null });
   const session = useRef(null);
 
@@ -213,17 +214,14 @@ function WaOneTap({ cfg }) {
     return () => window.removeEventListener("message", onMsg);
   }, []);
 
-  const formVal = (name) => {
-    const el = document.querySelector(`form [name="${name}"]`);
-    return el ? el.value : "";
-  };
-
   async function finish(code) {
     // رسالة الجلسة قد تصل بعد callback الدخول بلحظات — ننتظرها حتى 5 ثوانٍ
     for (let i = 0; i < 25 && !session.current; i++) await new Promise((r) => setTimeout(r, 200));
     const s = session.current || {};
-    if (s.error) return setState({ busy: false, ok: false, msg: bi("Meta: ", "Meta: ") + s.error });
-    if (!s.phone_number_id || !s.waba_id) {
+    const f = fields();
+    if (s.error) return setState({ busy: false, ok: false, msg: "Meta: " + s.error });
+    // التعايش: النافذة قد ترجع waba_id وحده — الخادم يأخذ رقم الحساب الوحيد ويتحقق منه
+    if (!s.waba_id || (!s.phone_number_id && !f.coexist)) {
       return setState({ busy: false, ok: false, msg: bi(
         "النافذة اتقفلت قبل ما تختار رقم — جرّب تاني وكمّل لحد آخر خطوة.",
         "The window closed before a number was selected — try again and finish all steps.") });
@@ -233,13 +231,16 @@ function WaOneTap({ cfg }) {
       const r = await fetch("/whatsapp/es/finish", {
         method: "POST", credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf },
-        body: JSON.stringify({ code, waba_id: s.waba_id, phone_id: s.phone_number_id,
-                               name: formVal("name"), template: formVal("template") }),
+        body: JSON.stringify({ code, waba_id: s.waba_id, phone_id: s.phone_number_id || "",
+                               name: f.name, template: f.template, coexist: !!f.coexist }),
       });
       let d = null;
       try { d = await r.json(); } catch { /* صفحة خطأ */ }
-      if (d && d.ok) { window.location.href = d.url; return; }
-      setState({ busy: false, ok: false, msg: (d && d.error) || `HTTP ${r.status}` });
+      if (d && d.ok) {
+        setState({ busy: true, ok: true, msg: bi("تم! بنفتح البوت…", "Done! Opening your bot…") });
+        window.location.href = d.url; return;
+      }
+      setState({ busy: false, ok: false, msg: (d && d.error) || `HTTP ${r.status}`, upgrade: d && d.upgrade });
     } catch {
       setState({ busy: false, ok: false, msg: bi("مفيش اتصال بالسيرفر — جرّب تاني.", "No connection to the server — try again.") });
     }
@@ -263,37 +264,174 @@ function WaOneTap({ cfg }) {
       finish(code);
     }, {
       config_id: cfg.configId, response_type: "code", override_default_response_type: true,
-      extras: { setup: {}, featureType: "", sessionInfoVersion: "3" },
+      extras: { setup: {}, sessionInfoVersion: "3",
+                featureType: fields().coexist ? "whatsapp_business_app_onboarding" : "" },
     });
   }
+  return { state, start };
+}
+
+const WA_CARD = "mb-6 bg-[linear-gradient(125deg,rgb(37_211_102/0.16),rgb(34_211_238/0.08))] " +
+                "shadow-[inset_0_0_0_1px_rgb(37_211_102/0.35)]";
+
+function WaHead({ locked }) {
+  return (
+    <div className="min-w-0">
+      <h2 className="m-0 flex flex-wrap items-center gap-2.5 text-[19px] font-extrabold text-ink">
+        <img src="/static/whatsapp.png" alt="" className="size-6 object-contain" />
+        {bi("أنشئ بوتك على واتساب بضغطة", "Create your WhatsApp bot in one tap")}
+        {locked
+          ? <Pill tone="mute"><Icon name="lock" size={11} />{bi("باقات واتساب", "WhatsApp plans")}</Pill>
+          : <Pill tone="on">{bi("موصى به", "Recommended")}</Pill>}
+      </h2>
+      <p className="mt-1.5 mb-0 max-w-[620px] text-[13.5px] leading-relaxed text-ink-3">
+        {bi("بدون لوحة مطوّرين ولا توكنات — نافذة Meta الرسمية بتفتح، تختار نشاطك ورقمك، والبوت بيتعمل ويتربط لوحده. BotYalla مزوّد خدمة تقنية معتمد من Meta.",
+            "No developer console, no tokens — the official Meta window opens, you pick your business and number, and the bot is created and connected automatically. BotYalla is a Meta-approved Tech Provider.")}
+      </p>
+    </div>
+  );
+}
+
+/* كارت علوي: ربط واتساب بضغطة (لمن تتيح باقته واتساب) */
+/* تحذيرات وضع التعايش — تظهر قبل الربط ولازم العميل يأكّد إنه قرأها */
+const COEXIST_NOTES = [
+  ["لازم يكون تطبيق WhatsApp Business (مش واتساب العادي) ومحدّث لآخر إصدار، والرقم شغّال عليه من فترة — Meta بترفض الأرقام الجديدة على التطبيق.",
+   "It must be the WhatsApp Business app (not regular WhatsApp), updated to the latest version, and the number must have been active on it for a while — Meta refuses brand-new ones."],
+  ["الميزة دي من Meta ومش متاحة لكل الدول والأرقام. لو رفضت، اربط رقم جديد أو اطلب «سيبها علينا».",
+   "This Meta feature isn't available for every country and number. If it's refused, connect a new number or use «Leave it to us»."],
+  ["افتح تطبيق WhatsApp Business على موبايلك مرة كل 14 يوم على الأقل — لو اتقفل أكتر من كده Meta بتفصل الربط.",
+   "Open the WhatsApp Business app on your phone at least once every 14 days — otherwise Meta disconnects it."],
+  ["البوت بيرد فوراً. لو رديت انت من الموبايل، البوت بيسكت في المحادثة دي لحد 12 ساعة، وردّك بيظهر في صندوق المحادثات.",
+   "The bot replies instantly. When you reply from your phone, the bot goes quiet in that chat for up to 12 hours, and your reply shows in the inbox."],
+  ["بعض مزايا التطبيق ممكن تتقفل أو تتغيّر بعد الربط (زي قوايم البث) — Meta بتعرض التفاصيل في النافذة قبل ما توافق.",
+   "Some app features may be limited after connecting (such as broadcast lists) — Meta shows the details in the window before you agree."],
+  ["المحادثات القديمة بتفضل على موبايلك ومش بتتنقل للمنصة. رسايل البوت بتتحاسب على حسابك في Meta، ورسايلك من الموبايل مجانية.",
+   "Old chats stay on your phone and aren't copied to the platform. Bot messages are billed to your Meta account; messages you send from the phone are free."],
+];
+
+function WaOneTapTop({ cfg }) {
+  const [name, setName] = useState("");
+  const [tpl, setTpl] = useState("customer_service");
+  const [coexist, setCoexist] = useState(false);
+  const [agree, setAgree] = useState(false);
+  const cur = useRef(null);
+  cur.current = { name: name.trim(), template: tpl, coexist };
+  const { state, start } = useWaSignup(cfg, () => cur.current);
+  const MODES = [
+    [false, bi("رقم جديد للبوت", "A new number for the bot")],
+    [true, bi("رقمي شغّال على واتساب بزنس", "My number is on WhatsApp Business")],
+  ];
 
   return (
-    <div className="mb-5 rounded-xl p-4 bg-[linear-gradient(120deg,rgb(37_211_102/0.16),rgb(34_211_238/0.06))]
-                    shadow-[inset_0_0_0_1px_rgb(37_211_102/0.4)]">
-      <b className="flex flex-wrap items-center gap-2 text-[14.5px] text-ink">
-        <img src="/static/whatsapp.png" alt="" className="size-5 object-contain" />
-        {bi("اربط رقم واتساب بضغطة", "Connect your WhatsApp number in one tap")}
-        <Pill tone="on">{bi("موصى به", "Recommended")}</Pill>
-      </b>
-      <p className="mt-2 mb-0 text-[12.5px] leading-relaxed text-ink-2">
-        {bi("نافذة Meta الرسمية بتفتح: سجّل دخولك بفيسبوك، اختار نشاطك ورقم البوت، وخلاص — البوت بيتعمل ويتربط لوحده. BotYalla مزوّد خدمة تقنية معتمد من Meta، ورسايل رقمك بتتحاسب على حسابك في Meta مباشرة.",
-            "The official Meta window opens: sign in with Facebook, pick your business and the bot's number — the bot is created and connected automatically. BotYalla is a Meta-approved Tech Provider, and your number's messages are billed to your own Meta account.")}
-      </p>
-      <p className="mt-2 mb-0 text-[12px] leading-relaxed text-ink-3">
-        <Icon name="shield" size={12} className="me-1 align-[-2px]" />
-        {bi("اكتب اسم النشاط ونوع البوت في الخطوة اللي تحت الأول. الرقم لازم يكون مش شغّال على تطبيق واتساب العادي (أو تتبع خطوات النقل اللي Meta بتعرضها).",
-            "Fill in the business name and bot type in the step below first. The number must not be active on the regular WhatsApp app (or follow Meta's migration steps).")}
-      </p>
-      <Btn icon="link" type="button" className="mt-3" onClick={start} disabled={state.busy}>
-        {state.busy ? bi("جارٍ الربط…", "Connecting…") : bi("اربط رقمي الآن", "Connect my number")}
-      </Btn>
-      {state.msg && (
-        <p role="status" aria-live="polite"
-           className={"mt-3 mb-0 text-[12.5px] font-bold " + (state.ok === false ? "text-red-300" : "text-ink-2")}>
-          {state.msg}
+    <Card id="wa-onetap" className={WA_CARD}>
+      <WaHead />
+      <div role="radiogroup" aria-label={bi("نوع الرقم", "Number type")}
+           className="mt-4 inline-flex flex-wrap gap-1 rounded-xl bg-black/25 p-1
+                      shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+        {MODES.map(([v, label]) => (
+          <button key={String(v)} type="button" role="radio" aria-checked={coexist === v}
+                  onClick={() => { setCoexist(v); setAgree(false); }}
+                  className={"rounded-lg px-3.5 py-2 text-[13px] font-bold transition-colors " +
+                             (coexist === v ? "bg-[#25D366]/20 text-ink shadow-[inset_0_0_0_1px_rgb(37_211_102/0.5)]"
+                                            : "text-ink-3 hover:text-ink")}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {coexist && (
+        <div className="mt-4 rounded-xl bg-yellow-400/[0.06] p-4 shadow-[inset_0_0_0_1px_rgb(250_204_21/0.28)]">
+          <b className="flex items-center gap-2 text-[13.5px] text-ink">
+            <Icon name="shield" size={15} className="text-yellow-300" />
+            {bi("الرقم هيفضل شغّال على موبايلك والبوت يرد معاك — اقرأ دول الأول:",
+                "Your number keeps working on your phone while the bot replies — read these first:")}
+          </b>
+          <ul className="mt-2.5 mb-0 flex list-none flex-col gap-1.5 p-0">
+            {COEXIST_NOTES.map(([ar, en], i) => (
+              <li key={i} className="flex items-start gap-2 text-[12.5px] leading-relaxed text-ink-2">
+                <span className="mt-[7px] size-1.5 shrink-0 rounded-full bg-yellow-300/80" />
+                {bi(ar, en)}
+              </li>
+            ))}
+          </ul>
+          <label className="mt-3 flex cursor-pointer items-center gap-2 text-[13px] font-bold text-ink">
+            <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)}
+                   className="size-4 accent-[#25D366]" />
+            {bi("قريت وفاهم", "I've read and understood")}
+          </label>
+        </div>
+      )}
+
+      <form onSubmit={(e) => { e.preventDefault(); start(); }}
+            className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_220px_auto] sm:items-end">
+        <Field label={t("biz_name")}>
+          <Input value={name} onChange={(e) => setName(e.target.value)} required maxLength={60}
+                 placeholder={t("eg_cafe")} />
+        </Field>
+        <Field label={t("bot_type")}>
+          <Select value={tpl} onChange={(e) => setTpl(e.target.value)}>
+            {BY.templates.map((x) => <option key={x.k} value={x.k}>{x.label}</option>)}
+          </Select>
+        </Field>
+        <Btn variant="green" icon="link" type="submit"
+             disabled={state.busy || !name.trim() || (coexist && !agree)}>
+          {state.busy ? bi("جارٍ الربط…", "Connecting…") : bi("اربط رقمي الآن", "Connect my number")}
+        </Btn>
+      </form>
+      {!coexist && (
+        <p className="mt-3 mb-0 text-[12px] leading-relaxed text-ink-3">
+          <Icon name="shield" size={12} className="me-1 align-[-2px]" />
+          {bi("الرقم لازم يكون مش شغّال على أي تطبيق واتساب. رقمك شغّال على واتساب بزنس ومش عايز تسيبه؟ اختار «رقمي شغّال على واتساب بزنس». رسايل رقمك بتتحاسب على حسابك في Meta مباشرة.",
+              "The number must not be active on any WhatsApp app. Your number is on WhatsApp Business and you want to keep it? Choose «My number is on WhatsApp Business». Your number's messages are billed to your own Meta account.")}
         </p>
       )}
-    </div>
+      {state.msg && (
+        <p role="status" aria-live="polite"
+           className={"mt-3 mb-0 text-[13px] font-bold " +
+                      (state.ok === false ? "text-red-300" : state.ok ? "text-au-teal" : "text-ink-2")}>
+          {state.msg}{" "}
+          {state.upgrade && <a href={BY.urls.pricing} className="text-au-cyan underline">{t("brain_upgrade")}</a>}
+        </p>
+      )}
+    </Card>
+  );
+}
+
+/* نفس الكارت مقفولاً لمن باقته بلا واتساب: معاينة مموّهة غير تفاعلية + دعوة للترقية.
+   لا يحمل أي إعدادات Meta — الخادم لا يرسلها أصلاً لهذه الباقات. */
+function WaOneTapLocked() {
+  const ghost = "h-[46px] rounded-xl bg-white/[0.06] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]";
+  return (
+    <Card id="wa-onetap" className={WA_CARD}>
+      <WaHead locked />
+      <div className="relative mt-5 overflow-hidden rounded-2xl">
+        {/* المعاينة المموّهة: نفس شكل النموذج الحقيقي، غير تفاعلية */}
+        <div aria-hidden="true"
+             className="pointer-events-none grid select-none grid-cols-1 gap-3 p-1 blur-[4px]
+                        sm:grid-cols-[minmax(0,1fr)_220px_170px] sm:items-end">
+          <div>
+            <div className="mb-1.5 h-3 w-24 rounded bg-white/25" />
+            <div className={ghost} />
+          </div>
+          <div>
+            <div className="mb-1.5 h-3 w-16 rounded bg-white/25" />
+            <div className={ghost} />
+          </div>
+          <div className="h-[46px] rounded-xl bg-[linear-gradient(100deg,#5EEAD4,#2DD4A7)] opacity-80" />
+        </div>
+        <div className="absolute inset-0 flex flex-wrap items-center justify-center gap-3 p-2 text-center
+                        bg-[rgb(7_9_15/0.45)] backdrop-blur-[1px]">
+          <span className="grid size-10 shrink-0 place-items-center rounded-full bg-white/10 text-ink
+                           shadow-[inset_0_0_0_1px_rgb(255_255_255/0.2)]">
+            <Icon name="lock" size={18} />
+          </span>
+          <span className="text-[13.5px] font-bold text-ink">
+            {bi("متاحة في باقات واتساب — رقّي باقتك وابدأ في دقيقة", "Included in WhatsApp plans — upgrade and start in a minute")}
+          </span>
+          <Btn sm variant="green" icon="crown" href={BY.urls.pricing}>{bi("شوف باقات واتساب", "See WhatsApp plans")}</Btn>
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -505,7 +643,15 @@ function CreateWizard({ collapsed = false }) {
       ) : (
         <>
           {/* الربط بضغطة أولاً (Embedded Signup) — ثم «سيبها علينا» ثم اليدوي للمطورين */}
-          {P.waEs && <WaOneTap cfg={P.waEs} />}
+          {P.waEs && (
+            <a href="#wa-onetap"
+               className="mb-5 flex items-center gap-3 rounded-xl p-4 text-[13.5px] font-bold text-ink no-underline
+                          bg-[linear-gradient(120deg,rgb(37_211_102/0.16),rgb(34_211_238/0.06))]
+                          shadow-[inset_0_0_0_1px_rgb(37_211_102/0.4)]">
+              <img src="/static/whatsapp.png" alt="" className="size-5 object-contain" />
+              {bi("أسهل: اربط رقمك بضغطة من الكارت اللي فوق", "Easier: connect your number in one tap from the card above")}
+            </a>
+          )}
           {/* مشمولة في باقات واتساب: الفريق يربطها بدل العميل (باقته هو، لا صلاحية الفريق) */}
           {P.waPlan && <WaAssist />}
           {(() => {
@@ -751,7 +897,10 @@ export default function Dashboard() {
         actions={<Btn icon="plus" href={quick ? "#onetap" : "#create"}>{t("create_bot")}</Btn>}
       />
 
-      {/* الإنشاء بضغطة أولاً — أسهل طريق لغير التقنيين */}
+      {/* الإنشاء بضغطة أولاً — أسهل طريق لغير التقنيين. واتساب في الأول: مفتوح لباقات واتساب،
+          ومقفول بتمويه لغيرها كدعوة للترقية */}
+      {P.waEs && <WaOneTapTop cfg={P.waEs} />}
+      {!P.waEs && P.waEsLocked && <WaOneTapLocked />}
       {quick && <OneTapCreate />}
       {!quick && BY.user.role === "admin" && (
         <Card className="mb-6 flex items-start gap-3 bg-yellow-400/[0.06] shadow-[inset_0_0_0_1px_rgb(250_204_21/0.25)]">

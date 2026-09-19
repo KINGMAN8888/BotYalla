@@ -11,11 +11,19 @@ phone_number_id) ← الخادم وحده:
 3. يشترك التطبيق في ويبهوك الـWABA (`subscribed_apps`) فتصل رسائل العملاء إلى `/wh/whatsapp`.
 4. يسجّل الرقم على Cloud API (`/register` برمز PIN من 6 أرقام يُحفظ مع البوت).
 
+**وضع التعايش (Coexistence)** — `coexist=True` (featureType `whatsapp_business_app_onboarding`):
+رقم شغّال فعلاً على تطبيق WhatsApp Business يتربط ويفضل شغّال على موبايل صاحبه. الفرق:
+**لا `/register`** (الرقم مسجّل على التطبيق، والتسجيل بـPIN قد يفصله عن الموبايل)، ولو النافذة
+لم ترجع phone_number_id نأخذ رقم الحساب الوحيد. ردود صاحب الرقم من موبايله تصل كـ
+`smb_message_echoes` (bot_manager.record_wa_echoes). لا نطلب مزامنة جهات الاتصال ولا تاريخ
+المحادثات (`smb_app_data`) — لا نحتاجها، وأقل بيانات = أقل مسؤولية.
+
 تكلفة رسائل الحساب على وسيلة دفع العميل في Meta لا على المنصة (مسار «أ» في docs/WHATSAPP.md).
 
 الإعداد من `.env` (مثل معرّفات القياس في analytics.py): بلا `META_APP_ID` و`WA_ES_CONFIG_ID`
-لا يظهر الزر ولا تُفتح نطاقات فيسبوك في CSP. سرّ التطبيق = `wa_app_secret` نفسه الذي يوقّع
-الويبهوك (إعدادات المنصة) — نفس تطبيق Meta."""
+لا يظهر الزر ولا تُفتح نطاقات فيسبوك في CSP. سرّ التطبيق = `wa_es_app_secret` في إعدادات المنصة
+(سرّ تطبيق الـTech Provider)، ويرجع لـ`wa_app_secret` لو فاضي (تطبيق واحد للاتنين). الويبهوك يقبل
+التوقيع بأي من السرّين: أرقام العملاء المربوطة بضغطة تشترك في تطبيق الـTech Provider."""
 import logging
 import os
 import re
@@ -96,14 +104,14 @@ def exchange_code(code, secret, c=None):
             c.close()
 
 
-def connect(code, waba_id, phone_id, secret):
-    """الرحلة كاملة بعد النافذة ← {token, waba_id, phone_id, number, name, pin, registered, warning}.
+def connect(code, waba_id, phone_id, secret, coexist=False):
+    """الرحلة كاملة بعد النافذة ← {token, waba_id, phone_id, number, name, pin, registered, warning, coexist}.
 
     يرمي SignupError قبل أي أثر جانبي لو فشل التبديل أو التحقق. الاشتراك والتسجيل
     يُحاولان، وفشلهما لا يُسقط الربط (الكود استُهلك، والبوت قابل للإصلاح لاحقاً) بل
     يعود `warning` يُعرض لصاحب البوت والأدمن."""
     waba_id, phone_id = str(waba_id or "").strip(), str(phone_id or "").strip()
-    if not (_ID.match(waba_id) and _ID.match(phone_id)):
+    if not _ID.match(waba_id) or not (_ID.match(phone_id) or (coexist and not phone_id)):
         raise SignupError("verify", "invalid WhatsApp account or phone id")
     with httpx.Client(timeout=TIMEOUT) as c:
         token = exchange_code(code, secret, c)
@@ -114,6 +122,8 @@ def connect(code, waba_id, phone_id, secret):
         if r.status_code != 200:
             raise SignupError("verify", _err(r))
         phones = {str(p.get("id")): p for p in (r.json() or {}).get("data") or []}
+        if coexist and not phone_id and len(phones) == 1:
+            phone_id = next(iter(phones))                  # نافذة التعايش قد لا ترجع المعرّف
         if phone_id not in phones:
             raise SignupError("verify", "the selected number is not in the shared WhatsApp account")
         p = phones[phone_id]
@@ -122,16 +132,19 @@ def connect(code, waba_id, phone_id, secret):
         r = c.post(f"{GRAPH}/{waba_id}/subscribed_apps", headers=auth)
         if r.status_code != 200:
             warnings.append(f"subscribe: {_err(r)}")
-        # 4) تسجيل الرقم على Cloud API (رقم مسجّل من قبل يُرجع خطأ لا يضر)
-        pin = f"{secrets.randbelow(10 ** 6):06d}"
-        r = c.post(f"{GRAPH}/{phone_id}/register", headers=auth,
-                   json={"messaging_product": "whatsapp", "pin": pin})
-        registered = r.status_code == 200
-        if not registered:
-            msg = _err(r)
-            if "already" not in msg.lower():
-                warnings.append(f"register: {msg}")
+        # 4) تسجيل الرقم على Cloud API (رقم مسجّل من قبل يُرجع خطأ لا يضر).
+        #    التعايش: لا تسجيل — الرقم مسجّل على تطبيق Business، وMeta تتولّى الربط.
+        pin, registered = None, False
+        if not coexist:
+            pin = f"{secrets.randbelow(10 ** 6):06d}"
+            r = c.post(f"{GRAPH}/{phone_id}/register", headers=auth,
+                       json={"messaging_product": "whatsapp", "pin": pin})
+            registered = r.status_code == 200
+            if not registered:
+                msg = _err(r)
+                if "already" not in msg.lower():
+                    warnings.append(f"register: {msg}")
     return {"token": token, "waba_id": waba_id, "phone_id": phone_id,
             "number": p.get("display_phone_number") or phone_id,
             "name": p.get("verified_name") or "", "pin": pin, "registered": registered,
-            "warning": " | ".join(warnings)}
+            "coexist": bool(coexist), "warning": " | ".join(warnings)}

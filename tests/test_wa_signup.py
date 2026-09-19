@@ -116,6 +116,17 @@ class SignupTests(Base):
         self.assertEqual(FakeMeta.calls[-1][2]["pin"], cfg["wa_pin"])
         self.assertEqual(FakeMeta.calls[0][2]["client_id"], "1337778974883863")
 
+    def test_tech_provider_secret_is_used_when_set(self):
+        """الكود صادر لتطبيق الـTech Provider — يُبدَّل بسرّه لا بسرّ تطبيق رقم المنصة."""
+        db.set_platform("wa_app_secret", "main-number-secret")
+        db.set_platform("wa_es_app_secret", "app-secret")
+        try:
+            self.assertTrue(self.finish(self.owner).get_json()["ok"])
+            self.assertEqual(FakeMeta.calls[0][2]["client_secret"], "app-secret")
+        finally:
+            db.set_platform("wa_app_secret", "app-secret")
+            db.set_platform("wa_es_app_secret", "")
+
     def test_number_outside_the_shared_account_is_refused(self):
         d = self.finish(self.owner, phone_id=OTHER).get_json()
         self.assertFalse(d["ok"])
@@ -155,13 +166,68 @@ class SignupTests(Base):
         self.assertEqual(len(db.list_bots(self.owner)), 1)
 
 
+class CoexistTests(Base):
+    """رقم شغّال على تطبيق WhatsApp Business: بلا /register، وردود الموبايل تُسكت البوت."""
+
+    def test_coexist_skips_registration(self):
+        d = self.finish(self.owner, coexist=True).get_json()
+        self.assertTrue(d["ok"], d)
+        self.assertFalse(any(c[1].endswith("/register") for c in FakeMeta.calls),
+                         "التسجيل بـPIN قد يفصل الرقم عن موبايل صاحبه")
+        cfg = json.loads(db.get_bot(db.list_bots(self.owner)[0]["id"])["config_json"])
+        self.assertTrue(cfg["wa_coexist"])
+        self.assertNotIn("wa_pin", cfg)
+
+    def test_coexist_without_phone_id_uses_the_single_number(self):
+        d = self.finish(self.owner, coexist=True, phone_id="").get_json()
+        self.assertTrue(d["ok"], d)
+        self.assertEqual(db.get_bot(db.list_bots(self.owner)[0]["id"])["token"], f"wa:{PHONE}")
+        # بدون تعايش المعرّف إلزامي
+        with db.get_conn() as c:
+            c.execute("DELETE FROM bots")
+        self.assertFalse(self.finish(self.owner, phone_id="").get_json()["ok"])
+
+    def test_coexist_flag_must_be_a_real_boolean(self):
+        self.assertTrue(self.finish(self.owner, coexist="yes").get_json()["ok"])
+        self.assertTrue(any(c[1].endswith("/register") for c in FakeMeta.calls))
+
+    def _echo(self, mid, to="201001112223", body="تمام يا فندم، الطلب جاهز"):
+        return {"entry": [{"id": WABA, "changes": [{"field": "smb_message_echoes", "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "201000000001", "phone_number_id": PHONE},
+            "message_echoes": [{"from": "201000000001", "to": to, "id": mid, "timestamp": "1",
+                                "type": "text", "text": {"body": body}}]}}]}]}
+
+    def test_phone_reply_is_logged_and_pauses_the_bot(self):
+        import bot_manager as BM
+        self.assertTrue(self.finish(self.owner, coexist=True).get_json()["ok"])
+        bid = db.list_bots(self.owner)[0]["id"]
+        self.assertEqual(BM.record_wa_echoes(self._echo("wamid.E1")), 1)
+        self.assertEqual(BM.record_wa_echoes(self._echo("wamid.E1")), 0, "إعادة إرسال Meta تتكرر")
+        with db.get_conn() as c:
+            conv = c.execute("SELECT mode FROM conversations WHERE bot_id=? AND peer=?",
+                             (bid, "wa:201001112223")).fetchone()
+            msg = c.execute("SELECT sender,direction,text FROM messages WHERE bot_id=? ORDER BY id DESC",
+                            (bid,)).fetchone()
+        self.assertEqual(conv["mode"], "human")
+        self.assertEqual((msg["sender"], msg["direction"]), ("human", "out"))
+        self.assertIn("الطلب جاهز", msg["text"])
+
+    def test_echoes_ignored_for_non_coexist_bots(self):
+        import bot_manager as BM
+        self.assertTrue(self.finish(self.owner).get_json()["ok"])
+        self.assertEqual(BM.record_wa_echoes(self._echo("wamid.E2")), 0)
+
+
 class PageAndPolicyTests(Base):
     def test_dashboard_gets_config_only_with_whatsapp_plan(self):
         html = self.client(self.owner).get("/dashboard").get_data(as_text=True)
         self.assertIn("1384888526614030", html)
         self.assertNotIn("app-secret", html)
+        self.assertIn('"waEsLocked": false', html)
         html = self.client(self.free).get("/dashboard").get_data(as_text=True)
         self.assertNotIn("1384888526614030", html)
+        self.assertIn('"waEsLocked": true', html)             # كارت مقفول يدعو للترقية
 
     def test_csp_opens_facebook_only_when_configured(self):
         csp = A._build_csp()

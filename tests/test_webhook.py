@@ -62,6 +62,29 @@ class WebhookTests(unittest.TestCase):
                                  "Content-Type": "application/json"})
         self.assertEqual(r.status_code, 200)
 
+    def test_post_accepts_either_app_secret(self):
+        """رقم المنصة على تطبيق، وأرقام العملاء (الربط بضغطة) على تطبيق الـTech Provider."""
+        db.set_platform("wa_app_secret", SECRET)
+        db.set_platform("wa_es_app_secret", "es-secret")
+        try:
+            body = b'{"entry":[]}'
+            for key in (SECRET, "es-secret"):
+                sig = "sha256=" + hmac.new(key.encode(), body, hashlib.sha256).hexdigest()
+                r = self.c.post("/wh/whatsapp", data=body,
+                                headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"})
+                self.assertEqual(r.status_code, 200, key)
+            sig = "sha256=" + hmac.new(b"other", body, hashlib.sha256).hexdigest()
+            r = self.c.post("/wh/whatsapp", data=body,
+                            headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"})
+            self.assertEqual(r.status_code, 403)
+            db.set_platform("wa_app_secret", "")            # سرّ الـTech Provider وحده يكفي للفتح
+            sig = "sha256=" + hmac.new(b"es-secret", body, hashlib.sha256).hexdigest()
+            r = self.c.post("/wh/whatsapp", data=body,
+                            headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"})
+            self.assertEqual(r.status_code, 200)
+        finally:
+            db.set_platform("wa_es_app_secret", "")
+
     def test_post_needs_no_csrf_token(self):
         """المسار مُستثنى من CSRF عمداً — التوقيع هو الحارس."""
         db.set_platform("wa_app_secret", SECRET)
