@@ -3081,6 +3081,58 @@ def wa_assist():
     _alert_ticket(tid, body)
     return jsonify({"ok": True, "id": tid, "existing": False})
 
+_WA_ES_RETURN = """<!doctype html><html lang="ar"><head><meta charset="utf-8">
+<title>BotYalla</title></head><body style="background:#07090F;color:#E8ECF5;
+font:15px/1.6 system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0">
+<p>%(msg)s</p><script nonce="%(nonce)s">
+(function(){var d=%(data)s;try{if(window.opener){window.opener.postMessage(d,%(origin)s);}}catch(e){}
+setTimeout(function(){try{window.close();}catch(e){}},400);})();
+</script></body></html>"""
+
+
+@app.route("/whatsapp/es/start", methods=["POST"])
+@login_required
+def wa_es_start():
+    """يبني رابط حوار Meta بنفسه (لا FB.login: الـSDK يسقط config_id في مسار FedCM).
+    `state` في الجلسة يمنع تمرير كود من نافذة لم تبدأها هذه الجلسة."""
+    ar = session.get("lang") != "en"
+    if not WAS.configured():
+        return jsonify(ok=False, error="not configured"), 404
+    ret = _public_url("wa_es_return")
+    if not ret:
+        return jsonify(ok=False, error="PUBLIC_URL is not configured"), 500
+    state = _secrets.token_urlsafe(24)
+    session["wa_es_state"] = state
+    url = WAS.dialog_url(ret, state, coexist=request.get_json(silent=True) is not None
+                         and (request.get_json(silent=True) or {}).get("coexist") is True)
+    if not url:
+        return jsonify(ok=False, error="not configured"), 404
+    return jsonify(ok=True, url=url, ret=ret)
+
+
+@app.route("/whatsapp/es/return")
+@login_required
+def wa_es_return():
+    """عودة نافذة Meta: تُسلّم الكود لصفحة الداشبورد (نفس الأصل) وتقفل نفسها.
+    الكود وحده لا يكفي لأي شيء بلا سرّ التطبيق، ويُستهلك مرة واحدة في /es/finish."""
+    ar = session.get("lang") != "en"
+    ok = (request.args.get("state") or "") == (session.pop("wa_es_state", "") or "\0")
+    code = (request.args.get("code") or "").strip()[:512]
+    if not ok:
+        payload = {"type": "BY_WA_ES", "error": "state"}
+    elif code:
+        payload = {"type": "BY_WA_ES", "code": code}
+    else:
+        payload = {"type": "BY_WA_ES",
+                   "error": (request.args.get("error_description")
+                             or request.args.get("error") or "cancelled")[:300]}
+    origin = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    html = _WA_ES_RETURN % {"msg": ("اتقفلت النافذة… ارجع للصفحة." if ar else "Closing… back to the page."),
+                            "nonce": getattr(g, "nonce", ""),
+                            "data": _js_json(payload), "origin": _js_json(origin or "*")}
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
 @app.route("/whatsapp/es/finish", methods=["POST"])
 @login_required
 def wa_es_finish():

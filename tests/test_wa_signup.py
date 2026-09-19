@@ -9,7 +9,7 @@ os.environ["BOTYALLA_DB"] = os.path.join(_TMP, "t.db")        # قبل أي اس
 os.environ["BOTYALLA_UPLOADS"] = _TMP
 os.environ["BOTYALLA_LOGS"] = _TMP
 os.environ["META_APP_ID"] = "1337778974883863"
-os.environ["WA_ES_CONFIG_ID"] = "1384888526614030"
+os.environ["WA_ES_CONFIG_ID"] = "2261261421386299"
 
 import database as db          # noqa: E402
 import wa_signup as WAS        # noqa: E402
@@ -31,6 +31,7 @@ class FakeMeta:
     calls = []
     register_status = 200
     code_ok = True
+    granted = [WABA]                      # ما منحه العميل فعلاً (debug_token)
 
     def __init__(self, *a, **k): pass
     def __enter__(self): return self
@@ -43,6 +44,11 @@ class FakeMeta:
             if FakeMeta.code_ok and params.get("client_secret") == "app-secret":
                 return Resp(200, {"access_token": "EAAB-customer-token"})
             return Resp(400, {"error": {"message": "Invalid verification code format."}})
+        if url.endswith("/debug_token"):
+            if not FakeMeta.granted:
+                return Resp(200, {"data": {"granular_scopes": []}})
+            return Resp(200, {"data": {"granular_scopes": [
+                {"scope": "whatsapp_business_management", "target_ids": FakeMeta.granted}]}})
         if url.endswith(f"/{WABA}/phone_numbers"):
             return Resp(200, {"data": [{"id": PHONE, "display_phone_number": "+20 100 000 0001",
                                         "verified_name": "Raghad Store"}]})
@@ -73,6 +79,7 @@ class Base(unittest.TestCase):
 
     def setUp(self):
         FakeMeta.calls, FakeMeta.register_status, FakeMeta.code_ok = [], 200, True
+        FakeMeta.granted = [WABA]
         self._client = WAS.httpx.Client
         WAS.httpx.Client = FakeMeta
         db.activate_subscription(self.owner, "whatsapp")
@@ -112,7 +119,8 @@ class SignupTests(Base):
         self.assertRegex(cfg["wa_pin"], r"^\d{6}$")
         # الخطوات بالترتيب: تبديل ← تحقق ← اشتراك ← تسجيل بنفس الـPIN
         urls = [c[1].rsplit("/", 1)[-1] for c in FakeMeta.calls]
-        self.assertEqual(urls, ["access_token", "phone_numbers", "subscribed_apps", "register"])
+        self.assertEqual(urls, ["access_token", "debug_token", "phone_numbers",
+                                "subscribed_apps", "register"])
         self.assertEqual(FakeMeta.calls[-1][2]["pin"], cfg["wa_pin"])
         self.assertEqual(FakeMeta.calls[0][2]["client_id"], "1337778974883863")
 
@@ -178,14 +186,20 @@ class CoexistTests(Base):
         self.assertTrue(cfg["wa_coexist"])
         self.assertNotIn("wa_pin", cfg)
 
-    def test_coexist_without_phone_id_uses_the_single_number(self):
-        d = self.finish(self.owner, coexist=True, phone_id="").get_json()
-        self.assertTrue(d["ok"], d)
-        self.assertEqual(db.get_bot(db.list_bots(self.owner)[0]["id"])["token"], f"wa:{PHONE}")
-        # بدون تعايش المعرّف إلزامي
-        with db.get_conn() as c:
-            c.execute("DELETE FROM bots")
-        self.assertFalse(self.finish(self.owner, phone_id="").get_json()["ok"])
+    def test_without_phone_id_the_server_resolves_it_from_the_grant(self):
+        """نافذة التعايش قد لا ترجع المعرّف — الخادم يأخذه من الحساب الممنوح في التوكن."""
+        for kw in ({"coexist": True}, {}):
+            with db.get_conn() as c:
+                c.execute("DELETE FROM bots")
+            d = self.finish(self.owner, phone_id="", **kw).get_json()
+            self.assertTrue(d["ok"], d)
+            self.assertEqual(db.get_bot(db.list_bots(self.owner)[0]["id"])["token"], f"wa:{PHONE}")
+
+    def test_nothing_shared_in_the_window_is_refused(self):
+        FakeMeta.granted = []
+        d = self.finish(self.owner, phone_id="").get_json()
+        self.assertEqual((d["ok"], d["step"]), (False, "verify"))
+        self.assertEqual(db.list_bots(self.owner), [])
 
     def test_coexist_flag_must_be_a_real_boolean(self):
         self.assertTrue(self.finish(self.owner, coexist="yes").get_json()["ok"])
@@ -222,25 +236,65 @@ class CoexistTests(Base):
 class PageAndPolicyTests(Base):
     def test_dashboard_gets_config_only_with_whatsapp_plan(self):
         html = self.client(self.owner).get("/dashboard").get_data(as_text=True)
-        self.assertIn("1384888526614030", html)
+        self.assertIn("2261261421386299", html)
         self.assertNotIn("app-secret", html)
         self.assertIn('"waEsLocked": false', html)
         html = self.client(self.free).get("/dashboard").get_data(as_text=True)
-        self.assertNotIn("1384888526614030", html)
+        self.assertNotIn("2261261421386299", html)
         self.assertIn('"waEsLocked": true', html)             # كارت مقفول يدعو للترقية
 
-    def test_csp_opens_facebook_only_when_configured(self):
+    def test_csp_stays_closed_no_facebook_script_needed(self):
+        """الحوار في نافذة مستقلة — لا سكربت فيسبوك ولا إطار، فلا توسيع للسياسة."""
         csp = A._build_csp()
-        self.assertIn("https://connect.facebook.net", csp)
-        self.assertIn("frame-src", csp)
+        self.assertNotIn("frame-src https://www.facebook", csp)   # الحوار نافذة لا إطار
         script = [d for d in csp.split("; ") if d.startswith("script-src ")][0]
         self.assertNotIn("unsafe-inline", script)
+        self.assertEqual(WAS.csp_sources(), {})
         os.environ.pop("WA_ES_CONFIG_ID")
         try:
             self.assertIsNone(WAS.client_config())
-            self.assertEqual(WAS.csp_sources(), {})
         finally:
-            os.environ["WA_ES_CONFIG_ID"] = "1384888526614030"
+            os.environ["WA_ES_CONFIG_ID"] = "2261261421386299"
+
+    def test_start_builds_a_dialog_url_with_the_configuration(self):
+        os.environ["PUBLIC_URL"] = "https://botyalla.com"
+        try:
+            d = self.client(self.owner).post("/whatsapp/es/start", json={},
+                                             headers={"X-CSRF-Token": "c" * 32}).get_json()
+            self.assertTrue(d["ok"], d)
+            self.assertIn("config_id=2261261421386299", d["url"])
+            self.assertIn("client_id=1337778974883863", d["url"])
+            self.assertIn("response_type=code", d["url"])
+            self.assertIn("state=", d["url"])
+            self.assertIn("whatsapp%2Fes%2Freturn", d["url"])
+            self.assertNotIn("scope=openid", d["url"])          # مسار FedCM الذي يسقط التكوين
+            d2 = self.client(self.owner).post("/whatsapp/es/start", json={"coexist": True},
+                                              headers={"X-CSRF-Token": "c" * 32}).get_json()
+            self.assertIn("whatsapp_business_app_onboarding", d2["url"])
+        finally:
+            os.environ.pop("PUBLIC_URL", None)
+
+    def test_return_page_hands_the_code_over_only_for_its_own_session(self):
+        os.environ["PUBLIC_URL"] = "https://botyalla.com"
+        try:
+            c = self.client(self.owner)
+            url = c.post("/whatsapp/es/start", json={}, headers={"X-CSRF-Token": "c" * 32}).get_json()["url"]
+            state = url.split("state=")[1].split("&")[0]
+            html = c.get(f"/whatsapp/es/return?code=AQD-abc&state={state}").get_data(as_text=True)
+            self.assertIn("AQD-abc", html)
+            self.assertIn("https://botyalla.com", html)          # postMessage لأصلنا وحده
+            # الـstate يُستهلك: إعادة استخدام نفس الرابط لا تمرّر كوداً
+            again = c.get(f"/whatsapp/es/return?code=AQD-abc&state={state}").get_data(as_text=True)
+            self.assertNotIn("AQD-abc", again)
+            c.post("/whatsapp/es/start", json={}, headers={"X-CSRF-Token": "c" * 32})
+            forged = c.get("/whatsapp/es/return?code=AQD-evil&state=guess").get_data(as_text=True)
+            self.assertNotIn("AQD-evil", forged)
+        finally:
+            os.environ.pop("PUBLIC_URL", None)
+
+    def test_return_needs_a_login(self):
+        r = A.app.test_client().get("/whatsapp/es/return?code=x&state=y")
+        self.assertIn(r.status_code, (302, 401, 403))
 
     def test_customer_token_and_pin_never_reach_the_browser(self):
         self.assertTrue(self.finish(self.owner).get_json()["ok"])

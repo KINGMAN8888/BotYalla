@@ -173,41 +173,40 @@ function BotCard({ b, i }) {
 }
 
 /* «اربط رقمك بضغطة» — WhatsApp Embedded Signup (BotYalla مزوّد خدمة تقنية معتمد من Meta).
-   نافذة Meta الرسمية: العميل يختار نشاطه ورقمه، والمتصفح يستلم code + المعرّفات، والخادم وحده
-   يبدّل ويتحقّق ويسجّل (/whatsapp/es/finish). لا كلمات سر ولا توكنات في المتصفح. */
-let _fbLoading = null;
-function loadFacebook(cfg) {
-  if (window.FB) return Promise.resolve(window.FB);
-  if (_fbLoading) return _fbLoading;
-  _fbLoading = new Promise((resolve, reject) => {
-    window.fbAsyncInit = () => {
-      window.FB.init({ appId: cfg.appId, autoLogAppEvents: true, xfbml: false, version: cfg.version });
-      resolve(window.FB);
-    };
-    const s = document.createElement("script");
-    s.src = "https://connect.facebook.net/en_US/sdk.js";
-    s.async = true; s.defer = true; s.crossOrigin = "anonymous";
-    s.onerror = () => { _fbLoading = null; reject(new Error("sdk")); };
-    document.body.appendChild(s);
-  });
-  return _fbLoading;
-}
 
-/* منطق الربط بضغطة — fields() تُرجع {name, template} لحظة الإرسال. */
+   نافذة منبثقة على رابط حوار Meta يبنيه الخادم (/whatsapp/es/start)، لا FB.login من الـSDK:
+   Chrome يحوّل نداء الـSDK إلى مسار FedCM فيسقط config_id ويطلب scope=openid وحده، فترد
+   Meta بـ«هذا التطبيق يحتاج إلى supported permission واحد على الأقل». والنافذة تعمل كذلك
+   مع مانعات الإعلانات التي تحجب سكربت فيسبوك.
+
+   Meta تُعيد العميل إلى /whatsapp/es/return (نفس أصلنا) فيُرسل الكود لهذه الصفحة ويقفل نفسه،
+   ثم الخادم وحده يبدّل ويكتشف الحساب من التوكن ويتحقّق ويسجّل. لا سرّ ولا توكن في المتصفح. */
+
+/* منطق الربط بضغطة — fields() تُرجع {name, template, coexist} لحظة الضغط. */
 function useWaSignup(cfg, fields) {
   const [state, setState] = useState({ busy: false, msg: null, ok: null });
-  const session = useRef(null);
+  const session = useRef(null);      // معلومات نافذة Meta إن وصلت (waba_id/phone_number_id)
+  const done = useRef(false);        // كود واحد لكل نافذة
 
   useEffect(() => {
     const onMsg = (ev) => {
+      let d = ev.data;
+      try { if (typeof d === "string") d = JSON.parse(d); } catch { return; }
+      if (!d) return;
+      if (ev.origin === window.location.origin && d.type === "BY_WA_ES") {
+        if (done.current) return;
+        done.current = true;
+        if (d.code) finish(d.code);
+        else setState({ busy: false, ok: false, msg: d.error === "state"
+          ? bi("الجلسة اتغيّرت — حدّث الصفحة وجرّب تاني.", "The session changed — refresh the page and try again.")
+          : bi("اتلغى الربط من نافذة Meta.", "The connection was cancelled in the Meta window.") });
+        return;
+      }
       let host = "";
       try { host = new URL(ev.origin).hostname; } catch { return; }
       if (!/(^|\.)facebook\.com$/.test(host)) return;          // رسائل نافذة Meta وحدها
-      let d = ev.data;
-      try { if (typeof d === "string") d = JSON.parse(d); } catch { return; }
-      if (!d || d.type !== "WA_EMBEDDED_SIGNUP") return;
+      if (d.type !== "WA_EMBEDDED_SIGNUP") return;
       if (String(d.event || "").startsWith("FINISH")) session.current = d.data || {};
-      else if (d.event === "CANCEL") session.current = { cancelled: true, step: d.data && d.data.current_step };
       else if (d.event === "ERROR") session.current = { error: (d.data && d.data.error_message) || "error" };
     };
     window.addEventListener("message", onMsg);
@@ -215,23 +214,14 @@ function useWaSignup(cfg, fields) {
   }, []);
 
   async function finish(code) {
-    // رسالة الجلسة قد تصل بعد callback الدخول بلحظات — ننتظرها حتى 5 ثوانٍ
-    for (let i = 0; i < 25 && !session.current; i++) await new Promise((r) => setTimeout(r, 200));
     const s = session.current || {};
     const f = fields();
-    if (s.error) return setState({ busy: false, ok: false, msg: "Meta: " + s.error });
-    // التعايش: النافذة قد ترجع waba_id وحده — الخادم يأخذ رقم الحساب الوحيد ويتحقق منه
-    if (!s.waba_id || (!s.phone_number_id && !f.coexist)) {
-      return setState({ busy: false, ok: false, msg: bi(
-        "النافذة اتقفلت قبل ما تختار رقم — جرّب تاني وكمّل لحد آخر خطوة.",
-        "The window closed before a number was selected — try again and finish all steps.") });
-    }
     setState({ busy: true, ok: null, msg: bi("بنربط رقمك ونجهّز البوت…", "Connecting your number and preparing the bot…") });
     try {
       const r = await fetch("/whatsapp/es/finish", {
         method: "POST", credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf },
-        body: JSON.stringify({ code, waba_id: s.waba_id, phone_id: s.phone_number_id || "",
+        body: JSON.stringify({ code, waba_id: s.waba_id || "", phone_id: s.phone_number_id || "",
                                name: f.name, template: f.template, coexist: !!f.coexist }),
       });
       let d = null;
@@ -247,26 +237,31 @@ function useWaSignup(cfg, fields) {
   }
 
   async function start() {
-    session.current = null;
+    session.current = null; done.current = false;
+    // النافذة تُفتح داخل الضغطة نفسها وإلا حجبها المتصفح — ثم نوجّهها بعد رد الخادم
+    const w = window.open("", "by_wa_es", "width=600,height=760,menubar=no,toolbar=no");
     setState({ busy: true, ok: null, msg: bi("بنفتح نافذة Meta…", "Opening the Meta window…") });
-    let FB;
-    try { FB = await loadFacebook(cfg); } catch {
-      return setState({ busy: false, ok: false, msg: bi(
-        "تعذّر تحميل فيسبوك — لو عندك مانع إعلانات أو إضافة خصوصية اقفلها للصفحة دي وجرّب تاني.",
-        "Could not load Facebook — if you use an ad/privacy blocker, allow this page and retry.") });
+    let d = null;
+    try {
+      const r = await fetch("/whatsapp/es/start", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf },
+        body: JSON.stringify({ coexist: !!fields().coexist }),
+      });
+      d = await r.json();
+    } catch { /* الشبكة */ }
+    if (!d || !d.ok || !d.url) {
+      if (w) w.close();
+      return setState({ busy: false, ok: false, msg: (d && d.error)
+        || bi("مفيش اتصال بالسيرفر — جرّب تاني.", "No connection to the server — try again.") });
     }
-    FB.login((resp) => {
-      const code = resp && resp.authResponse && resp.authResponse.code;
-      if (!code) {
-        setState({ busy: false, ok: false, msg: bi("اتلغى الربط من نافذة Meta.", "The connection was cancelled in the Meta window.") });
-        return;
-      }
-      finish(code);
-    }, {
-      config_id: cfg.configId, response_type: "code", override_default_response_type: true,
-      extras: { setup: {}, sessionInfoVersion: "3",
-                featureType: fields().coexist ? "whatsapp_business_app_onboarding" : "" },
-    });
+    if (!w) {
+      return setState({ busy: false, ok: false, msg: bi(
+        "المتصفح منع النافذة — اسمح بالنوافذ المنبثقة للموقع ده وجرّب تاني.",
+        "Your browser blocked the popup — allow popups for this site and try again.") });
+    }
+    w.location.href = d.url;
+    setState({ busy: true, ok: null, msg: bi("كمّل الخطوات في نافذة Meta…", "Finish the steps in the Meta window…") });
   }
   return { state, start };
 }
