@@ -2148,9 +2148,31 @@ def settings():
         flash("تم حفظ إعدادات الذكاء الاصطناعي للمنصة ✅" if session.get("lang")!="en"
               else "Platform AI settings saved ✅", "ok")
         return redirect(url_for("settings"))
+    try:
+        last_err = json.loads(db.get_platform("ai_last_error", "") or "{}")
+    except ValueError:
+        last_err = {}
     return react_page("settings", "ai_settings",
                       {"aiProvider": db.get_platform("ai_provider", "gemini"),
-                       "aiKey": db.get_platform("ai_key", "")})
+                       "aiKey": db.get_platform("ai_key", ""),
+                       "aiLastError": last_err if isinstance(last_err, dict) else {},
+                       "aiLastOk": int(db.get_platform("ai_last_ok_at", "0") or 0)})
+
+
+@app.route("/settings/ai-test", methods=["POST"])
+@require_roles("admin")
+def settings_ai_test():
+    """يجرّب مفتاح المنصة بطلب صغير ويرجّع رسالة المزوّد نفسها (سبب الفشل الحقيقي)."""
+    if _rate_limited(request.remote_addr or "?", limit=10, window=300, bucket="ai_test"):
+        return jsonify(ok=False, msg="rate limited"), 429
+    key = db.get_platform("ai_key", "")
+    provider = db.get_platform("ai_provider", "gemini")
+    ok, msg = ai.check_key(provider, key)
+    if key:
+        msg = msg.replace(key, "***")
+    if ok:
+        FE._note_ai(True)
+    return jsonify(ok=ok, msg=msg, provider=provider)
 
 # (المسار القديم POST /bot/<id>/ai-setup حُذف: لا تستعمله الواجهة، وكان بلا حصة ولا حدّ
 #  فيحرق مفتاح الذكاء الاصطناعي للمنصة بطلبين لكل استدعاء. وكيل الإعداد /ai/session يغنيه.)

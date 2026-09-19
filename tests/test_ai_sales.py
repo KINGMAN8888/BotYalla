@@ -156,6 +156,86 @@ class BrainSalesTests(Base):
         self.assertNotIn("wa:201000000005", db.list_bot_peers(self.bid))
 
 
+class ReliabilityTests(Base):
+    def _post(self, outcomes, seen):
+        orig = ai._post_json
+
+        def fake(url, payload, headers, timeout=30):
+            seen.append(url.split("/models/")[-1].split(":")[0] if "/models/" in url else payload.get("model"))
+            o = outcomes.pop(0)
+            if isinstance(o, Exception):
+                raise o
+            return o
+        ai._post_json = fake
+        self.addCleanup(setattr, ai, "_post_json", orig)
+
+    def test_busy_model_falls_back_to_the_next(self):
+        seen = []
+        ok = {"candidates": [{"content": {"parts": [{"text": '{"reply":"x"}'}]}}]}
+        self._post([ai.AIError("HTTP 429: quota", retry=True), ok], seen)
+        self.assertEqual(ai.call_gemini("k", "s", "u"), '{"reply":"x"}')
+        self.assertEqual(seen, list(ai.GEMINI_MODELS[:2]))
+
+    def test_bad_key_is_not_retried_and_explains_why(self):
+        seen = []
+        self._post([ai.AIError("HTTP 400: API key not valid", retry=False)], seen)
+        ok, msg = ai.check_key("gemini", "bad")
+        self.assertFalse(ok)
+        self.assertIn("API key not valid", msg)
+        self.assertEqual(len(seen), 1)
+
+    def test_key_travels_in_header_not_url(self):
+        captured = {}
+        orig = ai._post_json
+
+        def fake(url, payload, headers, timeout=30):
+            captured.update(url=url, headers=headers)
+            return {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}
+        ai._post_json = fake
+        self.addCleanup(setattr, ai, "_post_json", orig)
+        ai.call_gemini("SECRET", "s", "u")
+        self.assertNotIn("SECRET", captured["url"])
+        self.assertEqual(captured["headers"]["x-goog-api-key"], "SECRET")
+
+    def test_customer_escapes_fallback_flow_when_ai_returns(self):
+        self.cfg(self.bid, response_mode="ai")
+        peer = "tg:40"
+
+        def boom(*a): raise ai.AIError("HTTP 503: overloaded", retry=True)
+        ai._call = boom
+        self.say(self.bid, peer, "text", "بكام؟")
+        self.assertIn("اسمك؟", [s[1] for s in self.ch.sent])
+        self.assertIsNotNone(db.get_chat_state(self.bid, peer))
+        self.assertIn("overloaded", json.loads(db.get_platform("ai_last_error"))["msg"])
+        self.capture("التفصيل بـ 1500.")
+        self.say(self.bid, peer, "text", "طب بكام التفصيل؟")
+        self.assertEqual(self.ch.sent[-1], ("text", "التفصيل بـ 1500."))
+        self.assertIsNone(db.get_chat_state(self.bid, peer), "العميل ما زال عالقاً في الفلو")
+
+    def test_official_bot_answers_offline_instead_of_flow(self):
+        self.cfg(self.official, response_mode="ai", platform_kb=True)
+
+        def boom(*a): raise ai.AIError("HTTP 429", retry=True)
+        ai._call = boom
+        peer = "wa:201000000041"
+        self.say(self.official, peer, "text", "الباقات والأسعار")
+        texts = " ".join(str(s[1]) for s in self.ch.sent)
+        self.assertNotIn("اسمك", texts)
+        for pid in A.plans.ORDER:
+            self.assertIn(A.plans.PLANS[pid]["name_ar"], texts)
+        self.assertIsNone(db.get_chat_state(self.official, peer))
+        self.say(self.official, peer, "text", "ابدأ مجاناً")
+        self.assertIn("https://botyalla.test/register", self.ch.sent[-1][1])
+        self.say(self.official, peer, "text", "عايز أكلم موظف")
+        self.assertEqual(db.get_conversation(self.official, peer)["mode"], "human")
+
+    def test_missing_key_is_recorded(self):
+        self.cfg(self.bid, response_mode="ai")
+        db.set_platform("ai_key", "")
+        self.say(self.bid, "tg:42", "text", "سؤال")
+        self.assertIn("no platform AI key", json.loads(db.get_platform("ai_last_error"))["msg"])
+
+
 class OptOutTests(Base):
     def test_stop_word_in_flow_mode(self):
         self.cfg(self.bid, response_mode="flow")
@@ -211,6 +291,22 @@ class RouteTests(Base):
         self.assertTrue(json.loads(db.get_bot(self.official)["config_json"])["platform_kb"])
         c.post(f"/bot/{self.official}/brain", data=self.form())
         self.assertFalse(json.loads(db.get_bot(self.official)["config_json"])["platform_kb"])
+
+    def test_admin_tests_the_key(self):
+        c = self.client(1)
+        ai._call = lambda *a: json.dumps({"ok": True})
+        r = c.post("/settings/ai-test", headers={"X-CSRF-Token": "c" * 32})
+        self.assertEqual(r.get_json()["ok"], True)
+
+        def bad(*a): raise ai.AIError("HTTP 400: API key not valid test-key")
+        ai._call = bad
+        r = c.post("/settings/ai-test", headers={"X-CSRF-Token": "c" * 32})
+        self.assertFalse(r.get_json()["ok"])
+        self.assertIn("API key not valid", r.get_json()["msg"])
+        self.assertNotIn("test-key", r.get_json()["msg"])
+        self.assertEqual(c.get("/settings").status_code, 200)
+        owner = self.client(self.owner).post("/settings/ai-test", headers={"X-CSRF-Token": "c" * 32})
+        self.assertIn(owner.status_code, (302, 403))
 
     def test_bot_page_renders_both_languages(self):
         c = self.client(1)

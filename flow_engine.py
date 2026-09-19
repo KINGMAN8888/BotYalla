@@ -228,6 +228,22 @@ def _ai_can_try(bot_row):
     return price > 0 and db.wallet_balance(bot_row["owner_id"]) >= price
 
 
+def _note_ai(ok, err=None, key=""):
+    """آخر نجاح/خطأ للذكاء الاصطناعي في إعدادات المنصة — الأدمن يرى سبب الفشل في
+    صفحة الإعدادات بلا دخول للسيرفر. المفتاح يُحذف من الرسالة احتياطاً."""
+    try:
+        if ok:
+            db.set_platform("ai_last_ok_at", str(int(time.time())))
+        else:
+            msg = f"{type(err).__name__}: {err}"[:300]
+            if key:
+                msg = msg.replace(key, "***")
+            db.set_platform("ai_last_error", json.dumps({"at": int(time.time()), "msg": msg},
+                                                        ensure_ascii=False))
+    except Exception:
+        log.exception("could not record AI status")
+
+
 def _platform_facts(bot_row, cfg):
     """حقائق BotYalla الحيّة لبوت المنصة الرسمي فقط: الخيار مفعّل **و** صاحب البوت أدمن/دعم —
     فلا يستطيع عميل أن يجعل بوته يتكلّم باسم المنصة بتعديل إعداده."""
@@ -286,7 +302,10 @@ async def _ai_answer(bot_row, cfg, raw_channel, peer, text, extra=None):
     المزوّد لا يُحتسب على صاحب النشاط، ورد لم يُحجز له رصيد لا يُرسل أبداً."""
     import ai_agent
     key = db.get_platform("ai_key", "")
-    if not key or not _ai_can_try(bot_row):
+    if not key:
+        _note_ai(False, RuntimeError("no platform AI key — add it in /settings"))
+        return False
+    if not _ai_can_try(bot_row):
         return False
     provider = db.get_platform("ai_provider", "gemini")
     ch = LoggedChannel(raw_channel, bot_row["id"], "ai")
@@ -298,9 +317,11 @@ async def _ai_answer(bot_row, cfg, raw_channel, peer, text, extra=None):
     try:
         out = await asyncio.to_thread(ai_agent.brain_reply, cfg, bot_row, history, text,
                                       key, provider, extra)
-    except Exception:
-        log.exception("AI reply failed for bot #%s", bot_row["id"])
+    except Exception as e:
+        log.error("AI reply failed for bot #%s: %s", bot_row["id"], str(e)[:300])
+        _note_ai(False, e, key)
         return False
+    _note_ai(True)
     reply = (out or {}).get("reply")
     if not reply:
         return False
@@ -550,11 +571,25 @@ async def _ai_mode(bot_row, cfg, raw, channel, peer, msg, f):
     if kind == "media":
         await channel.send_text(peer, "📎 وصلني الملف. اكتب لي كمان طلبك أو سؤالك نصاً عشان أساعدك.")
         return True
-    if db.get_chat_state(bot_id, peer):
-        return False                  # عميل في منتصف فلو قديم — يكمله الفلو
+    # عميل في فلو احتياطي (تعطّل الذكاء الاصطناعي في رسالة سابقة): نجرّب الذكاء أولاً في
+    # كل رسالة — لو رد يُمسح الفلو فلا يعلق العميل في «اسمك؟ رقمك؟» بعد عودة المزوّد.
+    in_flow = bool(db.get_chat_state(bot_id, peer))
     first = not db.bot_user_exists(bot_id, peer)
-    if not await _ai_answer(bot_row, cfg, raw, peer, msg.get("text", "")):
+    text = msg.get("text", "")
+    if not await _ai_answer(bot_row, cfg, raw, peer, text):
+        # بوت المنصة الرسمي لا يسقط لفلو «اسمك؟»: يرد من حقائق المنصة الثابتة
+        if _platform_facts(bot_row, cfg) is not None:
+            import platform_kb
+            reply, opts = platform_kb.offline_reply(text, _lang_of(text))
+            db.add_bot_user(bot_id, _peer_num(peer), msg.get("name", ""), peer=peer)
+            db.clear_chat_state(bot_id, peer)
+            await (channel.send_buttons(peer, reply, opts) if opts else channel.send_text(peer, reply))
+            if platform_kb._intent(text) == "human":   # وعدناه بموظف — نحوّله فعلاً
+                await _ai_action(bot_row, cfg, raw, peer, {"type": "handoff", "reason": text[:200]})
+            return True
         return False                  # لا تسجيل هنا — الفلو يسجّله ويحتسب بدايته مرة واحدة
+    if in_flow:
+        db.clear_chat_state(bot_id, peer)
     db.add_bot_user(bot_id, _peer_num(peer), msg.get("name", ""), peer=peer)
     if first:
         db.log_event(bot_id, "start")

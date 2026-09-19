@@ -14,6 +14,7 @@
 
 كل ما هنا حقائق عن المنتج كما هو في الكود — لا شهادات ولا أرقام عملاء (AGENTS.md §3.26)."""
 import os
+import re
 
 import database as db
 import plans
@@ -126,6 +127,96 @@ def facts():
             "لو العميل عايز بوت مخصّص أو حالة خاصة أو خصم: اعرض تحويله لفريق المبيعات (handoff).",
         ],
     }
+
+
+# ------------------------------------------------ رد بلا ذكاء اصطناعي
+# حين يتعطّل المزوّد (مفتاح · حصة · شبكة) لا يسقط بوت المنصة لفلو «اسمك؟ رقمك؟» —
+# يرد من الحقائق نفسها بمطابقة كلمات. الترتيب مهم: الأسعار قبل «واتساب» (بكام باقة واتساب؟).
+_INTENTS = (
+    ("human",   ("موظف", "حد من الفريق", "خدمه العملاء", "شكوي", "مشكله", "كلم حد", "بشري",
+                 "human", "agent", "person", "complain", "support team")),
+    ("prices",  ("سعر", "اسعار", "بكام", "كام", "باقه", "باقات", "اشتراك", "تكلفه", "فلوس",
+                 "price", "pricing", "plan", "cost", "how much", "subscription")),
+    ("start",   ("ابدا", "ابدء", "سجل", "تسجيل", "حساب", "جرب", "مجان", "start", "sign", "register",
+                 "free", "try")),
+    ("pay",     ("دفع", "ادفع", "فودافون", "انستاباي", "تحويل", "كاش", "pay", "instapay", "vodafone")),
+    ("whatsapp", ("واتساب", "واتس", "whatsapp")),
+    ("about",   ("ايه هي", "ايه هو", "يعني ايه", "بتعملوا", "botyalla", "بوت يلا", "بوتيلا", "مميزات",
+                 "خدمات", "what is", "features", "what do you", "how does", "ازاي")),
+)
+
+
+def _norm(s):
+    s = (s or "").lower()
+    for a, b in (("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ة", "ه"), ("ى", "ي"), ("ـ", "")):
+        s = s.replace(a, b)
+    return re.sub(r"[ً-ْ]", "", s)
+
+
+def _intent(text):
+    t = _norm(text)
+    for name, words in _INTENTS:
+        if any(w in t for w in words):
+            return name
+    return None
+
+
+def offline_reply(text, lang="ar"):
+    """(نص، أزرار) من حقائق المنصة بلا نموذج. لا يَعِد بشيء خارج `facts()`."""
+    f = facts()
+    en = lang == "en"
+    links, sup = f["links"], f["support"]
+    signup = links.get("signup", "")
+    intent = _intent(text)
+    btns = starters(lang)
+    if intent == "prices":
+        lines = []
+        for p in f["plans"]:
+            m = p["price_monthly_egp"]
+            price = ("Free" if en else "مجانية") if m == "مجانية" else (f"{m} EGP/month" if en else f"{m} ج/شهر")
+            lines.append(f"• {p['plan']}: {price}")
+        tail = (f"\nYearly billing saves 30%. Details: {links['pricing']}" if en and links else
+                f"\nالاشتراك السنوي بخصم 30%. التفاصيل: {links['pricing']}" if links else "")
+        head = "Our plans:" if en else "باقاتنا:"
+        return head + "\n" + "\n".join(lines) + tail, (["Start for free", "WhatsApp or Telegram"]
+                                                       if en else ["ابدأ مجاناً", "واتساب ولا تليجرام؟"])
+    if intent == "start":
+        msg = ("Create your free account in a minute — no card needed:" if en else
+               "اعمل حسابك المجاني في دقيقة — من غير بطاقة:")
+        return (msg + (f"\n{signup}" if signup else "") +
+                ("\nThen describe your business and the setup agent builds your bot." if en else
+                 "\nوبعدها احكي عن نشاطك ووكيل الإعداد يصمّملك البوت كامل.")), []
+    if intent == "whatsapp":
+        return (("Our WhatsApp plan uses the official Meta WhatsApp Cloud API, and our team connects "
+                 "your number for you. It needs a commercial register and tax card (a Meta requirement). "
+                 "Telegram works on the free plan with no paperwork.") if en else
+                ("باقة واتساب على واتساب الرسمي من Meta، وفريقنا بيربط رقمك بنفسه. محتاجة سجل تجاري "
+                 "وبطاقة ضريبية (شرط من Meta). أما تليجرام فشغّال على الباقة المجانية من غير أي أوراق.")), \
+               (["Plans & pricing", "Start for free"] if en else ["الباقات والأسعار", "ابدأ مجاناً"])
+    if intent == "pay":
+        pays = " · ".join(f["payment_methods"])
+        return ((f"Pay by: {pays}. Transfer, upload the receipt on the subscription page, and the team "
+                 "activates your plan after review.") if en else
+                (f"الدفع بـ: {pays}. حوّل المبلغ وارفع صورة الإيصال من صفحة الاشتراك، والفريق يفعّل "
+                 "باقتك بعد المراجعة.")), []
+    if intent == "human":
+        contact = " · ".join(v for v in (sup.get("whatsapp"), sup.get("email")) if v)
+        return ((f"Sure — our team will get back to you here shortly. You can also reach us at: {contact}")
+                if en else
+                (f"أكيد — حد من فريقنا هيرد عليك هنا في أقرب وقت. وتقدر تكلمنا كمان على: {contact}")
+                ) if contact else (("Sure — our team will get back to you here shortly." if en else
+                                    "أكيد — حد من فريقنا هيرد عليك هنا في أقرب وقت.")), []
+    if intent == "about":
+        return ((("BotYalla lets you launch a chatbot for your business on WhatsApp and Telegram with no "
+                  "coding: it answers customers 24/7, shows products, takes orders and bookings, and "
+                  "collects leads — all managed from one dashboard.") if en else
+                 ("BotYalla منصة مصرية تخليك تعمل بوت لنشاطك على واتساب وتليجرام من غير برمجة: يرد على "
+                  "عملائك 24 ساعة، يعرض منتجاتك، ياخد الطلبات والحجوزات، ويجمع بيانات المهتمين — "
+                  "وتتابع كل ده من لوحة واحدة.")),
+                ["Plans & pricing", "Start for free"] if en else ["الباقات والأسعار", "ابدأ مجاناً"])
+    return (("I can help with BotYalla: what it does, plans and prices, or getting started. "
+             "What would you like to know?") if en else
+            "أقدر أساعدك في كل حاجة عن BotYalla: بتعمل إيه، الباقات والأسعار، أو إزاي تبدأ. تحب تعرف إيه؟"), btns
 
 
 def welcome(lang="ar"):

@@ -510,6 +510,45 @@ export function Account() {
 }
 
 /* ---------------------------------------------------------- إعدادات الـ AI */
+/* اختبار المفتاح المحفوظ + آخر خطأ سجّله «عقل البوت» — سبب الفشل بلا دخول للسيرفر */
+function AiKeyTest() {
+  const [res, setRes] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const last = P.aiLastError || {};
+  const when = (s) => (s ? new Date(s * 1000).toLocaleString() : "");
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/settings/ai-test", {
+        method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf }, body: "{}",
+      });
+      setRes(await r.json());
+    } catch {
+      setRes({ ok: false, msg: bi("تعذّر الاتصال.", "Connection failed.") });
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="mt-6 border-t border-white/10 pt-5">
+      <Btn variant="ghost" icon="bolt" type="button" onClick={run} disabled={busy}>
+        {busy ? bi("جارٍ الاختبار…", "Testing…") : bi("اختبر المفتاح المحفوظ", "Test the saved key")}
+      </Btn>
+      {res && (
+        <p className={"mt-3 mb-0 text-[13px] font-bold " + (res.ok ? "text-au-teal" : "text-red-300")}>
+          {res.ok ? bi("✓ المفتاح شغّال والذكاء الاصطناعي بيرد.", "✓ The key works and the AI is answering.")
+                  : bi("✗ فشل: ", "✗ Failed: ") + (res.msg || "")}
+        </p>
+      )}
+      <p className="mt-3 mb-0 text-[12.5px] leading-relaxed text-ink-3">
+        {P.aiLastOk ? bi("آخر رد ناجح: ", "Last successful reply: ") + when(P.aiLastOk) : bi("لا يوجد رد ناجح مسجّل بعد.", "No successful reply recorded yet.")}
+        {last.msg && (last.at || 0) > (P.aiLastOk || 0) && (
+          <><br /><span className="text-yellow-200">{bi("آخر خطأ: ", "Last error: ") + when(last.at) + " — " + last.msg}</span></>
+        )}
+      </p>
+    </div>
+  );
+}
+
 export function Settings() {
   return (
     <>
@@ -519,7 +558,7 @@ export function Settings() {
         <Form action="">
           <Field label={t("provider")} className="mb-4">
             <Select name="ai_provider" defaultValue={P.aiProvider}>
-              <option value="gemini">Google Gemini 2.5 Flash</option>
+              <option value="gemini">Google Gemini Flash</option>
               <option value="groq">Groq — Llama 3.3</option>
             </Select>
           </Field>
@@ -530,6 +569,7 @@ export function Settings() {
           </Field>
           <div className="mt-6"><Btn icon="check" type="submit">{t("save")}</Btn></div>
         </Form>
+        <AiKeyTest />
       </Card>
 
       <Card className="max-w-[640px]">

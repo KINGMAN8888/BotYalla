@@ -19,47 +19,121 @@ import re
 import urllib.request
 import urllib.error
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 GROQ_MODEL = "llama-3.3-70b-versatile"
+# نماذج احتياطية بالترتيب: الأول ضغطه عالٍ أو نفدت حصته أو سحبته جوجل (404/429/5xx/مهلة)
+# ← الذي يليه. خطأ المفتاح نفسه (400/401/403) لا يُجرَّب على غيره — لن ينجح.
+# (2026-09-19: gemini-2.5-flash صار 404 «no longer available» فتعطّل كل رد ذكي بصمت.)
+# `gemini-flash-latest` اسم مستعار تحدّثه جوجل — آخر خط دفاع حين تُسحب الأسماء الثابتة.
+GEMINI_MODELS = (GEMINI_MODEL, "gemini-3.5-flash", "gemini-flash-latest")
+GROQ_MODELS = (GROQ_MODEL, "llama-3.1-8b-instant")
+RETRY_STATUS = (404, 408, 429, 500, 502, 503, 504)
+CALL_TIMEOUT = 30
 
 FLOW_TEMPLATES = ("flow", "customer_service", "feedback", "support")
 MAX_ROUNDS = 2                 # جولات أسئلة قبل أن يلتزم الوكيل بتصميم
 MAX_QUESTIONS = 3
 
 
+class AIError(Exception):
+    """فشل المزوّد برسالة مفهومة للأدمن (بلا المفتاح). `retry`: هل يُجرَّب نموذج آخر."""
+
+    def __init__(self, message, retry=False):
+        super().__init__(message)
+        self.retry = retry
+
+
 # ------------------- استدعاء النماذج -------------------
-def _post_json(url, payload, headers, timeout=40):
+def _post_json(url, payload, headers, timeout=CALL_TIMEOUT):
+    """POST JSON. أي فشل يصير AIError برسالة المزوّد نفسها (سبب الرفض الحقيقي)."""
     data = _json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return _json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return _json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            body = _json.loads(e.read().decode("utf-8", "replace") or "{}")
+            err = body.get("error") if isinstance(body, dict) else None
+            msg = (err.get("message") if isinstance(err, dict) else err) or ""
+        except Exception:
+            msg = ""
+        raise AIError(f"HTTP {e.code}: {str(msg)[:300] or e.reason}", retry=e.code in RETRY_STATUS)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise AIError(f"network: {getattr(e, 'reason', e)}"[:300], retry=True)
 
-def call_gemini(api_key, system, user):
-    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-           f"{GEMINI_MODEL}:generateContent?key={api_key}")
-    payload = {
-        "system_instruction": {"parts": [{"text": system}]},
-        "contents": [{"parts": [{"text": user}]}],
-        "generationConfig": {"response_mime_type": "application/json", "temperature": 0.7},
-    }
-    data = _post_json(url, payload, {"Content-Type": "application/json"})
-    return data["candidates"][0]["content"]["parts"][0]["text"]
 
-def call_groq(api_key, system, user):
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    payload = {"model": GROQ_MODEL,
+def _gemini_once(api_key, model, system, user):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    gen = {"response_mime_type": "application/json", "temperature": 0.6, "maxOutputTokens": 4096}
+    if model.startswith("gemini-2.5"):
+        gen["thinkingConfig"] = {"thinkingBudget": 1024}   # تفكير محدود: جودة بلا بطء
+    payload = {"system_instruction": {"parts": [{"text": system}]},
+               "contents": [{"role": "user", "parts": [{"text": user}]}],
+               "generationConfig": gen}
+    # المفتاح في الترويسة لا في الرابط — الرابط يظهر في رسائل الأخطاء والسجلات
+    data = _post_json(url, payload, {"Content-Type": "application/json", "x-goog-api-key": api_key})
+    cands = data.get("candidates") or []
+    if not cands:
+        why = (data.get("promptFeedback") or {}).get("blockReason") or "no candidates"
+        raise AIError(f"Gemini returned nothing ({why})")
+    parts = (cands[0].get("content") or {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+    if not text.strip():
+        raise AIError(f"Gemini empty reply ({cands[0].get('finishReason', '?')})", retry=True)
+    return text
+
+
+def _groq_once(api_key, model, system, user):
+    payload = {"model": model,
                "messages": [{"role": "system", "content": system},
                             {"role": "user", "content": user}],
-               "response_format": {"type": "json_object"}, "temperature": 0.7}
-    data = _post_json(url, payload,
-                      {"Content-Type": "application/json",
-                       "Authorization": f"Bearer {api_key}"})
-    return data["choices"][0]["message"]["content"]
+               "response_format": {"type": "json_object"}, "temperature": 0.6}
+    data = _post_json("https://api.groq.com/openai/v1/chat/completions", payload,
+                      {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"})
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise AIError("Groq returned an unexpected response", retry=True)
+
+
+def _with_fallback(once, models, api_key, system, user):
+    last = None
+    for m in models:
+        try:
+            return once(api_key, m, system, user)
+        except AIError as e:
+            last = e
+            if not e.retry:
+                break
+    raise last or AIError("no model available")
+
+
+def call_gemini(api_key, system, user):
+    return _with_fallback(_gemini_once, GEMINI_MODELS, api_key, system, user)
+
+
+def call_groq(api_key, system, user):
+    return _with_fallback(_groq_once, GROQ_MODELS, api_key, system, user)
+
 
 def _call(provider, api_key, system, user):
     if provider == "groq":
         return call_groq(api_key, system, user)
     return call_gemini(api_key, system, user)
+
+
+def check_key(provider, api_key):
+    """اختبار مفتاح المنصة من الإعدادات: (ok, رسالة). طلب صغير واحد بنفس مسار الردود."""
+    if not (api_key or "").strip():
+        return False, "no key"
+    try:
+        raw = _loads(_call(provider, api_key.strip(), 'Return JSON only: {"ok": true}', "ping"))
+        return (True, "OK") if isinstance(raw, dict) else (False, "unexpected reply")
+    except AIError as e:
+        return False, str(e)
+    except Exception as e:                      # JSON غير صالح ونحوه
+        return False, f"{type(e).__name__}: {str(e)[:200]}"
 
 
 def _loads(text):
