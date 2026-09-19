@@ -366,7 +366,9 @@ class PhoneVerifyTests(unittest.TestCase):
 
     def _bot(self):
         handlers = []
-        platform_bot.register_admin_commands(SimpleNamespace(add_handler=handlers.append))
+        # `group=` يُمرَّر لبعض المعالجات (ردود الأدمن في مجموعة لاحقة) — التقط الوسائط المسماة
+        platform_bot.register_admin_commands(
+            SimpleNamespace(add_handler=lambda h, *a, **k: handlers.append(h)))
         start = next(h for h in handlers if getattr(h, "commands", None) and "start" in h.commands).callback
         contact = next(h for h in handlers if h.__class__.__name__ == "MessageHandler").callback
         return start, contact
