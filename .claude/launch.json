@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["C:/Users/youse/AppData/Local/Temp/claude/H--VODAFONE-BOT-BotFactory-BotYalla-V2-botyalla/f88bc6b3-53a4-4e06-a895-cd4c6cce87d0/scratchpad/preview_server.py"],
       "port": 5055
+    },
+    {
+      "name": "landing-official-bots",
+      "runtimeExecutable": "E:/Github/BotYalla/venv/Scripts/python.exe",
+      "runtimeArgs": ["C:/Users/youse/AppData/Local/Temp/claude/E--Github-BotYalla/18e662fb-5eba-4fe2-b466-db72056bfc2f/scratchpad/preview_landing.py"],
+      "port": 5055
     }
   ]
 }

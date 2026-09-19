@@ -994,11 +994,13 @@ How you work:
 - Understand first. If the need is unclear, ask ONE short clarifying question before recommending.
 - Answer ONLY from <business>. Never invent prices, stock, discounts, delivery times, features, results, addresses, links or promises. If the answer is not there, say briefly that you will check with the team and set action "notify" with the question.
 - Sell as a trusted advisor: match the right product, service or plan to what the customer said, mention the one or two benefits that matter to THEM, and end with one clear next step (a question or a call to action). Answer objections (price, trust, time) with facts from <business>. Never pressure: no fake urgency, fake scarcity, guilt or exaggerated claims.
-- Be brief and human: at most 4 short lines (up to 7 only when listing options or prices). Plain text, no Markdown, at most 2 emojis. Reply in the customer's language and dialect (Egyptian Arabic if they write Egyptian). Do not greet again in an ongoing conversation.
+- Be SHORT and goal-driven - the customer's time is precious: 1 to 3 short lines (up to 6 only when listing prices or options). No small talk, no filler, no repeating the customer's words, no long introductions. Answer directly first, then give exactly ONE next step (a link, a choice, or one question) that moves the customer to their goal. Plain text, no Markdown, at most 1 emoji. Reply in the customer's language and dialect (Egyptian Arabic if they write Egyptian). Do not greet again in an ongoing conversation.
+- Drive to a finish: aim to reach the customer's goal in as few messages as possible. As soon as the goal is reached (question fully answered, sign-up/order link given, order/booking/lead recorded, problem solved or passed to the team), close with ONE short closing line and NO new question, and set "done": true. Do not reopen a finished topic or offer unrelated extras.
+- If the customer keeps asking many random, unrelated or repetitive questions, goes in circles, is just testing you, or the chat is not progressing after a few exchanges, set action "escalate" with a short reason and tell them in one line that a team member will continue with them right here.
 - When the customer wants to order, book, or be contacted: collect their name, phone and the needed details, one question at a time; when complete, set the matching action.
 - Follow <business>.owner_instructions for tone and style unless they conflict with these rules.
 - If the customer thanks you, says goodbye or just acknowledges ("ok", "تمام"), reply in one warm short line with no sales push and no question.
-{first_rules}
+{first_rules}{goal_rules}
 Platform policy (WhatsApp Business Messaging Policy and Meta Commerce Policy) - mandatory:
 - Stay strictly on this business: its products, services, orders, bookings and support. You are NOT a general-purpose assistant: politely decline unrelated requests (homework, coding, essays, translation, news, politics, religious debates, medical questions, general trivia, other companies) in one line and steer back to how the business can help.
 - Never ask for - and warn the customer not to send - passwords, OTP or verification codes, full card numbers, CVV, bank or social-media logins, or national ID numbers. Collect only what the order or booking needs.
@@ -1017,13 +1019,23 @@ Action shapes:
   {{"type":"notify","note":"the unanswered question"}}
   {{"type":"product","name":"exact product name"}}  (shows the product photo)
   {{"type":"optout"}}  (the customer no longer wants promotional messages)
+  {{"type":"escalate","reason":"..."}}  (hand the chat to the team NOW: going in circles / random questions)
 
 Quick replies: {suggest_rules}
 
-Return JSON only: {{"reply": "text for the customer", "action": null or one allowed action, "suggestions": []}}"""
+Also classify the customer's CURRENT message: "on_topic": true if it is about this business (its products, services, prices, orders, bookings, support, or a greeting/thanks), false if it is unrelated (sports, jokes, weather, personal chat, general knowledge, testing you).
 
-ALL_ACTIONS = ("lead", "order", "handoff", "notify", "product", "optout")
-HYBRID_ACTIONS = ("handoff", "notify", "product", "optout")
+Return JSON only: {{"reply": "text for the customer", "action": null or one allowed action, "suggestions": [], "done": false, "on_topic": true}}"""
+
+ALL_ACTIONS = ("lead", "order", "handoff", "notify", "product", "optout", "escalate")
+HYBRID_ACTIONS = ("handoff", "notify", "product", "optout", "escalate")
+# هدف العميل من قائمة البداية (flow_engine.MENU) — يوجّه كل رد بعده
+GOAL_RULES = {
+    "support": "- The customer chose TECH SUPPORT: identify the exact problem in at most 2 short questions, then give the fix in clear numbered steps, or, if it needs the team (account, payment, bug), set action \"handoff\" at once with a precise reason.",
+    "inquiry": "- The customer chose A QUESTION: answer it directly in 1-2 lines from <business>; once it is answered set \"done\": true (closing line, no new question) unless they clearly asked for more.",
+    "learn": "- The customer chose LEARN MORE: give a 3-line pitch (what it is, the main benefit, who it is for) and ONE call to action (e.g. the sign-up link or the best-fit plan).",
+    "help": "- The customer chose HELP: find what they need with one question at most, then guide them to it with one concrete step.",
+}
 MAX_SUGGESTIONS = 3
 SUGGESTION_LEN = 20            # حدّ عنوان زر الرد في واتساب — الأطول يصير قائمة مرقّمة
 FIRST_RULES = ("- This is the customer's FIRST message: greet them warmly in one short line, introduce "
@@ -1099,6 +1111,8 @@ def _clean_action(action, allowed):
         return {"type": "product", "name": name} if name else None
     if kind == "optout":
         return {"type": "optout"}
+    if kind == "escalate":
+        return {"type": "escalate", "reason": _clip(action.get("reason"), 200)}
     return None
 
 
@@ -1140,12 +1154,16 @@ def brain_reply(cfg, bot_row, history, text, api_key, provider="gemini", extra=N
     system = BRAIN_SYSTEM.format(
         channel=channel, mode_rules=mode_rules, allowed=", ".join(allowed),
         first_rules=(FIRST_RULES + "\n") if (not hybrid and not hist) else "",
+        goal_rules=(GOAL_RULES[extra["goal"]] + "\n") if extra.get("goal") in GOAL_RULES else "",
         suggest_rules=SUGGEST_RULES if suggest else "always return [].")
     lines = []
     for h in hist[-12:]:
         who = "CUSTOMER" if h.get("direction") == "in" else "BUSINESS"
         lines.append(f"{who}: {_clip(h.get('text'), 500)}")
     facts = _business_facts(cfg, extra.get("platform"))
+    if extra.get("segment"):
+        # شريحة العميل من رابط الإعلان: أمثلة ونبرة على مقاس نشاطه — لا حقائق جديدة
+        facts["about_this_customer"] = _clip(extra["segment"], 400)
     user = ("<business>\n" + _json.dumps(facts, ensure_ascii=False)[:12000] +
             "\n</business>\n<history>\n" + "\n".join(lines) + "\n</history>\n"
             "<customer_message>\n" + _clip(text, 1500) + "\n</customer_message>")
@@ -1155,6 +1173,8 @@ def brain_reply(cfg, bot_row, history, text, api_key, provider="gemini", extra=N
     finally:
         _speed.fast = False
     if not isinstance(raw, dict):
-        return {"reply": "", "action": None, "suggestions": []}
+        return {"reply": "", "action": None, "suggestions": [], "done": False}
     return {"reply": _clean_reply(raw.get("reply")), "action": _clean_action(raw.get("action"), allowed),
-            "suggestions": _clean_suggestions(raw.get("suggestions")) if suggest else []}
+            "suggestions": _clean_suggestions(raw.get("suggestions")) if suggest else [],
+            "done": raw.get("done") is True,
+            "on_topic": raw.get("on_topic") is not False}

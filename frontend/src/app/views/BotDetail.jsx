@@ -437,9 +437,24 @@ function BrainCard({ bot, ai, cfg }) {
             ))}
           </div>
           <label className="mt-4 flex cursor-pointer items-start gap-3 text-[13px] leading-relaxed text-ink-2">
+            <input type="checkbox" name="ai_menu" value="1" className="mt-1"
+                   defaultChecked={typeof cfg.ai_menu === "boolean" ? cfg.ai_menu : !!cfg.platform_kb} />
+            <span>{t("brain_menu")}</span>
+          </label>
+          <label className="mt-4 flex cursor-pointer items-start gap-3 text-[13px] leading-relaxed text-ink-2">
             <input type="checkbox" name="ai_rating" value="1" defaultChecked={cfg.ai_rating !== false} className="mt-1" />
             <span>{t("brain_rating")}</span>
           </label>
+          {(ai.optins || {}).total > 0 && (
+            <p className="mt-2 mb-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] font-bold text-au-cyan">
+              {fill("brain_optins", { n: num(ai.optins.optin), t: num(ai.optins.total), o: num(ai.optins.out) })}
+              {ai.optins.optin > 0 && (
+                <a href={`/bot/${bot.id}/export/optins`} className="text-ink-2 underline-offset-4 hover:underline">
+                  {t("brain_optins_csv")}
+                </a>
+              )}
+            </p>
+          )}
           {(ai.ratings || {}).total > 0 && (
             <p className="mt-2 mb-0 text-[12.5px] font-bold text-au-teal">
               {fill("brain_ratings", { n: num(ai.ratings.total), a: num(ai.ratings.great),

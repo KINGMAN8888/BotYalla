@@ -178,6 +178,54 @@ async def on_visitor_text(update, ctx):
         log.exception("platform assistant failed")
 
 
+# ---------------------------------------------------------- هوية بوت المنصة على تليجرام
+# ما يراه الزائر قبل «ابدأ» (الوصف) وفي البروفايل (الوصف القصير) وقائمة الأوامر «/» —
+# تُضبط عند كل تشغيل لبوت المنصة، والأدمن يرى أوامر الإدارة فوقها في محادثته وحده.
+BRAND = {
+    "ar": {
+        "desc": ("👋 أهلاً بيك في BotYalla — المساعد الرسمي للمنصة.\n\n"
+                 "اعمل بوت لنشاطك يرد على عملائك ويبيع ويحجز على واتساب وتليجرام، من غير برمجة.\n\n"
+                 "هنا تقدر:\n🛠 تاخد دعم فني فوراً\n❓ تسأل عن أي حاجة\n💡 تعرف الباقات والأسعار\n"
+                 "🚀 تبدأ مجاناً في دقيقة\n\nاضغط «ابدأ» 👇"),
+        "short": "المساعد الرسمي لـ BotYalla · بوتات ذكية لواتساب وتليجرام بدون برمجة · دعم واستفسارات 24/7",
+        "cmds": [("start", "ابدأ — القائمة الرئيسية"), ("menu", "محتاج إيه؟ دعم · استفسار · اعرف أكتر"),
+                 ("plans", "الباقات والأسعار"), ("support", "دعم فني / كلّم الفريق")],
+    },
+    "en": {
+        "desc": ("👋 Welcome to BotYalla — the platform's official assistant.\n\n"
+                 "Launch a bot that answers, sells and books for your customers on WhatsApp and Telegram — no coding.\n\n"
+                 "Here you can:\n🛠 Get tech support fast\n❓ Ask anything\n💡 See plans & pricing\n"
+                 "🚀 Start free in a minute\n\nTap “Start” 👇"),
+        "short": "BotYalla's official assistant · AI bots for WhatsApp & Telegram, no coding · Support 24/7",
+        "cmds": [("start", "Start — main menu"), ("menu", "What do you need? Support · Question · Learn more"),
+                 ("plans", "Plans & pricing"), ("support", "Tech support / talk to the team")],
+    },
+}
+ADMIN_CMDS = [("stats", "📊 إحصائيات المنصة"), ("pending", "⏳ المدفوعات المعلّقة"),
+              ("users", "👥 آخر المستخدمين"), ("revenue", "💰 الإيرادات")]
+
+
+async def brand(bot):
+    """يضبط هوية بوت المنصة (الوصف · الوصف القصير · الأوامر) بالعربية افتراضياً والإنجليزية
+    لمن لغة تليجرام عنده إنجليزية. فشل أي خطوة (حدّ تليجرام مثلاً) لا يوقف التشغيل."""
+    from telegram import BotCommand, BotCommandScopeChat
+    for lang, b in BRAND.items():
+        code = None if lang == "ar" else "en"
+        for fn, kw in ((bot.set_my_description, {"description": b["desc"][:512]}),
+                       (bot.set_my_short_description, {"short_description": b["short"][:120]}),
+                       (bot.set_my_commands, {"commands": [BotCommand(c, d) for c, d in b["cmds"]]})):
+            try:
+                await fn(language_code=code, **kw)
+            except Exception as e:
+                log.warning("platform bot branding (%s) failed: %s", lang, e)
+    admin = [BotCommand(c, d) for c, d in BRAND["ar"]["cmds"] + ADMIN_CMDS]
+    for chat in db.admin_chat_ids():
+        try:
+            await bot.set_my_commands(admin, scope=BotCommandScopeChat(int(chat)))
+        except Exception as e:
+            log.warning("admin commands for %s failed: %s", chat, e)
+
+
 def stats_text():
     st = db.platform_stats()
     by = st.get("by_plan", {})
@@ -306,6 +354,23 @@ def register_admin_commands(app: Application):
     app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CommandHandler(["revenue","sales"], cmd_revenue))
     app.add_handler(CommandHandler("help", cmd_start))
+
+    # أوامر الزائر: نفس المساعد الرسمي — القائمة · الباقات · الدعم (اختيار القائمة نفسه)
+    async def cmd_menu(update, ctx):
+        if not await to_assistant(update, ctx, kind="start", text="/start"):
+            await cmd_start(update, ctx)
+
+    async def cmd_plans(update, ctx):
+        en = (update.effective_user and (update.effective_user.language_code or "").startswith("en"))
+        await to_assistant(update, ctx, text="Plans & pricing" if en else "الباقات والأسعار")
+
+    async def cmd_support(update, ctx):
+        en = (update.effective_user and (update.effective_user.language_code or "").startswith("en"))
+        await to_assistant(update, ctx, text="🛠 Tech support" if en else "🛠 دعم فني")
+
+    app.add_handler(CommandHandler("menu", cmd_menu))
+    app.add_handler(CommandHandler(["plans", "prices"], cmd_plans))
+    app.add_handler(CommandHandler("support", cmd_support))
     # آخر معالج في المجموعة 0: نص خاص عادي ← المساعد الرسمي
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE
                                    & ~filters.REPLY, on_visitor_text))

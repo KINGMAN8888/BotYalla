@@ -728,3 +728,59 @@ export function AdminPlatform() {
     </>
   );
 }
+
+/* ------------------------------------------------------ روابط الحملات لكل شريحة
+   كل ما يلزم لإطلاق إعلانات Click-to-WhatsApp/Telegram: صفحة الهبوط بـ utm، رابط البوت
+   الرسمي برمز الشريحة (يُحتسب مصدره ويرحّب بلغة النشاط)، QR للتحميل، وعدد المحادثات. */
+export function AdminGrowth() {
+  const rows = P.rows || [];
+  const o = P.optins || {};
+  const [copied, setCopied] = useState("");
+  const copy = (k, v) => navigator.clipboard?.writeText(v).then(() => { setCopied(k); setTimeout(() => setCopied(""), 1400); });
+  const Link = ({ id, label, url, qr }) => url ? (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="w-[74px] shrink-0 text-[12px] font-extrabold text-ink-3">{label}</span>
+      <code dir="ltr" className="min-w-0 flex-1 truncate rounded-lg bg-black/25 px-2.5 py-1.5 text-[12px] text-ink-2">{url}</code>
+      <Btn sm variant="ghost" icon={copied === id ? "check" : "link"} type="button" onClick={() => copy(id, url)}>
+        {copied === id ? bi("اتنسخ", "Copied") : bi("نسخ", "Copy")}
+      </Btn>
+      <Btn sm variant="ghost" icon="download" href={qr}>QR</Btn>
+    </div>
+  ) : null;
+  return (
+    <>
+      <PageHead icon="megaphone" title={t("adm_growth")}
+        sub={bi("لكل نشاط: صفحة هبوط للإعلانات، ورابط يفتح بوتنا الرسمي مباشرة (Click-to-WhatsApp / Telegram) — العميل هو اللي بيبدأ المحادثة فالتواصل مسموح ومجاني 72 ساعة من إعلانات Meta.",
+                "Per segment: an ad landing page and a link that opens our official bot directly (Click-to-WhatsApp / Telegram) — the customer starts the chat, so messaging is allowed and free for 72h from Meta ads.")} />
+      {!P.official && (
+        <Card className="mb-6"><p className="m-0 text-[13.5px] font-bold text-yellow-200">
+          {bi("فعّل «مساعد BotYalla الرسمي» و«عقل البوت» على بوت واتساب الإدارة أولاً — منه تُبنى روابط واتساب.",
+              "Enable “Official BotYalla assistant” and “Bot brain” on the admin WhatsApp bot first — WhatsApp links are built from it.")}
+        </p></Card>
+      )}
+      <Grid className="mb-6">
+        <Stat label={bi("محادثات من الحملات", "Chats from campaigns")} value={rows.reduce((a, r) => a + (r.chats || 0), 0)} icon="chat" />
+        <Stat label={bi("موافقين على العروض", "Opted in to offers")} value={o.optin || 0} icon="check" />
+        <Stat label={bi("كل مشتركي البوت", "All bot subscribers")} value={o.total || 0} icon="users" />
+      </Grid>
+      {P.exportUrl && (o.optin || 0) > 0 && (
+        <div className="mb-6"><Btn variant="ghost" icon="download" href={P.exportUrl}>{bi("صدّر الموافقين على العروض (CSV)", "Export opted-in list (CSV)")}</Btn></div>
+      )}
+      <div className="flex flex-col gap-4">
+        {rows.map((r) => (
+          <Card key={r.code}>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <SectionTitle icon={r.icon}>{r.name}</SectionTitle>
+              <Pill tone={r.chats ? "on" : "mute"}>{bi("محادثات", "Chats")}: {num(r.chats)}</Pill>
+            </div>
+            <div className="flex flex-col gap-2.5">
+              <Link id={r.code + "p"} label={bi("صفحة الهبوط", "Landing")} url={r.page} qr={`/admin/growth/qr/${r.code}/page.svg`} />
+              <Link id={r.code + "w"} label="WhatsApp" url={r.wa} qr={`/admin/growth/qr/${r.code}/wa.svg`} />
+              <Link id={r.code + "t"} label="Telegram" url={r.tg} qr={`/admin/growth/qr/${r.code}/tg.svg`} />
+            </div>
+          </Card>
+        ))}
+      </div>
+    </>
+  );
+}

@@ -197,6 +197,16 @@
         {% endfor %}
       </section>
 
+      {% if P.officialBots %}
+      <section id="official">
+        <h2>{{ P.t.lp2_ob_t }}</h2>
+        <p>{{ P.t.lp2_ob_sub }}</p>
+        <ul>{% for k in ('lp2_ob_f1','lp2_ob_f2','lp2_ob_f3','lp2_ob_f4') %}<li>{{ P.t[k] }}</li>{% endfor %}</ul>
+        {% if P.officialBots.wa %}<p><a href="{{ P.officialBots.wa.url }}">{{ P.t.lp2_ob_wa_t }} — {{ P.officialBots.wa.handle }}</a></p>{% endif %}
+        {% if P.officialBots.tg %}<p><a href="{{ P.officialBots.tg.url }}">{{ P.t.lp2_ob_tg_t }} — {{ P.officialBots.tg.handle }}</a></p>{% endif %}
+      </section>
+      {% endif %}
+
       <section id="how">
         <h2>{{ P.t.lp_how_t }}</h2>
         {% for s in P.steps %}<h3>{{ s.t }}</h3><p>{{ s.d }}</p>{% endfor %}
@@ -220,6 +230,20 @@
         <h2>{{ P.t.lp_faq_t }}</h2>
         {% for x in P.faq %}<h3>{{ x.q }}</h3><p>{{ x.a }}</p>{% endfor %}
       </section>
+
+    {% elif P.page == 'segment' %}
+      <p>{{ P.t.lp2_seg_badge }} {{ P.segment.name }}</p>
+      <h1>{{ P.segment.h1 }}</h1>
+      <p style="font-size:18px;max-width:62ch;">{{ P.segment.sub }}</p>
+      <div class="cta">
+        <a href="{{ P.urls.register }}?utm_source=seg_{{ P.segment.code }}">{{ P.t.get_started_free }}</a>
+        {% if P.segment.bots.wa %}<a class="alt" href="{{ P.segment.bots.wa.url }}">{{ P.t.lp2_ob_open_wa }}</a>{% endif %}
+        {% if P.segment.bots.tg %}<a class="alt" href="{{ P.segment.bots.tg.url }}">{{ P.t.lp2_ob_open_tg }}</a>{% endif %}
+      </div>
+      <section><h2>{{ P.t.lp2_seg_pains_t }}</h2><ul>{% for x in P.segment.pains %}<li>{{ x }}</li>{% endfor %}</ul></section>
+      <section><h2>{{ P.t.lp2_seg_wins_t }}</h2><ul>{% for x in P.segment.wins %}<li>{{ x }}</li>{% endfor %}</ul></section>
+      <section><h2>{{ P.t.lp2_seg_others }}</h2>
+        <p>{% for o in P.others %}<a href="{{ o.url }}">{{ o.name }}</a> {% endfor %}</p></section>
 
     {% elif P.page == 'legal' %}
       <h1>{{ P.legal.title }}</h1>

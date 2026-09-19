@@ -1,6 +1,14 @@
 from .base import Channel
 from telegram import Bot, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
+def _rows(options):
+    """أزرار لوحة المفاتيح: 3 أو أقل صفّ لكل زر، و4 فأكثر (قائمة «محتاج إيه؟») عمودان."""
+    options = list(options or [])
+    if len(options) <= 3:
+        return [[o] for o in options]
+    return [options[i:i + 2] for i in range(0, len(options), 2)]
+
+
 class TelegramChannel(Channel):
     # file_id يُحفظ لكل (ملف، بوت). بوت المنصة يخدم صفّ بوت المساعد الرسمي (واتساب) فمفتاح
     # الحفظ نفسه يحمل media_id واتساب — قناته تضبط False فترفع الملف كل مرة ولا تلمس المرجع.
@@ -15,7 +23,7 @@ class TelegramChannel(Channel):
 
     async def send_buttons(self, peer: str, text: str, options: list):
         chat_id = self._extract_chat_id(peer)
-        kb = ReplyKeyboardMarkup([[o] for o in options], resize_keyboard=True, one_time_keyboard=True)
+        kb = ReplyKeyboardMarkup(_rows(options), resize_keyboard=True, one_time_keyboard=True)
         await self.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
 
     async def send_image(self, peer: str, url: str, caption: str = None):
@@ -42,7 +50,7 @@ class TelegramChannel(Channel):
         caption = (caption or "").strip()
         long_caption = len(caption) > 1024            # حدّ تليجرام لتعليق الوسائط
         kb = markup if markup is not None else (
-            ReplyKeyboardMarkup([[o] for o in options], resize_keyboard=True, one_time_keyboard=True)
+            ReplyKeyboardMarkup(_rows(options), resize_keyboard=True, one_time_keyboard=True)
             if options else ReplyKeyboardRemove())
         ref = db.get_asset_ref(asset["id"], bot_id) if self.cache_refs else None
         for _ in (0, 1):

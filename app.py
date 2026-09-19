@@ -205,7 +205,8 @@ def _count_view(resp):
     الفريدين بلا تخزين IP ولا تتبّع عبر الأيام — فلا كوكي تتبّع ولا لافتة موافقة. أول مصدر
     للزائر (first-touch) يُحفظ في جلسته الموجودة أصلاً (CSRF) ليُنسب له تسجيله."""
     try:
-        if (request.method != "GET" or resp.status_code != 200 or request.path not in _PV_PATHS
+        if (request.method != "GET" or resp.status_code != 200
+                or (request.path not in _PV_PATHS and not request.path.startswith("/for/"))
                 or resp.mimetype != "text/html"):
             return resp
         ua = request.headers.get("User-Agent", "")
@@ -1365,6 +1366,7 @@ def bot_detail(bot_id):
                            "modeAllowed": staff or bool(replies_limit),
                            "canOfficial": current_role() == "admin" and db.bot_owner_is_staff(bot_id),
                            "ratings": db.rating_summary(bot_id),
+                           "optins": db.optin_stats(bot_id),
                            "engine": _uses_engine(b)}},
                       title=b["name"])
 
@@ -2133,6 +2135,12 @@ def export_csv(bot_id, kind):
         put(["البيانات", "الوقت"])
         for l in db.list_leads(bot_id, limit=None):
             put([json.dumps(l["data"], ensure_ascii=False), l["created_at"]])
+    elif kind == "optins":
+        # من وافق صراحةً على العروض من داخل المحادثة — القائمة الوحيدة الآمنة للحملات
+        put(["العميل", "الاسم", "تاريخ الموافقة"])
+        for x in db.list_optins(bot_id):
+            put([x["peer"].split(":", 1)[-1], x["first_name"] or "",
+                 _time.strftime("%Y-%m-%d %H:%M", _time.localtime(x["optin_at"]))])
     else:
         abort(404)
     csv_bytes = "﻿" + out.getvalue()   # BOM لدعم العربية في Excel
@@ -2567,6 +2575,50 @@ def admin_platform_test():
 @require_roles("admin", "support")
 def admin_home():
     return react_page("admin_overview", "nav_admin", {"stats": db.platform_stats()}, needs_chart=True)
+
+def _growth_rows(lang):
+    """صف لكل شريحة: صفحة الهبوط (بـ utm للإعلانات) · رابط واتساب/تليجرام برمز الشريحة ·
+    عدد المحادثات التي بدأت منها (`src_seg_<code>` لبوت المساعد الرسمي)."""
+    import segments, platform_kb
+    base = _site_base()
+    row = platform_kb.official_bot()
+    src = db.source_counts(row["id"]) if row else {}
+    out = []
+    for code in segments.ORDER:
+        bots = _official_bots(lang, code)
+        out.append({"code": code, "icon": segments.SEGMENTS[code]["icon"],
+                    "name": segments.text(code, lang)["name"],
+                    "page": base + url_for("segment_page", code=code) + f"?utm_source=ads_{code}",
+                    "wa": (bots.get("wa") or {}).get("url", ""), "tg": (bots.get("tg") or {}).get("url", ""),
+                    "chats": src.get(f"seg_{code}", 0)})
+    return out, row
+
+
+@app.route("/admin/growth")
+@require_roles("admin")
+def admin_growth():
+    """روابط حملات الإعلانات لكل شريحة (Click-to-WhatsApp/Telegram + صفحات الهبوط) ونتائجها."""
+    lang = session.get("lang", i18n.DEFAULT)
+    rows, row = _growth_rows(lang)
+    return react_page("admin_growth", "adm_growth",
+                      {"rows": rows, "official": bool(row),
+                       "botUrl": url_for("bot_detail", bot_id=row["id"]) if row else "",
+                       "optins": db.optin_stats(row["id"]) if row else {"total": 0, "optin": 0, "out": 0},
+                       "exportUrl": url_for("export_csv", bot_id=row["id"], kind="optins") if row else ""})
+
+
+@app.route("/admin/growth/qr/<code>/<any(wa,tg,page):kind>.svg")
+@require_roles("admin")
+def admin_growth_qr(code, kind):
+    """QR للطباعة/الإعلانات — الرابط يُبنى هنا من الشريحة، لا يُقبل رابط من الطلب."""
+    rows, _ = _growth_rows(session.get("lang", i18n.DEFAULT))
+    r = next((x for x in rows if x["code"] == code), None)
+    if not r or not r[kind]:
+        abort(404)
+    resp = Response(_qr_svg(r[kind]), mimetype="image/svg+xml")
+    resp.headers["Content-Disposition"] = f'attachment; filename="botyalla-{code}-{kind}-qr.svg"'
+    return resp
+
 
 @app.route("/admin/analytics")
 @require_roles("admin")
@@ -3615,6 +3667,7 @@ def bot_brain(bot_id):
             starters.append(s)
     cfg["ai_starters"] = starters[:3]
     cfg["ai_rating"] = request.form.get("ai_rating") == "1"
+    cfg["ai_menu"] = request.form.get("ai_menu") == "1"
     # «مساعد BotYalla الرسمي»: يتكلّم باسم المنصة بأسعارها الحيّة — للأدمن على بوت يملكه
     # حساب إدارة فقط (والمحرك يعيد الفحص بصاحب البوت عند كل رد)
     if not db.bot_owner_is_staff(bot_id):
@@ -4023,6 +4076,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
                 {"k": "admin_affiliates", "u": url_for("admin_affiliates"), "i": "users",    "l": i18n.t("adm_affiliates", lang)},
                 {"k": "settings",         "u": url_for("settings"),         "i": "sparkles", "l": i18n.t("nav_ai", lang)},
                 {"k": "admin_analytics",  "u": url_for("admin_analytics"),  "i": "chart",    "l": i18n.t("adm_analytics", lang)},
+                {"k": "admin_growth",     "u": url_for("admin_growth"),     "i": "megaphone", "l": i18n.t("adm_growth", lang)},
                 {"k": "admin_emails",     "u": url_for("admin_emails"),     "i": "mail",     "l": i18n.t("adm_emails", lang)},
                 {"k": "admin_platform",   "u": url_for("admin_platform"),   "i": "settings", "l": i18n.t("nav_platform", lang)},
             ]
@@ -4375,6 +4429,55 @@ def _home_jsonld(lang, plist, faq):
     ]}
 
 
+def _official_bots(lang, seg=None):
+    """البوتان الرسميان للمنصة على الصفحة الرئيسية (رابط + QR لكل قناة). واتساب: رقم
+    `official_wa_number` إن ضبطه الأدمن وإلا رقم بوت «مساعد BotYalla الرسمي» نفسه.
+    تليجرام: يوزر بوت المنصة العامل (أو آخر يوزر حُفظ عند تشغيله). ما لا يُعرف لا يُعرض."""
+    import platform_kb
+    out = {}
+    wa = _re.sub(r"\D", "", db.get_platform("official_wa_number", "") or "")
+    if len(wa) < 8:
+        row = platform_kb.official_bot()
+        if row and (row.get("channel") or "telegram") == "whatsapp":
+            wa = _re.sub(r"\D", "", json.loads(row.get("config_json") or "{}").get("bot_username") or "")
+    if len(wa) >= 8:
+        # «مرحبا» من كلمات البدء في واتساب — المحادثة تبدأ بالترحيب وقائمة «محتاج إيه؟»
+        import segments
+        first = segments.wa_text(seg, lang) if seg else ("مرحبا" if lang == "ar" else "hello")
+        url = f"https://wa.me/{wa}?text=" + _up.quote(first)
+        out["wa"] = {"handle": f"+{wa}", "url": url, "qr": _qr_rows(url)}
+    tg = (manager.platform_info().get("username") or db.get_platform("platform_tg_username", "")
+          or "").strip().lstrip("@")
+    if _re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", tg):
+        url = f"https://t.me/{tg}?start=" + (f"seg-{seg}" if seg else "site")
+        out["tg"] = {"handle": f"@{tg}", "url": url, "qr": _qr_rows(url)}
+    return out
+
+
+@app.route("/for/<code>")
+def segment_page(code):
+    """صفحة هبوط لشريحة (سوبر ماركت · ذهب · مصانع…) — وجهة إعلانات الشريحة. روابط البوت
+    الرسمي فيها تحمل رمز الشريحة فيُعرف مصدر العميل ويرحّب به البوت بلغة نشاطه."""
+    import segments
+    lang = session.get("lang", i18n.DEFAULT)
+    S = segments.text(code, lang)
+    if not S:
+        abort(404)
+    payload = _public_payload("segment", lang)
+    payload["segment"] = {
+        "code": code, "icon": segments.SEGMENTS[code]["icon"], "name": S["name"], "h1": S["h1"],
+        "sub": S["sub"], "pains": S["pains"], "wins": S["wins"],
+        "demo": [{"me": me, "text": t_} for me, t_ in S["demo"]],
+        "bots": _official_bots(lang, code),
+    }
+    payload["others"] = [{"code": c, "icon": segments.SEGMENTS[c]["icon"],
+                          "name": segments.text(c, lang)["name"], "url": url_for("segment_page", code=c)}
+                         for c in segments.ORDER if c != code]
+    seo = _seo(lang, f"{S['name']} — {i18n.t('lp2_seg_title_tail', lang)} · BotYalla", S["sub"][:158],
+               url_for("segment_page", code=code))
+    return _render_public(payload, seo)
+
+
 @app.route("/")
 def home():
     """الصفحة الرئيسية = صفحة الهبوط لكل زائر، مسجّلاً أو لا (للمسجّل زرّ «لوحتي»)."""
@@ -4391,6 +4494,11 @@ def home():
     # QR البطل يفتح التسجيل (أو اللوحة) على موبايل الزائر — رابط حقيقي لا زخرفة
     payload["heroQr"] = _qr_rows(_site_base() + (url_for("dashboard") if getattr(g, "user", None)
                                                   else url_for("register")))
+    payload["officialBots"] = _official_bots(lang)
+    import segments
+    payload["segments"] = [{"code": c, "icon": segments.SEGMENTS[c]["icon"],
+                            "name": segments.text(c, lang)["name"], "url": url_for("segment_page", code=c)}
+                           for c in segments.ORDER]
     plist = [_public_plan(p, lang) for p in priced_plans(lang)]
     payload["plans"] = plist
     payload["templates"] = [
@@ -4475,6 +4583,13 @@ def sitemap_xml():
                        for l in ("ar", "en"))
         out.append(f"<url><loc>{loc}</loc><lastmod>{mod}</lastmod><changefreq>{freq}</changefreq>"
                    f"<priority>{prio}</priority>{alts}</url>")
+    import segments
+    for code in segments.ORDER:
+        loc = _xesc(base + url_for("segment_page", code=code))
+        alts = "".join(f'<xhtml:link rel="alternate" hreflang="{l}" href="{loc}?lang={l}"/>'
+                       for l in ("ar", "en"))
+        out.append(f"<url><loc>{loc}</loc><lastmod>{SITE_UPDATED}</lastmod><changefreq>monthly</changefreq>"
+                   f"<priority>0.7</priority>{alts}</url>")
     out.append("</urlset>")
     return Response("\n".join(out), mimetype="application/xml")
 

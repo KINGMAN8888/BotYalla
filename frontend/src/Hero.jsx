@@ -43,7 +43,7 @@ function Kinetic({ text, from = 0, step = 0.08, accent = false }) {
 }
 
 /* QR حقيقي من الخادم (segno): مسار SVG واحد، بلا innerHTML */
-function QR({ rows, size = 60, label }) {
+export function QR({ rows, size = 60, label }) {
   const d = useMemo(() => {
     let s = "";
     rows.forEach((r, y) => {

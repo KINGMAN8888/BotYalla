@@ -180,11 +180,17 @@ async def _keep_inbox_media(bot_row, channel, peer, msg):
         return None
 
 
-def _start_source(text):
-    """/start src-qr → 'qr'. مصدر الدخول (QR · رابط · ملصق) يُحتسب في التحليلات."""
+def _start_source(text, arg=None):
+    """/start src-qr → 'qr'. مصدر الدخول (QR · رابط · ملصق) يُحتسب في التحليلات.
+    شريحة إعلان/صفحة (`seg-market` من تليجرام أو «مرحبا #market» من واتساب) → 'seg_market'."""
     parts = (text or "").split()
-    if len(parts) > 1 and parts[1].startswith("src-") and parts[1][4:] in START_SOURCES:
-        return parts[1][4:]
+    tok = arg or (parts[1] if len(parts) > 1 else "")
+    if tok.startswith("src-") and tok[4:] in START_SOURCES:
+        return tok[4:]
+    if tok.startswith("seg-"):
+        import segments
+        if segments.get(tok[4:]):
+            return "seg_" + tok[4:]
     return None
 
 
@@ -267,7 +273,21 @@ def _lang_of(text):
     return "en" if ai_agent._is_en(text) else "ar"
 
 
-def _welcome_of(bot_row, cfg, f, text=""):
+def _segment_of(bot_id, peer, text=""):
+    """شريحة العميل (من رابط الإعلان/الصفحة) — من رسالة البداية الحالية أو المحادثة القريبة."""
+    import segments
+    code = segments.code_in(text)
+    if code:
+        return code
+    for m in reversed(db.recent_history(bot_id, peer, 20)):
+        if m.get("direction") == "in":
+            code = segments.code_in(m.get("text"))
+            if code:
+                return code
+    return None
+
+
+def _welcome_of(bot_row, cfg, f, text="", seg=None):
     """رسالة البداية في وضع «عقل البوت» وأزرارها: ما كتبه صاحب البوت أولاً، ثم رسالة
     بوت المنصة الرسمي الجاهزة، ثم ترحيب الفلو القديم."""
     lang = _lang_of(text)
@@ -275,9 +295,15 @@ def _welcome_of(bot_row, cfg, f, text=""):
     kb = None
     if official:
         import platform_kb as kb
-    text_ = ((cfg.get("ai_welcome") or "").strip() or (kb.welcome(lang) if kb else "") or
+    seg_text = None
+    if kb and seg:
+        import segments
+        seg_text = (segments.text(seg, lang) or {}).get("welcome")
+    text_ = (seg_text or (cfg.get("ai_welcome") or "").strip() or (kb.welcome(lang) if kb else "") or
              f.get("start_message") or cfg.get("welcome") or
              f"👋 أهلاً بك في «{cfg.get('business_name', '')}»! اسألني عن أي حاجة.")
+    if _menu_on(bot_row, cfg):
+        return text_, _menu_labels(lang)            # «محتاج إيه؟» — 4 خيارات (قائمة واتساب)
     opts = [s for s in (cfg.get("ai_starters") or []) if isinstance(s, str) and s.strip()]
     if not opts and kb:
         opts = kb.starters(lang)
@@ -300,6 +326,80 @@ OPT_TEXT = {
 }
 
 
+# ------------------------------------------------------------ قائمة البداية والتحويل
+# أول ما يدخل العميل: «محتاج إيه؟» بأربعة خيارات، والبوت يتصرّف حسب اختياره (رد فوري بلا
+# ذكاء اصطناعي، والهدف يُمرَّر للنموذج في كل رد بعده). واتساب يعرضها «قائمة» تفاعلية.
+MENU = {"ar": [("support", "🛠 دعم فني"), ("inquiry", "❓ استفسار"),
+               ("learn", "💡 اعرف أكتر"), ("help", "🤝 محتاج مساعدة")],
+        "en": [("support", "🛠 Tech support"), ("inquiry", "❓ A question"),
+               ("learn", "💡 Learn more"), ("help", "🤝 I need help")]}
+_MENU_KEY = {label: key for opts in MENU.values() for key, label in opts}
+MENU_REPLY = {
+    ("support", "ar"): "تمام 👌 اكتبلي المشكلة في رسالة واحدة بالتفصيل، وهحلها معاك أو أوصّلها للفريق فوراً.",
+    ("support", "en"): "Sure 👌 Describe the problem in one detailed message and I'll solve it or pass it to the team right away.",
+    ("inquiry", "ar"): "اتفضل، اكتب سؤالك مباشرة 👇",
+    ("inquiry", "en"): "Go ahead, type your question 👇",
+    ("help", "ar"): "قولي محتاج مساعدة في إيه بالظبط في جملة واحدة، وأنا أوصّلك للحل بأسرع طريق 👇",
+    ("help", "en"): "Tell me in one sentence what you need help with, and I'll get you there the fastest way 👇",
+}
+ESCALATE_WINDOW = 20 * 60       # نافذة عدّ رسائل العميل
+ESCALATE_AFTER = 10             # أكثر من هذا في النافذة = يدور في دوائر ← صاحب النشاط
+ESCALATE_HOLD = 30 * 60         # تحويل آلي لم يرد عليه أحد يعود للبوت بعد نصف ساعة
+OFF_TOPIC_AFTER = 3             # رسائل متتالية خارج النشاط (يصنّفها النموذج) ← صاحب النشاط
+_off_topic = {}                 # (bot, peer) -> عدد الرسائل المتتالية خارج النشاط
+
+
+def _official(bot_row, cfg):
+    return bool(cfg.get("platform_kb")) and db.bot_owner_is_staff(bot_row["id"])
+
+
+def _menu_on(bot_row, cfg):
+    """قائمة البداية: مفتاح `ai_menu`، وافتراضياً مفعّلة لمساعد المنصة الرسمي وحده."""
+    v = cfg.get("ai_menu")
+    return v if isinstance(v, bool) else _official(bot_row, cfg)
+
+
+def _menu_labels(lang):
+    return [label for _, label in MENU[lang]]
+
+
+def _goal_of(bot_id, peer):
+    """آخر اختيار من قائمة البداية في المحادثة القريبة — بلا حالة تضيع مع إعادة التشغيل."""
+    for m in reversed(db.recent_history(bot_id, peer, 20)):
+        if m.get("direction") == "in" and (m.get("text") or "").strip() in _MENU_KEY:
+            return _MENU_KEY[m["text"].strip()]
+    return None
+
+
+async def _escalate(bot_row, channel, peer, reason, lang="ar", say=True):
+    """تحويل فوري لصاحب النشاط: البوت يسكت نصف ساعة (أو حتى يرجّعها صاحبه)، وتنبيه على
+    تليجرام بـ Reply مباشر. لو رد صاحب النشاط يصير التولّي كاملاً (12 ساعة)."""
+    import inbox_relay
+    now = int(time.time())
+    db.set_conversation_mode(bot_row["id"], peer, "human", human_at=now - HUMAN_IDLE + ESCALATE_HOLD)
+    if say:
+        await channel.remove_keyboard(peer, "Let me connect you with our team — they'll continue with you right here 🙏"
+                                      if lang == "en" else
+                                      "خليني أوصّلك بحد من فريقنا يكمّل معاك هنا بشكل أسرع 🙏")
+    if not await inbox_relay.alert(bot_row, peer, "🚨 محادثة محتاجة تدخّلك في", reason):
+        await notify_owner(bot_row, channel, f"🚨 عميل محتاج تدخّلك في «{_cfg_of(bot_row).get('business_name', '')}»"
+                                             f" ({peer}): {reason}\nافتح صندوق الوارد.")
+
+
+async def _menu_choice(bot_row, cfg, channel, raw, peer, text):
+    """اختيار من قائمة البداية ← رد فوري حسب الهدف. «اعرف أكتر» يمرّ للنموذج (يحتاج الحقائق)."""
+    key = _MENU_KEY.get(text.strip())
+    if not key or key == "learn":
+        return False
+    lang = "en" if text.strip() in _menu_labels("en") else "ar"
+    reply = MENU_REPLY[(key, lang)]
+    if _official(bot_row, cfg):
+        import platform_kb
+        reply = platform_kb.menu_reply(key, lang) or reply
+    await channel.remove_keyboard(peer, reply)
+    return True
+
+
 # ------------------------------------------------------------ الشكر والتقييم
 # «شكراً» ليست سؤالاً: رد فوري بلا ذكاء اصطناعي (أسرع ومجاني)، ثم طلب تقييم بثلاثة أزرار
 # مرة كل 24 ساعة. التقييم حدث `rating` (3 ممتاز · 2 كويس · 1 محتاج تحسين) في التحليلات،
@@ -315,6 +415,10 @@ RATING_WAIT = 3600               # زر تقييم يُقبل خلال ساعة 
 COMMENT_WAIT = 15 * 60           # الملاحظة بعد تقييم سلبي
 _rating_asked = {}
 _comment_wait = {}
+# الموافقة على العروض: تُطلب مرة بعد تقييم إيجابي (أنسب لحظة) — «أيوه» تُحفظ `optin_at`
+OPTIN = {"ar": ["✅ أيوه ابعتلي", "لا شكراً"], "en": ["✅ Yes, send me", "No thanks"]}
+_OPTIN_ANS = {o: i == 0 for opts in OPTIN.values() for i, o in enumerate(opts)}
+_optin_asked = {}
 
 
 def _norm_ar(s):
@@ -356,10 +460,29 @@ async def _closing(bot_row, cfg, channel, peer, text):
             await channel.remove_keyboard(peer, "Sorry it wasn't better 🙏 What should we improve?"
                                           if lang == "en" else
                                           "آسفين إن التجربة ماكانتش أحسن 🙏 قولنا إيه اللي نقدر نحسّنه؟")
+        elif cfg.get("ai_optin", True) is not False and not db.bot_user_optin(bot_row["id"], peer):
+            _optin_asked[key] = now
+            await channel.send_buttons(peer, "Thank you for the rating 🌟\nWould you like occasional tips and offers "
+                                             "that help your business? You can stop any time by sending STOP."
+                                       if lang == "en" else
+                                       "شكراً لتقييمك 🌟\nتحب نبعتلك من وقت للتاني أفكار وعروض تفيد نشاطك؟ "
+                                       "وتقدر توقفها في أي وقت بكلمة «إيقاف الرسائل».", OPTIN[lang])
         else:
             await channel.remove_keyboard(peer, "Thank you for the rating 🌟 We're always here for you."
                                           if lang == "en" else
                                           "شكراً لتقييمك 🌟 يسعدنا نخدمك دايماً.")
+        return True
+    if raw in _OPTIN_ANS and now - _optin_asked.pop(key, 0) < RATING_WAIT:
+        yes = _OPTIN_ANS[raw]
+        lang = "en" if raw in OPTIN["en"] else "ar"
+        db.add_bot_user(bot_row["id"], _peer_num(peer), "", peer=peer)
+        db.set_optin(bot_row["id"], peer, yes)
+        await channel.remove_keyboard(peer, ("Done ✅ You'll get our best tips and offers. Send STOP any time."
+                                             if lang == "en" else
+                                             "تمام ✅ هيوصلك أحسن الأفكار والعروض. ولو حبيت توقفها ابعت «إيقاف الرسائل».")
+                                      if yes else
+                                      ("No problem 👍 We're here whenever you need us." if lang == "en" else
+                                       "ولا يهمك 👍 إحنا هنا في أي وقت تحتاجنا."))
         return True
     if not is_thanks(raw):
         return False
@@ -406,6 +529,17 @@ async def _ai_answer(bot_row, cfg, raw_channel, peer, text, extra=None):
     reply = (out or {}).get("reply")
     if not reply:
         return False
+    key = (bot_row["id"], peer)
+    # العميل يسأل عشوائياً خارج النشاط: النموذج يصنّف كل رسالة، والقرار هنا لا عنده (النماذج
+    # السريعة نادراً ما تطلب التحويل وحدها). الثالثة المتتالية ← تحويل فوري بلا رد آلي —
+    # قبل الحجز، فالرد الذي لن يُرسل لا يُحتسب على صاحب النشاط.
+    streak = 0 if (out or {}).get("on_topic", True) else _off_topic.get(key, 0) + 1
+    _off_topic[key] = streak
+    if streak >= OFF_TOPIC_AFTER and not (extra or {}).get("step"):
+        _off_topic.pop(key, None)
+        await _escalate(bot_row, LoggedChannel(raw_channel, bot_row["id"], "ai"), peer,
+                        f"{streak} رسائل متتالية خارج النشاط — آخرها: {text[:120]}", _lang_of(text))
+        return True
     allowance, price = _owner_ai_terms(bot_row)
     grant = db.ai_reply_allow(bot_row["owner_id"], allowance, price, ref=f"ai:{bot_row['id']}")
     if not grant:
@@ -413,6 +547,11 @@ async def _ai_answer(bot_row, cfg, raw_channel, peer, text, extra=None):
         return False
     inner = raw_channel._c if isinstance(raw_channel, LoggedChannel) else raw_channel
     tips = (out or {}).get("suggestions") or []
+    # الهدف تحقّق (`done`): نقفل المحادثة — سطر ختام وأزرار التقييم بدل أسئلة جديدة
+    if (out or {}).get("done") and cfg.get("ai_rating", True) is not False \
+            and time.time() - _rating_asked.get(key, 0) > RATING_EVERY:
+        tips = RATING[_lang_of(reply)]
+        _rating_asked[key] = time.time()
     try:
         # أزرار الرد السريع: واتساب ≤3 أزرار بعنوان ≤20 حرفاً (القناة تتحقق)، تليجرام لوحة تختفي بعد الضغط
         res = await (ch.send_buttons(peer, reply, tips) if tips else ch.send_text(peer, reply))
@@ -483,6 +622,10 @@ async def _ai_action(bot_row, cfg, raw_channel, peer, action):
         await notify_owner(bot_row, raw_channel,
                            f"❓ سؤال لم يجد الذكاء الاصطناعي إجابته في «{biz}»:\n"
                            f"{str(action.get('note') or '')[:400]}")
+    elif kind == "escalate":
+        # النموذج رأى أن العميل يدور في دوائر/يسأل عشوائياً — الرد (الذي يبلّغه بالتحويل) أُرسل
+        await _escalate(bot_row, raw_channel, peer, "الذكاء الاصطناعي: " + str(action.get("reason") or "")[:200],
+                        say=False)
     elif kind == "optout":
         # قد تكون أول رسالة للعميل — صفّه لم يُنشأ بعد، والإيقاف بلا صفّ يضيع
         db.add_bot_user(bot_id, _peer_num(peer), "", peer=peer)
@@ -553,7 +696,7 @@ async def handle_message(bot_row, channel, msg):
         return
 
     if msg["kind"] == "start":
-        src = _start_source(msg.get("text", ""))
+        src = _start_source(msg.get("text", ""), msg.get("start_arg"))
         if src:
             db.log_event(bot_id, f"src_{src}")
 
@@ -654,7 +797,9 @@ async def _ai_mode(bot_row, cfg, raw, channel, peer, msg, f):
         db.add_bot_user(bot_id, _peer_num(peer), msg.get("name", ""), peer=peer)
         db.log_event(bot_id, "start")
         db.clear_chat_state(bot_id, peer)
-        greeting, starters = _welcome_of(bot_row, cfg, f, msg.get("text", ""))
+        seg = (msg.get("start_arg") or "")[4:] if (msg.get("start_arg") or "").startswith("seg-") else None
+        seg = seg or _segment_of(bot_id, peer, msg.get("text", ""))
+        greeting, starters = _welcome_of(bot_row, cfg, f, msg.get("text", ""), seg)
         await _greet(bot_row, cfg, channel, peer, greeting, starters)
         return True
     if kind == "unsupported":
@@ -673,7 +818,28 @@ async def _ai_mode(bot_row, cfg, raw, channel, peer, msg, f):
         db.clear_chat_state(bot_id, peer)
         db.touch_bot_user(bot_id, peer)
         return True
-    if not await _ai_answer(bot_row, cfg, raw, peer, text):
+    # اختيار من قائمة البداية: رد فوري حسب الهدف
+    if await _menu_choice(bot_row, cfg, channel, raw, peer, text):
+        db.add_bot_user(bot_id, _peer_num(peer), msg.get("name", ""), peer=peer)
+        db.clear_chat_state(bot_id, peer)
+        return True
+    # يدور في دوائر (رسائل كثيرة متتالية بلا وصول لهدف): لصاحب النشاط فوراً — بلا استدعاء نموذج
+    limit = cfg.get("ai_max_turns") if isinstance(cfg.get("ai_max_turns"), int) else ESCALATE_AFTER
+    if limit > 0 and db.count_recent_in(bot_id, peer, time.time() - ESCALATE_WINDOW) > limit:
+        db.add_bot_user(bot_id, _peer_num(peer), msg.get("name", ""), peer=peer)
+        await _escalate(bot_row, channel, peer,
+                        f"العميل بعت أكتر من {limit} رسالة في {ESCALATE_WINDOW // 60} دقيقة من غير ما يوصل لهدف",
+                        _lang_of(text))
+        return True
+    goal = _goal_of(bot_id, peer)
+    extra = {"goal": goal} if goal else {}
+    seg = _segment_of(bot_id, peer) if _official(bot_row, cfg) else None
+    if seg:
+        import segments
+        extra["segment"] = (segments.text(seg, "ar") or {}).get("ai")
+    if text.strip() in _MENU_KEY:                      # «اعرف أكتر»: النموذج يقدّم عرضاً قصيراً
+        text = "I want to know more" if text.strip() in _menu_labels("en") else "عايز أعرف أكتر"
+    if not await _ai_answer(bot_row, cfg, raw, peer, text, extra=extra or None):
         # بوت المنصة الرسمي لا يسقط لفلو «اسمك؟»: يرد من حقائق المنصة الثابتة
         if _platform_facts(bot_row, cfg) is not None:
             import platform_kb

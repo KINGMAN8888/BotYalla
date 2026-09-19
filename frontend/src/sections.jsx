@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence, useScroll, useSpring, useReducedMotion } from "motion/react";
 import { BY, t, Icon, Reveal, Magnetic, GlassCard, Counter, num } from "./ui.jsx";
 import Aurora from "./Aurora.jsx";
-import Hero from "./Hero.jsx";
+import Hero, { QR } from "./Hero.jsx";
 import Journey from "./Journey.jsx";
 import Channels from "./Channels.jsx";
 import PricingPublic from "./PricingPublic.jsx";
@@ -546,6 +546,102 @@ export function StickyCTA() {
   );
 }
 
+/* ------------------------------------------------- البوتان الرسميان للمنصة
+   رابط + QR لكل قناة من الخادم (`BY.officialBots`) — عرض حيّ للمنتج نفسه: الزائر يكلّم
+   مساعدنا على واتساب/تليجرام قبل التسجيل. ما لم يُضبط بعد (بلا رقم أو يوزر) لا يُعرض. */
+const OB_CH = {
+  wa: { logo: "/static/whatsapp.png", title: "lp2_ob_wa_t", open: "lp2_ob_open_wa",
+        ring: "shadow-[inset_0_0_0_1px_rgb(37_211_102/0.35)]", glow: "bg-[#25D366]/15",
+        btn: "bg-[#25D366] text-[#07130b] hover:bg-[#2fe271]" },
+  tg: { logo: "/static/Telegram.svg.png", title: "lp2_ob_tg_t", open: "lp2_ob_open_tg",
+        ring: "shadow-[inset_0_0_0_1px_rgb(42_171_238/0.35)]", glow: "bg-[#2AABEE]/15",
+        btn: "bg-[#2AABEE] text-[#04121b] hover:bg-[#45b8f2]" },
+};
+
+/* بطاقتا البوتين الرسميين (رابط + QR) — في الرئيسية وصفحات الشرائح بروابط الشريحة */
+export function BotCards({ bots = {}, className = "mt-12" }) {
+  const keys = ["wa", "tg"].filter((k) => bots[k]);
+  if (!keys.length) return null;
+  return (
+      <div className={"mx-auto grid grid-cols-1 gap-5 " + className + " " + (keys.length > 1 ? "max-w-[980px] md:grid-cols-2" : "max-w-[480px]")}>
+      {keys.map((k, i) => {
+        const b = bots[k], c = OB_CH[k];
+        return (
+          <Reveal key={k} delay={i * 0.1}>
+            <GlassCard className={"flex h-full flex-col items-center rounded-[28px] p-7 text-center " + c.ring}>
+              <span aria-hidden className={"pointer-events-none absolute inset-x-0 -top-16 mx-auto size-48 rounded-full blur-3xl " + c.glow} />
+              <img src={c.logo} alt="" className="relative size-12 object-contain" />
+              <h3 className="relative m-0 mt-4 text-[21px] font-extrabold text-ink">{t(c.title)}</h3>
+              <span dir="ltr" className="relative mt-1 text-[15px] font-bold text-ink-3">{b.handle}</span>
+              {(b.qr || []).length > 0 && (
+                <div className="relative mt-6 hidden flex-col items-center gap-2.5 sm:flex">
+                  <div className="rounded-2xl bg-white p-2.5 shadow-[0_18px_40px_-18px_rgb(0_0_0/0.8)]">
+                    <QR rows={b.qr} size={148} label={t(c.title)} />
+                  </div>
+                  <span className="text-[12.5px] font-bold text-ink-3">{t("lp2_ob_scan")}</span>
+                </div>
+              )}
+              <a href={b.url} target="_blank" rel="noopener"
+                 className={"relative mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full px-6 py-3.5 " +
+                            "text-[15.5px] font-extrabold no-underline transition-colors sm:w-auto " + c.btn}>
+                <Icon name="chat" size={17} />{t(c.open)}
+                <Icon name="arrow" size={16} className="rtl:-scale-x-100" />
+              </a>
+            </GlassCard>
+          </Reveal>
+        );
+      })}
+    </div>
+  );
+}
+
+export function OfficialBots() {
+  const bots = BY.officialBots || {};
+  const keys = ["wa", "tg"].filter((k) => bots[k]);
+  if (!keys.length) return null;
+  // أيقونات المنصة لا إيموجي (قاعدة الواجهة) — كلها في _LANDING_ICONS
+  const feats = [["lp2_ob_f1", "shield"], ["lp2_ob_f2", "chat"], ["lp2_ob_f3", "users"], ["lp2_ob_f4", "bolt"]];
+  return (
+    <section id="official" aria-labelledby="ob-t"
+             className="scroll-mt-24 mx-auto max-w-[1240px] px-4 py-[clamp(56px,9vw,110px)] sm:px-6">
+      <Reveal className="mx-auto max-w-[760px] text-center">
+        <span className="wide-cap mb-3 inline-flex items-center gap-2 rounded-full bg-au-teal/12 px-3.5 py-1.5
+                         text-[12px] font-extrabold text-au-teal">
+          <Icon name="sparkles" size={13} />{t("lp2_ob_eyebrow")}
+        </span>
+        <h2 id="ob-t" className="display m-0 mb-4 text-[clamp(28px,4.2vw,50px)] font-extrabold text-ink">
+          {t("lp2_ob_t")}
+        </h2>
+        <p className="m-0 text-[clamp(14px,1.3vw,17px)] leading-[1.8] text-ink-2">{t("lp2_ob_sub")}</p>
+        <ul className="m-0 mt-6 flex list-none flex-wrap justify-center gap-2 p-0">
+          {feats.map(([k, ic]) => (
+            <li key={k} className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-3.5 py-1.5
+                                   text-[13px] font-bold text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+              <Icon name={ic} size={14} className="text-au-cyan" />{t(k)}
+            </li>
+          ))}
+        </ul>
+      </Reveal>
+
+      <BotCards bots={bots} />
+      {(BY.segments || []).length > 0 && (
+        <nav aria-label={t("lp2_seg_for_you")} className="mt-10 text-center">
+          <div className="mb-3.5 text-[13px] font-extrabold text-ink-3">{t("lp2_seg_for_you")}</div>
+          <div className="flex flex-wrap justify-center gap-2.5">
+            {BY.segments.map((o) => (
+              <a key={o.code} href={o.url}
+                 className="inline-flex items-center gap-2 rounded-full bg-white/[0.04] px-4 py-2 text-[13.5px] font-bold
+                            text-ink-2 no-underline shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)] hover:text-ink">
+                <Icon name={o.icon} size={15} className="text-au-cyan" />{o.name}
+              </a>
+            ))}
+          </div>
+        </nav>
+      )}
+    </section>
+  );
+}
+
 /* ------------------------------------------------------------- التطبيق */
 export default function App() {
   return (
@@ -557,6 +653,7 @@ export default function App() {
       <main id="main">
         <Hero />
         <Facts />
+        <OfficialBots />
         <Marquee />
         <Journey />
         <Bento />

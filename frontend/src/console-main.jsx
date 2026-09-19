@@ -42,6 +42,7 @@ const VIEWS = {
   admin_tickets:  [admin, "AdminTickets"],
   admin_platform: [admin, "AdminPlatform"],
   admin_analytics: [admin, "AdminAnalytics"],
+  admin_growth:    [admin, "AdminGrowth"],
   admin_emails:    [emails, "AdminEmails"],
   addon_pay:       [botDetail, "AddonPay"],
   admin_pricing:    [revenue, "AdminPricing"],

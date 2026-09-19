@@ -201,6 +201,9 @@ def _migrate(c):
     if "opted_out" not in ucols:
         # العميل طلب إيقاف الرسائل الترويجية (STOP) — سياسة Meta: لا حملات له بعدها.
         c.execute("ALTER TABLE bot_users ADD COLUMN opted_out INTEGER NOT NULL DEFAULT 0")
+    if "optin_at" not in ucols:
+        # موافقة صريحة على العروض («أيوه ابعتلي») — أساس قائمة تسويق نظيفة بسياسة Meta
+        c.execute("ALTER TABLE bot_users ADD COLUMN optin_at INTEGER")
 
     # ---- الدورة الفوترية (شهري/سنوي) ----
     # الافتراضي 'monthly' فكل صفّ قائم يبقى على ما هو عليه بلا لمس.
@@ -1202,8 +1205,36 @@ def set_opt_out(bot_id, peer, out=True):
     (`list_bot_peers` · `list_bot_user_ids`) — وهي القائمة نفسها التي تُحسب عليها
     تكلفة الحملة، فلا يُخصم على من لن يُرسل إليه (AGENTS.md §3.22)."""
     with get_conn() as c:
-        c.execute("UPDATE bot_users SET opted_out=? WHERE bot_id=? AND peer=?",
-                  (1 if out else 0, bot_id, peer))
+        # الإيقاف يسقط الموافقة على العروض أيضاً — لا يعود للقائمة إلا بموافقة جديدة
+        c.execute("UPDATE bot_users SET opted_out=?, optin_at=CASE WHEN ? THEN NULL ELSE optin_at END"
+                  " WHERE bot_id=? AND peer=?", (1 if out else 0, 1 if out else 0, bot_id, peer))
+
+def set_optin(bot_id, peer, yes=True):
+    """موافقة العميل الصريحة على استقبال العروض (أو سحبها)."""
+    with get_conn() as c:
+        c.execute("UPDATE bot_users SET optin_at=?, opted_out=CASE WHEN ? THEN 0 ELSE opted_out END"
+                  " WHERE bot_id=? AND peer=?",
+                  (int(time.time()) if yes else None, 1 if yes else 0, bot_id, peer))
+
+def bot_user_optin(bot_id, peer):
+    with get_conn() as c:
+        r = c.execute("SELECT optin_at FROM bot_users WHERE bot_id=? AND peer=? AND opted_out=0",
+                      (bot_id, peer)).fetchone()
+        return bool(r and r[0])
+
+def optin_stats(bot_id):
+    """{optin: الموافقون على العروض, out: من طلب الإيقاف, total: كل المشتركين}."""
+    with get_conn() as c:
+        r = c.execute("SELECT COUNT(*) total, SUM(optin_at IS NOT NULL AND opted_out=0) optin,"
+                      " SUM(opted_out) out FROM bot_users WHERE bot_id=?", (bot_id,)).fetchone()
+    return {"total": r["total"] or 0, "optin": r["optin"] or 0, "out": r["out"] or 0}
+
+def list_optins(bot_id):
+    """الموافقون على العروض (للتصدير) — الأحدث أولاً."""
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT peer, first_name, optin_at FROM bot_users WHERE bot_id=? AND optin_at IS NOT NULL"
+            " AND opted_out=0 ORDER BY optin_at DESC", (bot_id,)).fetchall()]
 
 def is_opted_out(bot_id, peer):
     with get_conn() as c:
@@ -2595,18 +2626,27 @@ def recent_history(bot_id, peer, limit=12):
         return [dict(r) for r in reversed(rows)]
 
 
-def set_conversation_mode(bot_id, peer, mode):
-    """bot | human. التولّي يسجّل وقت النشاط البشري (أساس العودة التلقائية)."""
+def set_conversation_mode(bot_id, peer, mode, human_at=None):
+    """bot | human. التولّي يسجّل وقت النشاط البشري (أساس العودة التلقائية).
+    `human_at` صريح (أقدم من الآن) = تولٍّ مؤقت يعود للبوت أبكر — تحويل آلي لم يرد عليه أحد."""
     if mode not in ("bot", "human"):
         return False
     now = int(time.time())
+    stamp = int(human_at) if (mode == "human" and human_at) else (now if mode == "human" else None)
     with get_conn() as c:
         c.execute("INSERT INTO conversations(bot_id,peer,mode,last_at,human_at) VALUES(?,?,?,?,?)"
                   " ON CONFLICT(bot_id,peer) DO UPDATE SET mode=excluded.mode,"
                   " human_at=CASE WHEN excluded.mode='human' THEN excluded.human_at"
                   "               ELSE conversations.human_at END",
-                  (bot_id, peer, mode, now, now if mode == "human" else None))
+                  (bot_id, peer, mode, now, stamp))
     return True
+
+
+def count_recent_in(bot_id, peer, since):
+    """رسائل العميل الواردة منذ `since` — مقياس «يدور في دوائر» قبل التحويل لصاحب النشاط."""
+    with get_conn() as c:
+        return c.execute("SELECT COUNT(*) FROM messages WHERE bot_id=? AND peer=? AND direction='in' "
+                         "AND created_at>=?", (bot_id, peer, int(since))).fetchone()[0]
 
 
 def touch_human(bot_id, peer):

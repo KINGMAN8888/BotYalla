@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { BY, t, Icon, Magnetic, fill } from "./ui.jsx";
 import Aurora from "./Aurora.jsx";
-import { Nav, Footer, ReadBar, SkipLink } from "./sections.jsx";
+import { Nav, Footer, ReadBar, SkipLink, BotCards } from "./sections.jsx";
 
 /* ============================================================================
    صفحات الموقع العام غير الرئيسية: الوثائق القانونية وصفحة 404.
@@ -115,6 +115,105 @@ export function NotFound() {
           <Magnetic href={BY.urls.home} icon="back">{t("lp2_nf_home")}</Magnetic>
           <Magnetic href={BY.urls.home + "#pricing"} variant="ghost" icon="tag">{t("lp2_nav_pricing")}</Magnetic>
         </div>
+      </main>
+      <Footer />
+    </>
+  );
+}
+
+/* ------------------------------------------------------------ صفحة شريحة
+   وجهة إعلانات كل نشاط (/for/<code>): المشكلة ← ما يفعله البوت ← المحادثة كما تبدو ←
+   جرّبه الآن (البوت الرسمي برمز الشريحة) ← ابدأ مجاناً. كلها من segments.py في الخادم. */
+export function SegmentPage() {
+  const S = BY.segment || { pains: [], wins: [], demo: [], bots: {} };
+  const reg = BY.urls.register + "?utm_source=seg_" + S.code;
+  return (
+    <>
+      <SkipLink />
+      <ReadBar />
+      <Aurora quiet />
+      <Nav />
+      <main id="main">
+        <section className="mx-auto max-w-[1100px] px-4 pb-16 pt-[clamp(20px,4vw,56px)] text-center sm:px-6">
+          <span className="wide-cap inline-flex items-center gap-2 rounded-full bg-au-teal/12 px-3.5 py-1.5 text-[12.5px] font-extrabold text-au-teal">
+            <Icon name={S.icon} size={14} />{t("lp2_seg_badge")} {S.name}
+          </span>
+          <h1 className="display mx-auto mt-5 mb-5 max-w-[26ch] text-[clamp(28px,4.4vw,54px)] font-extrabold text-ink">{S.h1}</h1>
+          <p className="mx-auto m-0 max-w-[58ch] text-[clamp(15px,1.4vw,18px)] leading-[1.85] text-ink-2">{S.sub}</p>
+          <div className="mt-8 flex flex-col items-center justify-center gap-3.5 sm:flex-row">
+            <Magnetic href={reg} icon="rocket" className="w-full sm:w-auto">{t("get_started_free")}</Magnetic>
+            {S.bots && S.bots.wa && (
+              <a href={S.bots.wa.url} target="_blank" rel="noopener"
+                 className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#25D366] px-6 py-3.5 text-[15px] font-extrabold text-[#07130b] no-underline hover:bg-[#2fe271] sm:w-auto">
+                <Icon name="chat" size={17} />{t("lp2_ob_open_wa")}
+              </a>
+            )}
+          </div>
+        </section>
+
+        <section className="mx-auto grid max-w-[1100px] grid-cols-1 gap-5 px-4 pb-16 sm:px-6 lg:grid-cols-2">
+          <div className="glass rounded-[26px] p-7">
+            <h2 className="m-0 mb-5 text-[21px] font-extrabold text-ink">{t("lp2_seg_pains_t")}</h2>
+            <ul className="m-0 flex list-none flex-col gap-3 p-0">
+              {S.pains.map((x, i) => (
+                <li key={i} className="flex items-start gap-3 text-[15px] leading-[1.7] text-ink-2">
+                  <Icon name="close" size={16} className="mt-1 shrink-0 text-red-300" />{x}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="glass rounded-[26px] p-7 shadow-[inset_0_0_0_1px_rgb(45_212_191/0.3)]">
+            <h2 className="m-0 mb-5 text-[21px] font-extrabold text-ink">{t("lp2_seg_wins_t")}</h2>
+            <ul className="m-0 flex list-none flex-col gap-3 p-0">
+              {S.wins.map((x, i) => (
+                <li key={i} className="flex items-start gap-3 text-[15px] leading-[1.7] text-ink-2">
+                  <Icon name="check" size={16} className="mt-1 shrink-0 text-au-teal" />{x}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        <section aria-labelledby="seg-demo" className="mx-auto max-w-[640px] px-4 pb-16 sm:px-6">
+          <h2 id="seg-demo" className="m-0 mb-5 text-center text-[21px] font-extrabold text-ink">{t("lp2_seg_demo_t")}</h2>
+          <div className="glass flex flex-col gap-3 rounded-[26px] p-5">
+            {S.demo.map((m, i) => (
+              <div key={i} className={"max-w-[85%] rounded-2xl px-4 py-2.5 text-[14.5px] leading-[1.7] " +
+                (m.me ? "self-start bg-[linear-gradient(100deg,#7C6CF6,#22D3EE)] text-white"
+                      : "self-end bg-white/[0.06] text-ink shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]")}>
+                {m.text}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {S.bots && (S.bots.wa || S.bots.tg) && (
+          <section aria-labelledby="seg-try" className="mx-auto max-w-[1100px] px-4 pb-16 text-center sm:px-6">
+            <h2 id="seg-try" className="display m-0 mb-3 text-[clamp(24px,3.4vw,40px)] font-extrabold text-ink">{t("lp2_seg_try_t")}</h2>
+            <p className="mx-auto m-0 max-w-[56ch] text-[15px] leading-[1.8] text-ink-2">{t("lp2_seg_try_d")}</p>
+            <BotCards bots={S.bots} className="mt-9" />
+          </section>
+        )}
+
+        <section className="mx-auto max-w-[760px] px-4 pb-16 text-center sm:px-6">
+          <h2 className="display m-0 mb-3 text-[clamp(24px,3.4vw,40px)] font-extrabold text-ink">{t("lp2_seg_start_t")}</h2>
+          <p className="m-0 mb-7 text-[15px] leading-[1.8] text-ink-2">{t("lp2_seg_start_d")}</p>
+          <Magnetic href={reg} icon="rocket">{t("get_started_free")}</Magnetic>
+        </section>
+
+        {(BY.others || []).length > 0 && (
+          <nav aria-label={t("lp2_seg_others")} className="mx-auto max-w-[1100px] px-4 pb-20 text-center sm:px-6">
+            <div className="mb-4 text-[13px] font-extrabold text-ink-3">{t("lp2_seg_others")}</div>
+            <div className="flex flex-wrap justify-center gap-2.5">
+              {BY.others.map((o) => (
+                <a key={o.code} href={o.url}
+                   className="inline-flex items-center gap-2 rounded-full bg-white/[0.04] px-4 py-2 text-[13.5px] font-bold text-ink-2 no-underline shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)] hover:text-ink">
+                  <Icon name={o.icon} size={15} className="text-au-cyan" />{o.name}
+                </a>
+              ))}
+            </div>
+          </nav>
+        )}
       </main>
       <Footer />
     </>

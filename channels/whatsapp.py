@@ -4,7 +4,7 @@
 · كل رسالة صادرة **مدفوعة** — لذلك كل إرسال يمرّ بعدّاد الاستهلاك.
 · لا مراسلة حرّة بعد 24 ساعة من آخر رسالة للعميل — والمخالفة تُقيّد الرقم.
 · 3 أزرار كحد أقصى، وعنوان الزر 20 حرفاً."""
-import asyncio, json, logging, os
+import asyncio, json, logging, os, re
 import httpx
 from .base import Channel
 
@@ -155,6 +155,18 @@ class WhatsAppChannel(Channel):
         # والاقتطاع يكسر مطابقة الإجابة بالخيار. نعرضها قائمة مرقّمة بدل ذلك،
         # والمحرك يقبل الرقم كإجابة (flow_engine._on_input).
         options = [str(o) for o in (options or [])]
+        if 3 < len(options) <= 10 and all(len(o) <= 24 for o in options):
+            # 4-10 خيارات قصيرة: رسالة «قائمة» تفاعلية (زر يفتح الخيارات) — الرد يصل بعنوان
+            # الصف نفسه (`list_reply.title` في `_one`) فيطابقه المحرك كأي زر
+            p = self._base(peer, "interactive")
+            p["interactive"] = {
+                "type": "list",
+                "body": {"text": text[:1024]},
+                "action": {"button": "اختار من هنا 👇" if not text.isascii() else "Choose 👇",
+                           "sections": [{"title": "—", "rows": [{"id": f"row_{i}", "title": o}
+                                                                 for i, o in enumerate(options)]}]},
+            }
+            return await self._post(p)
         if len(options) > 3 or any(len(o) > 20 for o in options):
             body = text + "\n\n" + "\n".join(f"{i+1}. {o}" for i, o in enumerate(options))
             return await self.send_text(peer, body)
@@ -337,13 +349,20 @@ class WhatsAppChannel(Channel):
                     "text": "", "name": name, "kind": "unsupported", "media_type": mtype}
 
         low = text.strip().lower()
-        kind = "text"
-        if low in self.START_WORDS:
+        kind, arg = "text", None
+        # رابط إعلان/صفحة شريحة: «مرحبا #market» = بداية + مصدرها (segments.wa_text)
+        tagged = re.fullmatch(r"(.+?)\s*#([a-z]{2,15})", low)
+        if tagged and tagged.group(1).strip() in self.START_WORDS:
+            kind, arg = "start", f"seg-{tagged.group(2)}"
+        elif low in self.START_WORDS:
             kind = "start"
         elif low in self.CANCEL_WORDS:
             kind = "cancel"
-        return {"id": m.get("id", ""), "peer": f"wa:{m.get('from','')}",
-                "text": text.strip(), "name": name, "kind": kind}
+        out = {"id": m.get("id", ""), "peer": f"wa:{m.get('from','')}",
+               "text": text.strip(), "name": name, "kind": kind}
+        if arg:
+            out["start_arg"] = arg
+        return out
 
     def normalize(self, raw):
         msgs = self.normalize_all(raw)

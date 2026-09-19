@@ -27,11 +27,11 @@ WELCOME = {
     "ar": ("أهلاً بيك في BotYalla 👋\n"
            "أنا المساعد الذكي للمنصة — بساعدك تعمل بوت يرد على عملائك ويبيع ويحجز "
            "على واتساب وتليجرام، من غير برمجة.\n"
-           "قولي نشاطك إيه، أو اختار من تحت 👇"),
+           "محتاج إيه النهارده؟ اختار من القائمة 👇"),
     "en": ("Welcome to BotYalla 👋\n"
            "I'm the platform's AI assistant — I help you launch a bot that answers, sells and "
            "books for your customers on WhatsApp and Telegram, no coding needed.\n"
-           "Tell me about your business, or pick an option below 👇"),
+           "What do you need today? Pick from the menu 👇"),
 }
 STARTERS = {
     "ar": ["إيه هي BotYalla؟", "الباقات والأسعار", "ابدأ مجاناً"],
@@ -217,6 +217,19 @@ def offline_reply(text, lang="ar"):
     return (("I can help with BotYalla: what it does, plans and prices, or getting started. "
              "What would you like to know?") if en else
             "أقدر أساعدك في كل حاجة عن BotYalla: بتعمل إيه، الباقات والأسعار، أو إزاي تبدأ. تحب تعرف إيه؟"), btns
+
+
+_MENU_REPLY = {
+    ("support", "ar"): "تمام 👌 اكتبلي المشكلة في رسالة واحدة + اسم المستخدم أو إيميل حسابك، وهحلها معاك أو أوصّلها للفريق فوراً.",
+    ("support", "en"): "Sure 👌 Describe the problem in one message + your username or account email, and I'll fix it or pass it to the team right away.",
+    ("help", "ar"): "قولي نوع نشاطك، وعايز البوت على واتساب ولا تليجرام، وأنا أقولك الخطوة الجاية في رسالة واحدة 👇",
+    ("help", "en"): "Tell me your business type and whether you want WhatsApp or Telegram, and I'll give you the next step in one message 👇",
+}
+
+
+def menu_reply(key, lang="ar"):
+    """رد قائمة البداية لمساعد المنصة (يطلب ما يحتاجه الفريق فعلاً)؛ None = الرد العام."""
+    return _MENU_REPLY.get((key, lang))
 
 
 def official_bot():

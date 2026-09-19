@@ -461,6 +461,12 @@ class BotManager:
         await app.updater.start_polling(drop_pending_updates=True,
                                         allowed_updates=managed_bots.PLATFORM_UPDATES)
         self._platform = app
+        # يوزر بوت المنصة محفوظاً — الصفحة الرئيسية تعرض رابطه وQR حتى لو توقف لحظياً
+        if me.username:
+            db.set_platform("platform_tg_username", me.username)
+        # الوصف والأوامر في الخلفية: طلبات تليجرام لا تؤخّر التشغيل، وفشلها لا يوقفه
+        t = asyncio.ensure_future(PB.brand(app.bot))
+        self._brand_task = t
 
     async def _stop_platform(self):
         app = self._platform; self._platform = None; self._platform_info = {}
