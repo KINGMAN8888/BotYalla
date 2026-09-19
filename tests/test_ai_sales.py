@@ -795,6 +795,39 @@ class RouteTests(Base):
         owner = self.client(self.owner).post("/settings/ai-test", headers={"X-CSRF-Token": "c" * 32})
         self.assertIn(owner.status_code, (302, 403))
 
+    def test_key_test_is_bounded_per_provider(self):
+        # كان اختبار الخمسة ورا بعض بمهلة 30ث لكل طلب يتجاوز مهلة nginx (60ث) فيرجع 504
+        seen = []
+        orig_p, orig_g = ai._post_json, ai._get_json
+        self.addCleanup(setattr, ai, "_post_json", orig_p)
+        self.addCleanup(setattr, ai, "_get_json", orig_g)
+        ai._get_json = lambda url, h, timeout=20: {"data": [{"id": m} for m in ai.PROVIDERS["openrouter"]["models"]]}
+
+        def slow(url, payload, headers, timeout=None):
+            seen.append(ai._speed.timeout)
+            raise ai.AIError("network: timed out", retry=True)
+        ai._post_json = slow
+        r = ai.check_provider("openrouter", "k")
+        self.assertFalse(r["ok"])
+        self.assertEqual(len(seen), ai.TEST_MODELS, "الاختبار جرّب كل النماذج")
+        self.assertEqual(set(seen), {ai.TEST_TIMEOUT})
+        self.assertIsNone(getattr(ai._speed, "timeout", None), "المهلة القصيرة تسرّبت لردود العملاء")
+
+    def test_key_test_route_one_provider(self):
+        c = self.client(1)
+        db.set_platform("ai_key_groq", "gsk")
+        orig = ai.check_provider
+        self.addCleanup(setattr, ai, "check_provider", orig)
+        called = []
+        ai.check_provider = lambda p, k: called.append(p) or {"provider": p, "name": p, "ok": True, "msg": "OK",
+                                                             "model": "m", "models": None, "ms": 1}
+        r = c.post("/settings/ai-test", json={"provider": "groq"}, headers={"X-CSRF-Token": "c" * 32})
+        self.assertEqual(called, ["groq"])
+        self.assertEqual(r.get_json()["results"][0]["provider"], "groq")
+        r = c.post("/settings/ai-test", json={"provider": "nvidia"}, headers={"X-CSRF-Token": "c" * 32})
+        self.assertEqual(r.get_json()["results"][0]["msg"], "no key")
+        db.set_platform("ai_key_groq", "")
+
     def test_admin_saves_several_free_providers(self):
         c = self.client(1)
         c.post("/settings", data={"csrf_token": "c" * 32, "ai_provider": "groq", "ai_key_groq": " gsk_1 ",

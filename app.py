@@ -2185,10 +2185,16 @@ def settings():
 @require_roles("admin")
 def settings_ai_test():
     """يجرّب مفتاح المنصة بطلب صغير ويرجّع رسالة المزوّد نفسها (سبب الفشل الحقيقي)."""
-    if _rate_limited(request.remote_addr or "?", limit=10, window=300, bucket="ai_test"):
-        return jsonify(ok=False, msg="rate limited"), 429
-    # كل مزوّد له مفتاح على حدة: يكتشف نماذجه المتاحة الآن ويحفظها، ثم طلب صغير بها
-    chain = ai.key_chain(db.get_platform)
+    if _rate_limited(request.remote_addr or "?", limit=40, window=300, bucket="ai_test"):
+        return jsonify(ok=False, msg="rate limited — استنى دقيقتين وجرّب تاني"), 429
+    # مزوّد واحد لكل طلب (`provider` في الجسم) والواجهة تطلبها بالتوازي: كل طلب محدود
+    # بـ ai.TEST_TIMEOUT فلا يتجاوز مهلة nginx (60ث) — اختبار الخمسة ورا بعض كان يتجاوزها
+    # فيرجع nginx صفحة 504 وتظهر «تعذّر الاتصال» بلا سبب.
+    only = str((request.get_json(silent=True) or {}).get("provider") or "")
+    chain = [x for x in ai.key_chain(db.get_platform) if not only or x["p"] == only]
+    if only and not chain:
+        return jsonify(ok=False, msg="no key", results=[{"provider": only, "name": ai.PROVIDER_NAMES.get(only, only),
+                                                          "ok": False, "msg": "no key", "model": "", "ms": 0}])
     results = []
     for spec in chain:
         r = ai.check_provider(spec["p"], spec["key"])
@@ -2200,7 +2206,8 @@ def settings_ai_test():
     if ok:
         FE._note_ai(True)
     msg = " · ".join(f"{r['name']}: {'OK' if r['ok'] else r['msg']}" for r in results) or "no key"
-    return jsonify(ok=ok, msg=msg, provider=db.get_platform("ai_provider", "gemini"), results=results)
+    return jsonify(ok=ok, msg=msg, provider=db.get_platform("ai_provider", "gemini"), results=results,
+                   providers=[x["p"] for x in ai.key_chain(db.get_platform)])
 
 # (المسار القديم POST /bot/<id>/ai-setup حُذف: لا تستعمله الواجهة، وكان بلا حصة ولا حدّ
 #  فيحرق مفتاح الذكاء الاصطناعي للمنصة بطلبين لكل استدعاء. وكيل الإعداد /ai/session يغنيه.)

@@ -34,6 +34,9 @@ GEMINI_FAST_MODELS = ("gemini-3.5-flash-lite", "gemini-flash-lite-latest", GEMIN
 GROQ_MODELS = (GROQ_MODEL, "llama-3.1-8b-instant")
 RETRY_STATUS = (404, 408, 429, 500, 502, 503, 504)
 CALL_TIMEOUT = 30
+# Cloudflare أمام Groq وغيره يحجب ترويسة urllib الافتراضية («Python-urllib») بـ 403 «error
+# code: 1010» — فيبدو المفتاح الصحيح مرفوضاً. كل طلب يحمل هوية صريحة.
+USER_AGENT = "BotYalla/1.0 (+https://botyalla.com)"
 COOLDOWN = 60                   # نموذج ردّ 429: يُتخطّى دقيقة بدل انتظار رفضه مع كل رسالة
 
 # ---- مزوّدون مجانيون متوافقون مع OpenAI (سلسلة احتياطية: لكل مزوّد حصته المجانية) ----
@@ -96,10 +99,12 @@ def _err_msg(raw):
     return str(err or body.get("detail") or body.get("message") or body.get("title") or "")[:300]
 
 
-def _post_json(url, payload, headers, timeout=CALL_TIMEOUT):
+def _post_json(url, payload, headers, timeout=None):
     """POST JSON. أي فشل يصير AIError برسالة المزوّد نفسها (سبب الرفض الحقيقي)."""
+    timeout = timeout or getattr(_speed, "timeout", None) or CALL_TIMEOUT
     data = _json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    req = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT, "Accept": "application/json",
+                                                          **headers}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return _json.loads(resp.read().decode("utf-8"))
@@ -114,7 +119,8 @@ def _post_json(url, payload, headers, timeout=CALL_TIMEOUT):
 
 
 def _get_json(url, headers, timeout=20):
-    req = urllib.request.Request(url, headers=headers, method="GET")
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json",
+                                               **headers}, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return _json.loads(resp.read().decode("utf-8"))
@@ -176,7 +182,7 @@ _cool = {}                      # (provider, model) -> وقت انتهاء ال�
 def _models_for(spec, fast):
     p = spec["p"]
     if p == "gemini":
-        return list(GEMINI_FAST_MODELS if fast else GEMINI_MODELS)
+        return list(spec.get("models") or (GEMINI_FAST_MODELS if fast else GEMINI_MODELS))
     return list(spec.get("models") or PROVIDERS[p]["models"])
 
 
@@ -253,7 +259,7 @@ def discover(provider, api_key):
     if provider not in PROVIDERS:
         return None
     conf = PROVIDERS[provider]
-    data = _get_json(conf["url"] + "/models", {"Authorization": f"Bearer {api_key}"})
+    data = _get_json(conf["url"] + "/models", {"Authorization": f"Bearer {api_key}"}, timeout=8)
     ids = [m.get("id") for m in (data.get("data") or []) if isinstance(m, dict) and m.get("id")]
     found = [m for m in conf["models"] if m in ids]
     if not found:
@@ -262,24 +268,31 @@ def discover(provider, api_key):
     return found or None
 
 
+TEST_TIMEOUT = 12              # مهلة كل طلب في «اختبر المفاتيح» — أقصر كثيراً من مهلة nginx
+TEST_MODELS = 2                # نموذجان لكل مزوّد يكفيان للحكم على المفتاح
+
+
 def check_provider(provider, api_key):
-    """اختبار مزوّد واحد من الإعدادات: {ok, msg, model, models, ms}. يكتشف النماذج ثم طلب صغير."""
+    """اختبار مزوّد واحد من الإعدادات: {ok, msg, model, models, ms}. يكتشف النماذج ثم طلب صغير.
+    محدود الزمن: مهلة قصيرة ونموذجان فقط — أسوأ حالة ≈ 8 + 2×12 ثانية."""
     res = {"provider": provider, "name": PROVIDER_NAMES.get(provider, provider),
            "ok": False, "msg": "", "model": "", "models": None, "ms": 0}
     if not (api_key or "").strip():
         res["msg"] = "no key"
         return res
+    t0 = time.time()
     try:
         res["models"] = discover(provider, api_key.strip())
     except AIError as e:
         if _is_auth(e):
             res["msg"] = str(e)
+            res["ms"] = int((time.time() - t0) * 1000)
             return res
-    _speed.fast = True
-    t0 = time.time()
+    _speed.fast, _speed.timeout = True, TEST_TIMEOUT
+    spec = {"p": provider, "key": api_key.strip()}
+    spec["models"] = _models_for({**spec, "models": res["models"]}, True)[:TEST_MODELS]
     try:
-        raw = _loads(call_chain([{"p": provider, "key": api_key.strip(), "models": res["models"]}],
-                                'Reply with JSON only: {"ok": true}', "ping"))
+        raw = _loads(call_chain([spec], 'Reply with JSON only: {"ok": true}', "ping"))
         res["ok"] = isinstance(raw, dict)
         res["msg"] = "OK" if res["ok"] else "unexpected reply"
         res["model"] = (getattr(_used, "value", None) or ("", ""))[1]
@@ -288,7 +301,7 @@ def check_provider(provider, api_key):
     except Exception as e:
         res["msg"] = f"{type(e).__name__}: {str(e)[:200]}"
     finally:
-        _speed.fast = False
+        _speed.fast, _speed.timeout = False, None
     res["ms"] = int((time.time() - t0) * 1000)
     return res
 

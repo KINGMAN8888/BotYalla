@@ -525,41 +525,77 @@ const AI_FREE = {
                 note: ["رصيد مجاني للتجربة · DeepSeek · Kimi · GLM", "Free trial credits · DeepSeek · Kimi · GLM"] },
 };
 
+/* سبب مفهوم لأي رد غير JSON من الخادم — بدل «تعذّر الاتصال» الصامتة */
+function httpWhy(status) {
+  if (status === 504 || status === 502) return bi("انتهت مهلة الخادم (nginx) — المزوّد بطيء أو لا يرد", "Server timeout (nginx) — the provider is slow or not responding");
+  if (status === 400) return bi("رُفض الطلب (رمز الأمان) — حدّث الصفحة وجرّب تاني", "Request rejected (security token) — refresh the page and retry");
+  if (status === 401 || status === 403 || status === 302) return bi("الجلسة انتهت — سجّل الدخول تاني", "Session expired — sign in again");
+  if (status === 429) return bi("طلبات كتير — استنى دقيقتين", "Too many requests — wait two minutes");
+  if (status >= 500) return bi("خطأ في الخادم — راجع سجل السيرفر", "Server error — check the server log");
+  return "";
+}
+
+async function testOne(provider) {
+  let r;
+  try {
+    r = await fetch("/settings/ai-test", {
+      method: "POST", credentials: "same-origin", redirect: "manual",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf },
+      body: JSON.stringify({ provider }),
+    });
+  } catch (e) {
+    return { provider, ok: false, msg: bi("مفيش اتصال بالسيرفر: ", "No connection to the server: ") + (e && e.message || "") };
+  }
+  const status = r.type === "opaqueredirect" ? 302 : r.status;
+  let data = null;
+  try { data = await r.json(); } catch { /* صفحة خطأ HTML من nginx/Flask */ }
+  if (data && data.results && data.results.length) return data.results[0];
+  if (data && data.msg) return { provider, ok: false, msg: `HTTP ${status} — ${data.msg}` };
+  return { provider, ok: false, msg: `HTTP ${status} — ${httpWhy(status) || bi("رد غير متوقع من الخادم", "Unexpected server response")}` };
+}
+
 function AiKeyTest() {
-  const [res, setRes] = useState(null);
+  const provs = (P.aiProviders || []).filter((p) => (P.aiKeys || {})[p.id]);
+  const [res, setRes] = useState({});
   const [busy, setBusy] = useState(false);
   const last = P.aiLastError || {};
   const when = (s) => (s ? new Date(s * 1000).toLocaleString() : "");
   const run = async () => {
     setBusy(true);
-    try {
-      const r = await fetch("/settings/ai-test", {
-        method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf }, body: "{}",
-      });
-      setRes(await r.json());
-    } catch {
-      setRes({ ok: false, msg: bi("تعذّر الاتصال.", "Connection failed.") });
-    }
+    setRes(Object.fromEntries(provs.map((p) => [p.id, null])));
+    // بالتوازي: كل مزوّد طلب مستقل محدود الزمن — النتائج تظهر أولاً بأول
+    await Promise.all(provs.map(async (p) => {
+      const r = await testOne(p.id);
+      setRes((old) => ({ ...old, [p.id]: r }));
+    }));
     setBusy(false);
   };
   return (
     <div className="mt-6 border-t border-white/10 pt-5">
-      <Btn variant="ghost" icon="bolt" type="button" onClick={run} disabled={busy}>
-        {busy ? bi("جارٍ اختبار كل المزوّدين…", "Testing every provider…") : bi("اختبر المفاتيح المحفوظة", "Test the saved keys")}
+      <Btn variant="ghost" icon="bolt" type="button" onClick={run} disabled={busy || !provs.length}>
+        {busy ? bi("جارٍ اختبار المزوّدين…", "Testing providers…") : bi("اختبر المفاتيح المحفوظة", "Test the saved keys")}
       </Btn>
-      {res && !(res.results || []).length && (
-        <p className="mt-3 mb-0 text-[13px] font-bold text-red-300">{bi("✗ ", "✗ ") + (res.msg || "")}</p>
+      {!provs.length && (
+        <p className="mt-3 mb-0 text-[13px] font-bold text-yellow-200">
+          {bi("مفيش مفاتيح محفوظة — حط مفتاح واضغط «حفظ» الأول.", "No saved keys — add a key and press Save first.")}
+        </p>
       )}
-      {res && (res.results || []).length > 0 && (
+      {Object.keys(res).length > 0 && (
         <ul className="mt-3 mb-0 flex flex-col gap-2 p-0">
-          {res.results.map((r) => (
-            <li key={r.provider} className="list-none rounded-xl bg-white/[0.03] px-3.5 py-2.5 text-[13px]
-                                             shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
-              <b className={r.ok ? "text-au-teal" : "text-red-300"}>{(r.ok ? "✓ " : "✗ ") + r.name}</b>
-              {r.ok ? <span className="text-ink-3"> · {r.model} · {(r.ms / 1000).toFixed(1)}s</span>
-                    : <span className="text-ink-3"> · {r.msg}</span>}
-            </li>
-          ))}
+          {provs.filter((p) => p.id in res).map((p) => {
+            const r = res[p.id];
+            return (
+              <li key={p.id} className="list-none rounded-xl bg-white/[0.03] px-3.5 py-2.5 text-[13px] leading-relaxed
+                                        shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+                {!r ? <span className="text-ink-3">⏳ {p.name} — {bi("جارٍ الاختبار…", "testing…")}</span>
+                    : <>
+                        <b className={r.ok ? "text-au-teal" : "text-red-300"}>{(r.ok ? "✓ " : "✗ ") + p.name}</b>
+                        {r.ok ? <span className="text-ink-3"> · {r.model} · {((r.ms || 0) / 1000).toFixed(1)}s</span>
+                              : <span dir="auto" className="block break-words text-ink-2">{r.msg}</span>}
+                      </>}
+              </li>
+            );
+          })}
         </ul>
       )}
       <p className="mt-3 mb-0 text-[12.5px] leading-relaxed text-ink-3">
