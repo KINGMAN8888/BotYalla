@@ -20,7 +20,7 @@ import database as db
 
 log = logging.getLogger("inbox_relay")
 
-TAG_RE = re.compile(r"#C(\d+):((?:wa|tg|fb|ig):-?\d+)")
+TAG_RE = re.compile(r"#C(\d+):((?:wa|tg|fb|ig):-?\d+|wa:[A-Z]{2}\.[A-Za-z0-9]{1,128})")
 WA_WINDOW = 24 * 3600
 ALERT_EVERY = 20 * 60            # تنبيه «محتاج دعم» واحد لكل محادثة كل 20 دقيقة
 _last_alert = {}
@@ -57,8 +57,11 @@ def can_reply(bot_row, tg_user_id):
 
 def _markup(bot_id, peer):
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    return InlineKeyboardMarkup([[InlineKeyboardButton(
-        "🤖 رجّع المحادثة للبوت / Back to bot", callback_data=f"cv_bot:{int(bot_id)}:{peer}")]])
+    data = f"cv_bot:{int(bot_id)}:{peer}"
+    if len(data.encode()) > 64:             # حدّ تليجرام لبيانات الزر — وإلا تُرفض الرسالة كلها
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🤖 رجّع المحادثة للبوت / Back to bot",
+                                                       callback_data=data)]])
 
 
 def _alert_text(bot_row, peer, headline, detail=""):
@@ -67,7 +70,8 @@ def _alert_text(bot_row, peer, headline, detail=""):
     biz = cfg.get("business_name") or bot_row.get("name") or ""
     who = conv.get("name") or ""
     num = peer.split(":", 1)[1] if ":" in peer else peer
-    contact = (f"+{num}" if peer.startswith("wa:") else f"Messenger {num}" if peer.startswith("fb:")
+    contact = ((f"+{num}" if num.isdigit() else "واتساب · رقم مخفي (اسم مستخدم)") if peer.startswith("wa:")
+               else f"Messenger {num}" if peer.startswith("fb:")
                else f"Instagram {num}" if peer.startswith("ig:") else f"Telegram {num}")
     recent = [m for m in db.recent_history(bot_row["id"], peer, 8) if m.get("direction") == "in"][-3:]
     lines = [f"{headline} «{biz}»", f"👤 {who + ' · ' if who else ''}{contact}"]

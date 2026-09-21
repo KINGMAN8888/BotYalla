@@ -1,7 +1,7 @@
 """BotYalla — قاعدة البيانات (SQLite).
 جداول: users (لوحة التحكم)، bots، bot_users (مشتركو كل بوت للبث)،
 leads، orders، bookings، events (للتحليلات)."""
-import sqlite3, json, os, time, logging, hmac, hashlib
+import sqlite3, json, os, re, time, logging, hmac, hashlib
 from contextlib import contextmanager
 
 log = logging.getLogger("database")
@@ -513,6 +513,14 @@ def init_db():
             peer TEXT,
             summary TEXT,
             created_at INTEGER NOT NULL
+        );
+
+        -- عميل واتساب برقم مخفي (اسم مستخدم): معرّفه الخاص بالنشاط (BSUID) ← رقمه إن ظهر مرة،
+        -- فتبقى محادثته واحدة حين يظهر الرقم ثم يختفي (نافذة الـ30 يوماً عند Meta).
+        CREATE TABLE IF NOT EXISTS wa_user_ids(
+            bsuid TEXT PRIMARY KEY,
+            phone TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
         );
 
         -- روابط «التسجيل السهل»: يصدرها الأدمن لعميل لا يستطيع الوصول لكود البريد، فيسجّل
@@ -1086,6 +1094,18 @@ def confirm_email_token(token_hash):
         if not r:
             return None
         return r["user_id"] if _confirm_email(c, r["user_id"], r["email"], now) == "ok" else None
+
+def remember_wa_user(bsuid, phone):
+    with get_conn() as c:
+        c.execute("INSERT INTO wa_user_ids(bsuid,phone,updated_at) VALUES(?,?,?) ON CONFLICT(bsuid) "
+                  "DO UPDATE SET phone=excluded.phone, updated_at=excluded.updated_at",
+                  (bsuid, phone, int(time.time())))
+
+def wa_user_phone(bsuid):
+    with get_conn() as c:
+        r = c.execute("SELECT phone FROM wa_user_ids WHERE bsuid=?", (bsuid,)).fetchone()
+        return r[0] if r else None
+
 
 def admin_verify_email(user_id, admin_id):
     """الأدمن يعفي الحساب من تأكيد البريد على مسؤوليته (عميل لا يصل للكود). يرجّع True لو
@@ -2802,8 +2822,10 @@ def log_message(bot_id, peer, direction, sender, text="", kind="text", media_id=
     """يسجّل رسالة ويحدّث ملخّص المحادثة في معاملة واحدة.
     الوارد يزيد عدّاد غير المقروء؛ ردّ صاحب النشاط يصفّره."""
     # حماية: peer فاسد (مثل "wa:" بلا رقم) يُفسد صندوق الوارد كله (404 عند فتحه)
+    # عميل واتساب برقم مخفي (wa:EG.1349…) هوية صحيحة — رفضه كان يُخفي محادثته كلها
     parts = (peer or "").split(":", 1)
-    if len(parts) != 2 or not parts[1].strip().isdigit():
+    if len(parts) != 2 or not (parts[1].strip().lstrip("-").isdigit() or
+                               (parts[0] == "wa" and re.fullmatch(r"[A-Z]{2}\.[A-Za-z0-9]{1,128}", parts[1]))):
         log.warning("log_message: rejected broken peer %r for bot #%s", peer, bot_id)
         return
     now = int(time.time())
@@ -2833,9 +2855,11 @@ def get_conversation(bot_id, peer):
 
 def list_conversations(bot_id, limit=200):
     with get_conn() as c:
-        # peer الصحيح مثل tg:123 أو wa:201xxx — أي peer بلا أرقام بعد النقطتين مكسور
+        # peer صحيح: tg:123 · wa:201xxx · tg:-100… (مجموعة) · wa:EG.1349… (رقم مخفي/اسم مستخدم).
+        # «wa:» الفارغة محادثة قديمة قبل دعم الأرقام المخفية — تظهر للقراءة فقط (app._LEGACY_PEER).
         rows = c.execute("SELECT * FROM conversations WHERE bot_id=?"
-                         " AND peer GLOB '[a-z][a-z]:[0-9]*'"
+                         " AND (peer GLOB '[a-z][a-z]:[0-9]*' OR peer GLOB '[a-z][a-z]:-[0-9]*'"
+                         "      OR peer GLOB 'wa:[A-Z][A-Z].[A-Za-z0-9]*' OR peer = 'wa:')"
                          " ORDER BY last_at DESC LIMIT ?",
                          (bot_id, limit)).fetchall()
         return [dict(r) for r in rows]

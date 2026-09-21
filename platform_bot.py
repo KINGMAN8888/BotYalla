@@ -415,7 +415,7 @@ def register(app: Application):
         # إشعار المستخدم عبر بوتاته غير متاح هنا؛ الحالة تظهر في لوحته.
     app.add_handler(CallbackQueryHandler(on_decision, pattern=r"^pay_(approve|reject):"))
     app.add_handler(CallbackQueryHandler(on_ticket_close, pattern=r"^tk_close:\d+$"))
-    app.add_handler(CallbackQueryHandler(on_conv_back, pattern=r"^cv_bot:\d+:(wa|tg):-?\d+$"))
+    app.add_handler(CallbackQueryHandler(on_conv_back, pattern=r"^cv_bot:\d+:(?:(?:wa|tg|fb|ig):-?\d+|wa:[A-Z]{2}\.[A-Za-z0-9]+)$"))
     app.add_handler(MessageHandler(filters.TEXT & filters.REPLY & ~filters.COMMAND, on_admin_reply))
     register_admin_commands(app)
     # تحديثات managed_bot (ورسالة managed_bot_created) — مجموعة -1 مستقلة: المعالج

@@ -32,7 +32,7 @@ function usePoll(fn, ms, deps) {
 }
 
 function ConvItem({ c, active, onOpen }) {
-  const name = c.name || c.peer.replace(/^(tg|wa):/, "+");
+  const name = c.name || peerLabel(c.peer);
   return (
     <button type="button" onClick={() => onOpen(c.peer)}
             className={"flex w-full cursor-pointer items-center gap-3 rounded-2xl border-0 px-3 py-3 text-start " +
@@ -93,6 +93,15 @@ function Bubble({ m, botId }) {
   );
 }
 
+/* هوية العميل للعرض: رقم واتساب · رقم مخفي (اسم مستخدم) · محادثة قديمة بلا هوية */
+function peerLabel(peer, isWa = true) {
+  const tail = (peer || "").replace(/^(tg|wa|fb|ig):/, "");
+  if (/^wa:$/.test(peer || "")) return bi("عملاء بدون رقم (قبل التحديث)", "Customers without a number (before the update)");
+  if (/^wa:[A-Z]{2}\./.test(peer || "")) return bi("رقم مخفي · اسم مستخدم واتساب", "Hidden number · WhatsApp username");
+  if (/^(fb|ig):/.test(peer || "")) return "id " + tail;
+  return (isWa ? "+" : "id ") + tail;
+}
+
 export default function Inbox() {
   const { bot, canReply = false, isWa = false, windowSec = 86400 } = P;
   const [convs, setConvs] = useState(P.conversations || []);
@@ -140,7 +149,8 @@ export default function Inbox() {
     history.replaceState(null, "", url);
   }, [peer]);
 
-  const windowClosed = isWa && lastIn && now - lastIn > windowSec;
+  const windowClosed = Boolean(isWa && lastIn && now - lastIn > windowSec);
+  const legacy = peer === "wa:";           // محادثة قديمة بلا هوية — تُقرأ فقط
   const human = conv && conv.mode === "human";
 
   async function send(e) {
@@ -160,7 +170,7 @@ export default function Inbox() {
   }
 
   const current = convs.find((c) => c.peer === peer);
-  const title = current ? (current.name || peer.replace(/^(tg|wa):/, "+")) : "";
+  const title = current ? (current.name || peerLabel(peer)) : "";
 
   return (
     <>
@@ -189,7 +199,7 @@ export default function Inbox() {
                        onClick={() => setPeer("")} aria-label={t("inbox_back")} />
                   <div className="min-w-0">
                     <div className="truncate text-[15px] font-extrabold text-ink">{title}</div>
-                    <div className="text-[11.5px] text-ink-3" dir="ltr">{peer.replace(/^(tg|wa):/, isWa ? "+" : "id ")}</div>
+                    <div className="text-[11.5px] text-ink-3" dir="ltr">{peerLabel(peer, isWa)}</div>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -216,6 +226,14 @@ export default function Inbox() {
                   </p>
                 ) : (
                   <form onSubmit={send}>
+                    {legacy && (
+                      <p className="mt-0 mb-3 rounded-xl bg-white/[0.05] px-3 py-2 text-[12.5px] leading-relaxed text-ink-2">
+                        {bi("دي رسائل وصلت من عملاء مخفيين أرقامهم قبل التحديث، ومينفعش نعرف مين بعتها عشان نرد عليها. "
+                            + "من دلوقتي كل عميل منهم بيظهر في محادثة لوحده والبوت بيرد عليه.",
+                            "These arrived from customers with hidden numbers before the update, so they can't be answered. "
+                            + "From now on each of them gets their own conversation and the bot replies.")}
+                      </p>
+                    )}
                     {windowClosed && (
                       <p className="mt-0 mb-3 rounded-xl bg-yellow-400/10 px-3 py-2 text-[12.5px] text-yellow-200">
                         {t("inbox_wa_window")}{" "}
@@ -224,12 +242,12 @@ export default function Inbox() {
                     )}
                     <div className="flex items-end gap-2">
                       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2}
-                                disabled={busy || windowClosed} placeholder={t("inbox_ph")}
+                                disabled={busy || windowClosed || legacy} placeholder={t("inbox_ph")}
                                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
                                 className="min-h-[46px] w-full flex-1 resize-none rounded-xl bg-black/25 px-3.5 py-2.5 text-[14px]
                                            text-ink outline-none shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
                                            focus:shadow-[inset_0_0_0_1px_rgb(124_108_246/0.8)]" />
-                      <Btn type="submit" icon="rocket" disabled={busy || windowClosed || (!text.trim() && !asset)}>
+                      <Btn type="submit" icon="rocket" disabled={busy || windowClosed || legacy || (!text.trim() && !asset)}>
                         {t("inbox_send")}
                       </Btn>
                     </div>

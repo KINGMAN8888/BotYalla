@@ -8,6 +8,15 @@ import asyncio, json, logging, os, re
 import httpx
 from .base import Channel
 
+# معرّف العميل الخاص بالنشاط (BSUID) لمن فعّل «اسم المستخدم» وأخفى رقمه على واتساب:
+# كود الدولة ثم نقطة ثم حتى 128 حرفاً/رقماً — مثل EG.13491208655302741918. Meta تحذف `from`
+# تماماً في هذه الحالة وترسل `from_user_id` دائماً، والرد يكون بحقل `recipient` لا `to`.
+BSUID_RE = re.compile(r"^[A-Z]{2}\.[A-Za-z0-9]{1,128}$")
+
+
+def is_bsuid(v):
+    return bool(BSUID_RE.match(str(v or "")))
+
 log = logging.getLogger("whatsapp_channel")
 META_API = "https://graph.facebook.com/v20.0"
 TIMEOUT = 15
@@ -142,8 +151,10 @@ class WhatsAppChannel(Channel):
         return peer[3:] if peer.startswith("wa:") else peer
 
     def _base(self, peer, kind):
+        to = self._to(peer)
+        # العميل برقم مخفي (BSUID): Meta تقبله في `recipient` فقط
         return {"messaging_product": "whatsapp", "recipient_type": "individual",
-                "to": self._to(peer), "type": kind}
+                ("recipient" if is_bsuid(to) else "to"): to, "type": kind}
 
     async def send_text(self, peer, text):
         p = self._base(peer, "text")
@@ -319,12 +330,15 @@ class WhatsAppChannel(Channel):
                     msgs = val.get("messages") or []
                     if not msgs:
                         continue          # statuses / تحديث تسليم — ليس وارداً
-                    name = ""
+                    name, uid = "", ""
                     contacts = val.get("contacts") or []
                     if contacts:
-                        name = (contacts[0].get("profile") or {}).get("name", "") or ""
+                        prof = contacts[0].get("profile") or {}
+                        uname = prof.get("username") or ""
+                        name = prof.get("name") or (f"@{uname}" if uname else "")
+                        uid = contacts[0].get("user_id") or ""
                     for m in msgs:
-                        n = self._one(m, name)
+                        n = self._one(m, name, uid)
                         if n:
                             out.append(n)
         except (AttributeError, KeyError, IndexError, TypeError):
@@ -333,10 +347,29 @@ class WhatsAppChannel(Channel):
 
     MEDIA_TYPES = ("image", "audio", "voice", "video", "document", "sticker")
 
-    def _one(self, m, name):
-        sender = str(m.get("from") or "").strip()
-        if not sender.isdigit():
-            log.warning("WhatsApp message without valid 'from': %s", m.get("id"))
+    def _sender(self, m, uid=""):
+        """هوية العميل: رقمه إن ظهر، وإلا معرّفه الخاص (BSUID). الرقم أولاً حتى لا تنقسم محادثة
+        قديمة، والمعرّف المربوط برقم سبق ظهوره يرجع لنفس المحادثة (db.wa_user_phone)."""
+        phone = str(m.get("from") or "").strip().lstrip("+")
+        bsuid = str(m.get("from_user_id") or uid or "").strip()
+        if not is_bsuid(bsuid):
+            bsuid = ""
+        try:
+            import database as _db
+            if phone.isdigit() and bsuid:
+                _db.remember_wa_user(bsuid, phone)
+            elif bsuid and not phone:
+                phone = _db.wa_user_phone(bsuid) or ""
+        except Exception:
+            log.debug("wa user id map unavailable", exc_info=True)
+        if phone.isdigit():
+            return phone
+        return bsuid
+
+    def _one(self, m, name, uid=""):
+        sender = self._sender(m, uid)
+        if not sender:
+            log.warning("WhatsApp message without a phone or user id: %s", m.get("id"))
             return None
         mtype = m.get("type")
         text = ""

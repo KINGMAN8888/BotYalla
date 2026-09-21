@@ -43,9 +43,16 @@ AI_PRICE_FALLBACK = 25          # قرشاً للرد فوق الحصة — لو
 
 
 def _peer_num(peer):
-    """tg:123 -> 123 · wa:2010… -> 2010… (يُخزَّن في bot_users.tg_user_id)."""
-    tail = peer.split(":")[-1] if ":" in peer else peer
-    return int(tail) if tail.lstrip("+").isdigit() else 0
+    """tg:123 -> 123 · wa:2010… -> 2010… (يُخزَّن في bot_users.tg_user_id).
+    عميل واتساب برقم مخفي (wa:EG.1349…): رقم سالب ثابت من معرّفه — لا صفر مشترك، لأن
+    bot_users فريد على (bot_id, tg_user_id) فكان كل أصحاب الأرقام المخفية يمحون بعضهم."""
+    tail = peer.split(":", 1)[-1] if ":" in peer else peer
+    if tail.lstrip("+").isdigit():
+        return int(tail)
+    if not tail:
+        return 0
+    import hashlib
+    return -int(hashlib.sha256(tail.encode()).hexdigest()[:15], 16)
 
 
 def _cfg_of(bot_row):

@@ -3970,7 +3970,10 @@ def sync_telegram(bot_id):
 #  الوصول للبوت: رابط مباشر · QR · ملصق للطباعة  (TESTER_FEEDBACK_PLAN §2)
 # ============================================================================
 _QR_SOURCES = ("qr", "poster", "share")
-_PEER_RE = _re.compile(r"^(tg|wa|fb|ig):\d{1,20}\Z")
+# wa:<BSUID> — عميل واتساب أخفى رقمه (اسم مستخدم)، انظر channels/whatsapp.BSUID_RE
+_PEER_RE = _re.compile(r"^(?:(tg|wa|fb|ig):\d{1,20}|wa:[A-Z]{2}\.[A-Za-z0-9]{1,128})\Z")
+# محادثة قديمة بلا هوية («wa:» فارغة — قبل دعم الأرقام المخفية): تُقرأ ولا يُرد عليها
+_LEGACY_PEER = "wa:"
 
 
 def _uses_engine(b):
@@ -4226,10 +4229,11 @@ def _can_reply():
     return current_role() in ("admin", "support") or plans.inbox_reply(_plan_id())
 
 
-def _inbox_peer(bot_id, peer):
+def _inbox_peer(bot_id, peer, read_only=False):
     """عميل تواصل فعلاً مع **هذا** البوت — لا نراسل رقماً لم يراسلنا."""
     peer = str(peer or "")
-    if not _PEER_RE.match(peer) or not db.peer_known(bot_id, peer):
+    ok = _PEER_RE.match(peer) or (read_only and peer == _LEGACY_PEER)
+    if not ok or not db.peer_known(bot_id, peer):
         abort(404)
     return peer
 
@@ -4244,7 +4248,7 @@ def inbox(bot_id):
     return react_page("inbox", "inbox_title",
                       {"bot": {"id": b["id"], "name": b["name"], "channel": b.get("channel") or "telegram"},
                        "conversations": db.list_conversations(bot_id),
-                       "peer": peer if _PEER_RE.match(peer) else "",
+                       "peer": peer if (_PEER_RE.match(peer) or peer == _LEGACY_PEER) else "",
                        "canReply": _can_reply(), "isWa": is_wa, "windowSec": WA_WINDOW},
                       title=i18n.t("inbox_title", lang) + " · " + b["name"])
 
@@ -4261,7 +4265,7 @@ def api_inbox(bot_id):
 @login_required
 def api_inbox_thread(bot_id):
     _owned(bot_id)
-    peer = _inbox_peer(bot_id, request.args.get("peer"))
+    peer = _inbox_peer(bot_id, request.args.get("peer"), read_only=True)
     try:
         after = max(0, int(request.args.get("after") or 0))
     except ValueError:
