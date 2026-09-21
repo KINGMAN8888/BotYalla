@@ -259,7 +259,7 @@ def _revalidate_identity():
 
 # ما يبقى متاحاً لحساب جديد لم يؤكد بريده — كل ما عداه يحوّل لصفحة التأكيد.
 _GATE_OPEN = ("/verify-email", "/logout", "/lang/", "/static/", "/wh/", "/email/unsubscribe/",
-              "/auth/", "/.well-known/", "/api/check-username")
+              "/auth/", "/.well-known/", "/api/check-username", "/api/assistant")
 _GATE_PUBLIC = _PV_PATHS | {"/forgot", "/robots.txt", "/sitemap.xml", "/favicon.ico", "/healthz",
                             "/manifest.webmanifest", "/site.webmanifest"}
 
@@ -4621,7 +4621,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
 
     payload = {
         "view": view, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
-        "csrf": _csrf_token(), "track": _track_events(),
+        "csrf": _csrf_token(), "track": _track_events(), "assistant": _assistant_boot(view, lang),
         "user": {"name": session.get("uname"), "role": role,
                  # لمطالبة لطيفة بإضافة إيميل — بدونه لا استرجاع للحساب
                  "hasEmail": bool((getattr(g, "user", None) or {}).get("email")),
@@ -4874,6 +4874,7 @@ def _public_payload(page, lang):
     return {
         "page": page, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
         "year": _dt.date.today().year, "email": email, "track": _track_events(),
+        "csrf": _csrf_token(), "assistant": _assistant_boot(page, lang),
         "social": AN.social_links(),
         "t": {k: i18n.t(k, lang) for k in i18n.T
               if k.startswith(_PUBLIC_T_PREFIXES) or k in _PUBLIC_T_EXTRA},
@@ -5019,6 +5020,86 @@ def segment_page(code):
     seo = _seo(lang, f"{S['name']} — {i18n.t('lp2_seg_title_tail', lang)} · BotYalla", S["sub"][:158],
                url_for("segment_page", code=code))
     return _render_public(payload, seo)
+
+
+# ---------- «مساعد BotYalla» داخل الموقع (site_assistant.py) ----------
+def _assistant_boot(view, lang):
+    """ما تحتاجه الفقاعة عند الفتح: دليل الصفحة وأسئلة البداية — بلا طلب شبكة."""
+    import site_assistant as SA
+    g_ = SA.page_guide(view, lang)
+    return {"view": view, "title": g_["title"], "tips": g_["tips"], "starters": g_["starters"],
+            "api": "/api/assistant", "handoff": "/api/assistant/handoff"}
+
+def _assistant_user():
+    import site_assistant as SA
+    u = getattr(g, "user", None)
+    if not u:
+        return SA.user_context(None, None, [], None)
+    bots = db.list_bots(u["id"])
+    for b in bots:
+        b["running"] = manager.is_running(b["id"])
+    sub = db.get_subscription(u["id"]) or {}
+    return SA.user_context(u, sub, bots, plans.plan_name(sub.get("plan") or "free", session.get("lang", i18n.DEFAULT)))
+
+def _assistant_links(keys, lang):
+    import site_assistant as SA
+    out = []
+    for k in keys:
+        try:
+            out.append({"k": k, "label": SA.LINK_LABELS[k][1 if lang == "en" else 0], "url": url_for(SA.LINK_KEYS[k])})
+        except Exception:
+            continue
+    return out
+
+@app.route("/api/assistant", methods=["POST"])
+def api_assistant():
+    """سؤال للمساعد. محدود لكل IP (النموذج على حساب المنصة) ولكل حساب."""
+    import site_assistant as SA
+    lang = session.get("lang", i18n.DEFAULT)
+    if _rate_limited(request.remote_addr or "?", limit=30, window=600, bucket="assist") or \
+            (uid() and _rate_limited(f"u{uid()}", limit=60, window=3600, bucket="assist_u")):
+        return jsonify(ok=False, error=i18n.t("ai_rate", lang)), 429
+    d = request.get_json(silent=True) or {}
+    text = str(d.get("text") or "").strip()[:1200]
+    if not text:
+        return jsonify(ok=False, error="…"), 400
+    view = _re.sub(r"[^a-z_]", "", str(d.get("view") or "home"))[:40] or "home"
+    out = SA.answer(text, SA.clean_history(d.get("history")), view, lang, _assistant_user(),
+                    ai.key_chain(db.get_platform))
+    AN.queue(session, "assistant_ask", ai=out["ai"])
+    return jsonify(ok=True, reply=out["reply"], suggestions=out["suggestions"], handoff=out["handoff"],
+                   links=_assistant_links(out["links"], lang))
+
+@app.route("/api/assistant/handoff", methods=["POST"])
+def api_assistant_handoff():
+    """«كلّم الدعم» من المساعد: المسجّل ← تذكرة دعم بنص المحادثة (تصل الأدمن على تليجرام)؛
+    الزائر ← واتساب الرقم الرسمي برسالة جاهزة يبدأها هو."""
+    import site_assistant as SA, platform_kb
+    lang = session.get("lang", i18n.DEFAULT)
+    ar = lang != "en"
+    if _rate_limited(request.remote_addr or "?", limit=5, window=3600, bucket="assist_h"):
+        return jsonify(ok=False, error=i18n.t("ai_rate", lang)), 429
+    d = request.get_json(silent=True) or {}
+    hist = SA.clean_history(d.get("history"))
+    asked = [h["text"] for h in hist if h["me"]]
+    if uid():
+        tid = db.open_ticket_of_kind(uid(), "support")
+        body = ("من مساعد الموقع (صفحة: " + str(d.get("view") or "-")[:40] + ")\n" +
+                "\n".join(("👤 " if h["me"] else "🤖 ") + h["text"] for h in hist))[:SD.BODY_MAX]
+        followup = bool(tid)
+        if followup:
+            db.add_ticket_msg(tid, "user", body, "web")
+        else:
+            tid = db.create_ticket(uid(), "support", (asked[-1] if asked else "مساعدة من مساعد الموقع")[:SD.SUBJECT_MAX], body)
+        _alert_ticket(tid, body, followup=followup)
+        return jsonify(ok=True, kind="ticket", id=tid, url=url_for("support"),
+                       msg=("✅ وصّلت كلامك للفريق (تذكرة #T%s) — الرد هيوصلك في «الدعم» وعلى إيميلك." % tid) if ar else
+                           ("✅ Sent to the team (ticket #T%s) — the reply will reach you in Support and by email." % tid))
+    wa = platform_kb.official_wa_number()
+    first = ("محتاج مساعدة في BotYalla: " if ar else "I need help with BotYalla: ") + (asked[-1] if asked else "")
+    return jsonify(ok=True, kind="whatsapp", url=("https://wa.me/%s?text=%s" % (wa, _up.quote(first[:500]))) if wa else None,
+                   msg=("كلّم فريقنا على واتساب — الرسالة جاهزة، اضغط إرسال." if ar else
+                        "Chat with our team on WhatsApp — the message is ready, just send."))
 
 
 @app.route("/vip/request", methods=["POST"])

@@ -2,6 +2,7 @@ import { StrictMode, Component } from "react";
 import { createRoot } from "react-dom/client";
 import AppShell from "./app/AppShell.jsx";
 import { BY } from "./app/kit.jsx";
+import { mountAssistant } from "./Assistant.jsx";
 import "./index.css";
 
 /* كل عرض في قطعة JS مستقلة تُحمَّل وحدها: صفحة الدخول لا تنزّل محرّر التدفّق ولوحة الأدمن
@@ -118,6 +119,7 @@ if (el) {
   const mount = (tree) => {
     createRoot(el).render(<StrictMode><Boundary>{tree}</Boundary></StrictMode>);
     document.documentElement.classList.add("react-on");
+    mountAssistant(createRoot);   // «مساعد BotYalla» في اللوحة وصفحات الدخول والتأكيد
   };
 
   if (!spec) {

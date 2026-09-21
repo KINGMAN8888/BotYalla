@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import App from "./sections.jsx";
 import { LegalPublic, NotFound, SegmentPage } from "./PublicPages.jsx";
 import { BY } from "./ui.jsx";
+import { mountAssistant } from "./Assistant.jsx";
 import "./index.css";
 
 /* الموقع العام: الرئيسية والوثائق القانونية وصفحة 404 — Flask يحدّد الصفحة في BY.page */
@@ -17,4 +18,5 @@ if (el) {
     </StrictMode>
   );
   document.documentElement.classList.add("react-on");
+  mountAssistant(createRoot);   // «مساعد BotYalla» على كل صفحات الموقع العام
 }

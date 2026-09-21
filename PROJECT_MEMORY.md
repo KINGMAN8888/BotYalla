@@ -127,6 +127,10 @@
 CSRF شامل (باستثناء `/wh/whatsapp` — التوقيع هو الحارس) · **CSP بـ nonce يتغيّر مع كل طلب** (`script-src` بلا `'unsafe-inline'`) وHSTS على HTTPS فقط — تصدر من التطبيق لا من nginx · تحديد محاولات بدلاء منفصلة على الدخول والتسجيل وفحص أكواد الخصم · `USERNAME_RE` تحصر اسم المستخدم في محارف آمنة · `ProxyFix(x_for=1)` خلف nginx · عزل صلاحيات · الملكية مفروضة **داخل الاستعلام** (`_owned`) لا بفحص لاحق · SQL بمعاملات · `werkzeug.security` للتجزئة.
 > **البنود المفتوحة موثّقة في [REVIEW.md](REVIEW.md)** — اقرأه قبل أي عمل على الأمان.
 
+### التسجيل السهل + «مساعد BotYalla» في الموقع
+- **التسجيل السهل (أدمن فقط، على مسؤوليته):** في «إدارة المستخدمين» زر «فعّله من غير كود» للحساب الواقف عند كود البريد (`db.admin_verify_email` — يرفع `verify_required` ولا يدّعي أن البريد مؤكَّد، ويسجّل `email_waived`)، وروابط `/join/<token>` لمرة واحدة (`signup_invites`، التوكن hash فقط، حجز ذرّي `claim_invite` ويُحرَّر لو فشل التسجيل). صفحة تأكيد البريد فيها خطوات «مش لاقي الكود؟» وزر واتساب للرقم الرسمي.
+- **المساعد (`site_assistant.py` + `frontend/src/Assistant.jsx`):** فقاعة على صفحات الموقع العام واللوحة وصفحات الدخول/التأكيد. عقل الدعم نفسه (`platform_kb.facts`) + دليل الاستخدام `GUIDE` + دليل كل صفحة `PAGES` + سياق الحساب بلا بريد/هاتف. الروابط مفاتيح من `LINK_KEYS` فقط (لا روابط مخترعة). بلا مفتاح ذكاء يرد من الدليل. «كلّم إنسان»: تذكرة دعم للمسجّل، وواتساب الرقم الرسمي للزائر. `/api/assistant` محدود 30/10 دقائق لكل IP ومفتوح للحساب المحجوب ببوابة البريد.
+
 ### التوثيق والنشر
 `docs/` (USER_GUIDE / ARCHITECTURE / SECURITY / DEPLOYMENT / HOSTINGER / PRODUCTION / **WHATSAPP**) · `deploy/` (`hostinger_deploy.sh`, `deploy_hostinger.bat`, `backup.sh`, systemd, nginx, gunicorn, Dockerfile) · خطة تسويق (PDF) + دليل هوية (PDF).
 
