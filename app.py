@@ -2758,6 +2758,47 @@ def admin_meta_assign():
                    error="" if made else "الحساب مربوط ببوت مستخدم تاني بالفعل.")
 
 
+def _meta_callback():
+    return (os.getenv("PUBLIC_URL", "").rstrip("/") or request.host_url.rstrip("/")) + "/wh/meta"
+
+
+@app.route("/admin/meta/diagnose", methods=["POST"])
+@require_roles("admin")
+def admin_meta_diagnose():
+    """سلسلة الوصول كاملة: التطبيق ← ويبهوك page/instagram ← الصفحة ← الأذونات ← آخر ما وصل فعلاً."""
+    import meta_pages as MP
+    pid, tok = _platform_page()
+    checks = MP.diagnose(WAS.app_id(), _meta_secret(), pid, tok, _meta_callback())
+    now = int(_time.time())
+    for obj, label in (("page", "وصل حدث ماسنجر للسيرفر"), ("instagram", "وصل حدث إنستجرام للسيرفر")):
+        t_ok = _WH_STATE["ok"].get(obj)
+        checks.append({"ok": bool(t_ok), "label": label,
+                       "detail": (f"منذ {max(1, (now - t_ok) // 60)} دقيقة" if t_ok else
+                                  "لم يصل شيء منذ آخر تشغيل للسيرفر — ابعت رسالة وافحص تاني")})
+    bad = {k: v for k, v in _WH_STATE["bad"].items() if now - v < 86400}
+    if bad:
+        checks.append({"ok": False, "label": "طلبات ويبهوك مرفوضة التوقيع",
+                       "detail": " · ".join(f"{k} منذ {max(1, (now - v) // 60)} دقيقة" for k, v in bad.items())
+                                 + " — سرّ التطبيق في إعدادات المنصة غير سرّ التطبيق المرسِل"})
+    return jsonify(ok=True, checks=checks,
+                   note="التطبيق في وضع «تطوير»؟ Meta لا ترسل وقتها إلا رسائل الحسابات اللي ليها دور في "
+                        "التطبيق (أدمن/مطوّر/مختبِر). جرّب من حسابك، أو ضيف الحساب كمختبِر، أو انشر التطبيق.")
+
+
+@app.route("/admin/meta/app-webhooks", methods=["POST"])
+@require_roles("admin")
+def admin_meta_app_webhooks():
+    """يشترك التطبيق نفسه في ويبهوك page وinstagram بعنواننا — بدل الضبط اليدوي في لوحة Meta."""
+    import meta_pages as MP
+    verify = db.get_platform("wa_verify_token", "") or ""
+    if not (WAS.app_id() and _meta_secret() and verify):
+        return jsonify(ok=False, error="لازم META_APP_ID وسرّ التطبيق وVerify Token في إعدادات المنصة.")
+    res = MP.ensure_app_webhooks(WAS.app_id(), _meta_secret(), _meta_callback(), verify)
+    failed = {k: v for k, v in res.items() if v}
+    return jsonify(ok=not failed, result=res,
+                   error=" · ".join(f"{k}: {v}" for k, v in failed.items()))
+
+
 @app.route("/admin/meta/bot/<int:bot_id>/resubscribe", methods=["POST"])
 @require_roles("admin")
 def admin_meta_resubscribe(bot_id):
@@ -5368,6 +5409,7 @@ def whatsapp_webhook():
             abort(403)
         if (request.args.get("hub.mode") == "subscribe"
                 and _secrets.compare_digest(request.args.get("hub.verify_token", ""), verify)):
+            _WH_STATE["verify"] = int(_time.time())
             return request.args.get("hub.challenge", ""), 200
         abort(403)
 
@@ -5377,6 +5419,7 @@ def whatsapp_webhook():
                                           db.get_platform("wa_es_app_secret", "") or "")) if s]
     if not secrets_:
         app.logger.warning("WhatsApp webhook POST rejected: wa_app_secret is not configured")
+        _WH_STATE["bad"]["بلا سرّ مضبوط"] = int(_time.time())
         abort(403)
 
     body, got = request.get_data(), request.headers.get("X-Hub-Signature-256", "")
@@ -5384,13 +5427,33 @@ def whatsapp_webhook():
     for secret in secrets_:                                   # بلا خروج مبكر — زمن ثابت تقريباً
         expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
         ok = _secrets.compare_digest(got, expected) or ok
+    obj = _wh_object(body)
     if not ok:
+        # غالباً سرّ تطبيق خاطئ (تطبيق آخر يرسل لنفس العنوان) — يظهر في تشخيص «/admin/meta»
+        now = int(_time.time())
+        if now - _WH_STATE["bad"].get(obj, 0) > 60:
+            app.logger.warning("webhook POST rejected: bad signature (object=%s)", obj)
+        _WH_STATE["bad"][obj] = now
         abort(403)
+    _WH_STATE["ok"][obj] = int(_time.time())
 
     payload = request.get_json(silent=True)
     if payload:
         manager.process_wa_webhook(payload)
     return "OK", 200
+
+
+# آخر طلب ويبهوك مقبول/مرفوض لكل كائن (whatsapp_business_account · page · instagram) —
+# في الذاكرة لتشخيص «/admin/meta» (عملية gunicorn واحدة). لا يُخزَّن من الطلب إلا اسم الكائن.
+_WH_STATE = {"ok": {}, "bad": {}, "verify": 0}
+
+
+def _wh_object(body):
+    try:
+        o = json.loads(body or b"{}").get("object")
+        return str(o)[:40] if o else "?"
+    except (ValueError, AttributeError):
+        return "?"
 
 # إيميلات دعم افتراضية قديمة — تُستبدل بإيميل الدومين الرسمي عند الإقلاع.
 _OLD_SUPPORT_EMAILS = ("info@youssefalsherief.tech",)

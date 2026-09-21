@@ -928,6 +928,45 @@ export function AdminMeta() {
       )}
 
       <Card className="mb-5">
+        <SectionTitle icon="bolt">{bi("فحص الإعداد", "Setup check")}</SectionTitle>
+        <p className="mt-0 mb-3 text-[12.5px] text-ink-3">
+          {bi("البوت شغال بس مش بيرد؟ الفحص بيمشي السلسلة كلها: التطبيق ← ويبهوك ماسنجر وإنستجرام ← الصفحة ← الأذونات ← هل وصل حدث فعلاً للسيرفر.",
+              "Bot running but not replying? The check walks the whole chain: app → Messenger & Instagram webhooks → Page → permissions → did an event actually reach the server.")}
+        </p>
+        <div className="flex flex-wrap gap-2.5">
+          <Btn icon="refresh" type="button" disabled={busy === "diag"}
+               onClick={() => run("diag", "/admin/meta/diagnose", {}, false)}>{bi("افحص دلوقتي", "Run check")}</Btn>
+          <Btn variant="ghost" icon="link" type="button" disabled={busy === "hooks"}
+               onClick={() => run("hooks", "/admin/meta/app-webhooks", {}, false)}>
+            {bi("اضبط ويبهوك التطبيق تلقائياً", "Set up app webhooks automatically")}
+          </Btn>
+        </div>
+        <Msg d={out.hooks} />
+        {out.diag && out.diag.checks && (
+          <ul className="mt-4 mb-0 flex list-none flex-col gap-2 p-0">
+            {out.diag.checks.map((c, i) => (
+              <li key={i} className="flex items-start gap-2.5 rounded-xl bg-white/[0.03] px-3.5 py-2.5 text-[13px]
+                                     shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+                <span className={"mt-0.5 grid size-5 shrink-0 place-items-center rounded-full " +
+                                 (c.ok ? "bg-au-teal/20 text-au-teal" : "bg-red-400/15 text-red-300")}>
+                  <Icon name={c.ok ? "check" : "close"} size={12} />
+                </span>
+                <div className="min-w-0">
+                  <div className="font-bold text-ink">{c.label}</div>
+                  {c.detail && <div className="mt-0.5 text-[12px] text-ink-3" dir="auto">{c.detail}</div>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {out.diag && out.diag.note && (
+          <p className="mt-3 mb-0 rounded-xl bg-yellow-400/[0.07] px-4 py-3 text-[12.5px] leading-relaxed text-yellow-200">
+            <Icon name="shield" size={13} className="me-1 align-[-2px]" />{out.diag.note}
+          </p>
+        )}
+      </Card>
+
+      <Card className="mb-5">
         <SectionTitle icon="users">{bi("ربط صفحة لمستخدم", "Connect a Page for a user")}</SectionTitle>
         <p className="mt-0 mb-4 text-[12.5px] text-ink-3">
           {bi("البوتات بتتعمل في حساب المستخدم وتشتغل على طول، وتفضل شغالة لوحدها — توكن الصفحة المشتق من توكن مستخدم طويل مبينتهيش.",

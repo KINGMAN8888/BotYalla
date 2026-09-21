@@ -60,6 +60,10 @@ class FakeGraph:
             return R(200, {"access_token": "EAA-long-user"})
         if url.endswith("/me/accounts"):
             return R(200, {"data": [{"id": PAGE, "name": "Raghad", "access_token": "EAA-page-from-user"}]})
+        if url.endswith("/1337778974883863/subscriptions"):
+            return R(200, {"data": [{"object": "page", "active": True,
+                                     "callback_url": "https://botyalla.com/wh/meta",
+                                     "fields": [{"name": "messages"}]}] + FakeGraph.app_subs})
         if url.endswith("/debug_token"):
             return R(200, {"data": {"scopes": FakeGraph.scopes}})
         if url.endswith(f"/{IG}"):
@@ -74,10 +78,17 @@ class FakeGraph:
         return R(404, {"error": {"message": "nope"}})
 
     reject = set()                       # حقول ترفضها Meta (تحتاج أذونات)
+    app_subs = []                        # اشتراكات إضافية لويبهوك التطبيق (instagram)
+    app_posts = []
     scopes = ["pages_messaging", "instagram_basic", "instagram_manage_messages"]
 
     def post(self, url, params=None, **k):
         FakeGraph.calls.append(("POST", url, dict(params or {})))
+        if url.endswith("/1337778974883863/subscriptions"):
+            FakeGraph.app_posts.append(dict(params or {}))
+            if (params or {}).get("object") == "instagram" and "comments" in params.get("fields", ""):
+                return R(400, {"error": {"message": "Invalid field comments"}})
+            return R(200, {"success": True})
         if url.endswith("/subscribed_apps"):
             asked = set((params or {}).get("subscribed_fields", "").split(","))
             if not FakeGraph.subscribe_ok or asked & FakeGraph.reject:
@@ -460,6 +471,57 @@ class BotPageTests(_PageBase):
         self.assertEqual((n["kind"], n["start_arg"]), ("start", "src-ads"))
         import flow_engine
         self.assertEqual(flow_engine._start_source("", "src-ads"), "ads")
+
+
+class DiagnoseTests(_PageBase):
+    """«البوت شغال ومش بيرد»: الفحص يسمّي الحلقة المكسورة، والضبط التلقائي لويبهوك التطبيق."""
+    def setUp(self):
+        super().setUp()
+        FakeGraph.app_subs, FakeGraph.app_posts = [], []
+        db.set_platform("wa_verify_token", "vt")
+        os.environ["PUBLIC_URL"] = "https://botyalla.com"
+        A._WH_STATE["ok"].clear(); A._WH_STATE["bad"].clear()
+
+    def tearDown(self):
+        os.environ.pop("PUBLIC_URL", None)
+        super().tearDown()
+
+    def post(self, url, body=None):
+        return self.client(1).post(url, json=body or {}, headers={"X-CSRF-Token": CSRF}).get_json()
+
+    def test_missing_instagram_webhook_is_named(self):
+        self.post("/admin/meta/page", {"page_id": PAGE, "token": "EAA-page-token-xxxxxxxx"})
+        d = self.post("/admin/meta/diagnose")
+        by = {c["label"]: c for c in d["checks"]}
+        self.assertTrue(by["ويبهوك ماسنجر على مستوى التطبيق"]["ok"])
+        self.assertFalse(by["ويبهوك إنستجرام على مستوى التطبيق"]["ok"])
+        self.assertFalse(by["وصل حدث إنستجرام للسيرفر"]["ok"])
+        self.assertIn("تطوير", d["note"])
+
+    def test_auto_setup_subscribes_both_objects_and_falls_back_on_bad_fields(self):
+        d = self.post("/admin/meta/app-webhooks")
+        self.assertTrue(d["ok"], d)
+        objs = [(p["object"], p["fields"]) for p in FakeGraph.app_posts]
+        self.assertEqual(objs[0][0], "page")
+        self.assertEqual(objs[-1], ("instagram", "messages,messaging_postbacks"))   # بعد رفض comments
+        self.assertTrue(all(p["callback_url"] == "https://botyalla.com/wh/meta" and p["verify_token"] == "vt"
+                            for p in FakeGraph.app_posts))
+        self.assertTrue(all(p["access_token"].startswith("1337778974883863|") for p in FakeGraph.app_posts))
+
+    def test_bad_signature_shows_up_in_the_check(self):
+        body = json.dumps({"object": "instagram", "entry": []}).encode()
+        r = A.app.test_client().post("/wh/meta", data=body, headers={
+            "Content-Type": "application/json", "X-Hub-Signature-256": "sha256=wrong"})
+        self.assertEqual(r.status_code, 403)
+        labels = [c["label"] for c in self.post("/admin/meta/diagnose")["checks"]]
+        self.assertIn("طلبات ويبهوك مرفوضة التوقيع", labels)
+
+    def test_admin_only(self):
+        c = A.app.test_client()
+        with c.session_transaction() as s:
+            s["uid"] = self.shop; s["_csrf"] = CSRF
+        self.assertIn(c.post("/admin/meta/diagnose", json={}, headers={"X-CSRF-Token": CSRF}).status_code, (302, 403))
+        self.assertIn(c.post("/admin/meta/app-webhooks", json={}, headers={"X-CSRF-Token": CSRF}).status_code, (302, 403))
 
 
 if __name__ == "__main__":

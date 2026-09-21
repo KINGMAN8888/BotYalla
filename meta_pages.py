@@ -205,3 +205,93 @@ def unsubscribe(page_id, page_token):
             return (r.status_code == 200, "" if r.status_code == 200 else _err(r))
     except Exception as e:
         return False, str(e)[:200]
+
+
+# ============================================================== ويبهوك التطبيق + التشخيص
+# اشتراك الصفحة (`subscribed_apps`) وحده لا يكفي: Meta لا ترسل شيئاً ما لم يكن **التطبيق** نفسه
+# مشتركاً في كائنَي `page` و`instagram` بعنوان ويبهوكنا. هذا ما يُضبط يدوياً في لوحة Meta
+# (Messenger/Instagram ← Webhooks) — وهنا يُضبط ويُفحص من «/admin/meta» بتوكن التطبيق.
+PAGE_APP_FIELDS = ("messages,messaging_postbacks,messaging_referrals,message_echoes,message_reactions,"
+                   "message_reads,message_deliveries,messaging_optins,messaging_handovers,standby,feed")
+IG_APP_FIELDS = ("messages,messaging_postbacks,messaging_seen,messaging_referral,message_reactions,"
+                 "messaging_handover,standby,comments,mentions")
+MIN_FIELDS = "messages,messaging_postbacks"
+NEEDED_SCOPES = ("pages_messaging", "pages_manage_metadata", "instagram_basic", "instagram_manage_messages")
+
+
+def app_subscriptions(app_id, secret):
+    """اشتراكات ويبهوك التطبيق ← ({object: {callback, fields, active}}, خطأ)."""
+    try:
+        with httpx.Client(timeout=TIMEOUT) as c:
+            r = c.get(f"{GRAPH}/{app_id}/subscriptions", params={"access_token": f"{app_id}|{secret}"})
+            if r.status_code != 200:
+                return {}, _err(r)
+            out = {}
+            for s in (r.json() or {}).get("data") or []:
+                out[s.get("object")] = {"callback": s.get("callback_url") or "", "active": bool(s.get("active")),
+                                        "fields": [f.get("name") for f in s.get("fields") or [] if f.get("name")]}
+            return out, ""
+    except Exception as e:
+        return {}, str(e)[:200]
+
+
+def ensure_app_webhooks(app_id, secret, callback, verify_token):
+    """يشترك التطبيق في `page` و`instagram` بعنواننا ← {object: خطأ أو ""}. Meta تتحقق فوراً
+    باستدعاء GET على العنوان بالـverify token — الخادم يرد من خيط آخر (gunicorn threads)."""
+    out = {}
+    with httpx.Client(timeout=TIMEOUT + 10) as c:
+        for obj, fields in (("page", PAGE_APP_FIELDS), ("instagram", IG_APP_FIELDS)):
+            err = ""
+            for flds in (fields, MIN_FIELDS):             # حقل غير مدعوم يُفشل الطلب كله
+                r = c.post(f"{GRAPH}/{app_id}/subscriptions", params={
+                    "object": obj, "callback_url": callback, "fields": flds, "verify_token": verify_token,
+                    "include_values": "true", "access_token": f"{app_id}|{secret}"})
+                if r.status_code == 200 and (r.json() or {}).get("success"):
+                    err = ""
+                    break
+                err = _err(r)
+            out[obj] = err
+    return out
+
+
+def diagnose(app_id, secret, page_id, page_token, callback):
+    """فحص سلسلة الوصول كاملة ← [{ok, label, detail}] — من التطبيق إلى الصفحة إلى التوكن."""
+    checks = []
+    add = lambda ok, label, detail="": checks.append({"ok": bool(ok), "label": label, "detail": detail})
+    add(app_id, "App ID مضبوط (META_APP_ID)", app_id or "ناقص في .env")
+    add(secret, "سرّ التطبيق مضبوط", "" if secret else "حطه في إعدادات المنصة ← App Secret — تطبيق Tech Provider")
+    if app_id and secret:
+        subs, err = app_subscriptions(app_id, secret)
+        for obj, label in (("page", "ويبهوك ماسنجر على مستوى التطبيق"), ("instagram", "ويبهوك إنستجرام على مستوى التطبيق")):
+            s = subs.get(obj)
+            if err:
+                add(False, label, err)
+            elif not s:
+                add(False, label, "التطبيق مش مشترك — اضغط «اضبط ويبهوك التطبيق تلقائياً»")
+            else:
+                same = s["callback"].rstrip("/") == callback.rstrip("/")
+                has = "messages" in s["fields"]
+                add(same and has and s["active"], label,
+                    ("العنوان: " + s["callback"] + ("" if same else " (مختلف عن عنواننا)")) +
+                    ("" if has else " · حقل messages غير مفعّل"))
+    if page_id and page_token:
+        with httpx.Client(timeout=TIMEOUT) as c:
+            r = c.get(f"{GRAPH}/{page_id}/subscribed_apps", params={"access_token": page_token})
+            mine = [a for a in ((r.json() or {}).get("data") or [] if r.status_code == 200 else [])
+                    if str(a.get("id")) == str(app_id)]
+            add(bool(mine) and "messages" in (mine[0].get("subscribed_fields") or [] if mine else []),
+                "الصفحة مشتركة في التطبيق", "" if mine else (_err(r) if r.status_code != 200 else "اضغط «حدّث واشترك»"))
+            scopes = []
+            if app_id and secret:
+                d = c.get(f"{GRAPH}/debug_token", params={"input_token": page_token,
+                                                          "access_token": f"{app_id}|{secret}"})
+                scopes = ((d.json() or {}).get("data") or {}).get("scopes") or [] if d.status_code == 200 else []
+            missing = [s for s in NEEDED_SCOPES if s not in scopes]
+            add(scopes and not missing, "أذونات توكن الصفحة",
+                ("ناقص: " + ", ".join(missing)) if scopes and missing else ("" if scopes else "تعذّر قراءة الأذونات"))
+            i = c.get(f"{GRAPH}/{page_id}", params={"fields": IG_FIELDS, "access_token": page_token})
+            ig = _ig_of(i.json() or {}) if i.status_code == 200 else {}
+            add(ig.get("id"), "حساب إنستجرام مربوط بالصفحة", ("@" + ig.get("username", "")) if ig.get("id") else "")
+    else:
+        add(False, "صفحة المنصة محفوظة", "احفظ Page ID والتوكن أولاً")
+    return checks
