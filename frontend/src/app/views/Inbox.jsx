@@ -204,7 +204,7 @@ export default function Inbox() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {human ? <Pill tone="on" dot>{t("inbox_mode_human")}</Pill> : <Pill tone="mute">{t("inbox_mode_bot")}</Pill>}
-                  {canReply && (human
+                  {canReply && !legacy && (human
                     ? <Btn sm variant="ghost" type="button" icon="bot" onClick={() => setMode("bot")}>{t("inbox_return")}</Btn>
                     : <Btn sm type="button" icon="users" onClick={() => setMode("human")}>{t("inbox_takeover")}</Btn>)}
                 </div>
@@ -217,7 +217,14 @@ export default function Inbox() {
               </div>
 
               <div className="px-4 pb-4 pt-3 shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]">
-                {!canReply ? (
+                {legacy ? (
+                  /* محادثة قديمة بلا هوية: سطر واحد بدل مربع الرد — لا يُقتطع من مساحة الرسائل */
+                  <p className="m-0 flex items-center gap-2 text-[12.5px] leading-relaxed text-ink-3">
+                    <Icon name="lock" size={14} className="shrink-0" />
+                    {bi("رسائل قديمة من عملاء أرقامهم مخفية (قبل التحديث) — للقراءة فقط. العملاء الجدد بيظهروا كل واحد في محادثة لوحده.",
+                        "Old messages from hidden-number customers (before the update) — read only. New ones get their own conversation.")}
+                  </p>
+                ) : !canReply ? (
                   <p className="m-0 flex flex-wrap items-center gap-2 text-[13px] text-ink-3">
                     <Icon name="lock" size={14} />{t("inbox_readonly")}
                     <a href={BY.urls.pricing} className="font-bold text-au-cyan underline-offset-4 hover:underline">
@@ -226,14 +233,6 @@ export default function Inbox() {
                   </p>
                 ) : (
                   <form onSubmit={send}>
-                    {legacy && (
-                      <p className="mt-0 mb-3 rounded-xl bg-white/[0.05] px-3 py-2 text-[12.5px] leading-relaxed text-ink-2">
-                        {bi("دي رسائل وصلت من عملاء مخفيين أرقامهم قبل التحديث، ومينفعش نعرف مين بعتها عشان نرد عليها. "
-                            + "من دلوقتي كل عميل منهم بيظهر في محادثة لوحده والبوت بيرد عليه.",
-                            "These arrived from customers with hidden numbers before the update, so they can't be answered. "
-                            + "From now on each of them gets their own conversation and the bot replies.")}
-                      </p>
-                    )}
                     {windowClosed && (
                       <p className="mt-0 mb-3 rounded-xl bg-yellow-400/10 px-3 py-2 text-[12.5px] text-yellow-200">
                         {t("inbox_wa_window")}{" "}
@@ -242,12 +241,12 @@ export default function Inbox() {
                     )}
                     <div className="flex items-end gap-2">
                       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2}
-                                disabled={busy || windowClosed || legacy} placeholder={t("inbox_ph")}
+                                disabled={busy || windowClosed} placeholder={t("inbox_ph")}
                                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
                                 className="min-h-[46px] w-full flex-1 resize-none rounded-xl bg-black/25 px-3.5 py-2.5 text-[14px]
                                            text-ink outline-none shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
                                            focus:shadow-[inset_0_0_0_1px_rgb(124_108_246/0.8)]" />
-                      <Btn type="submit" icon="rocket" disabled={busy || windowClosed || legacy || (!text.trim() && !asset)}>
+                      <Btn type="submit" icon="rocket" disabled={busy || windowClosed || (!text.trim() && !asset)}>
                         {t("inbox_send")}
                       </Btn>
                     </div>
