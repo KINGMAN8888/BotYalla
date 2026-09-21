@@ -4241,6 +4241,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
         "flashes": [{"c": c, "m": m} for c, m in get_flashed_messages(with_categories=True)],
         "urls": {
             "dashboard": url_for("dashboard"), "pricing": url_for("pricing"),
+            "subscribe": "/subscribe/",              # + <plan>?cycle= — تبديل الدورة في صفحة الدفع
             "billing": url_for("billing"), "account": url_for("account"),
             "wallet": url_for("wallet_page"),
             "logout": url_for("logout"), "login": url_for("login"),
@@ -4616,12 +4617,67 @@ def segment_page(code):
         "demo": [{"me": me, "text": t_} for me, t_ in S["demo"]],
         "bots": _official_bots(lang, code),
     }
+    if code in segments.CASE_SEGMENTS:              # نموذج طلب الحالة المرجعية (شرائح B2B)
+        payload["segment"]["caseStudy"] = True
+        payload["csrf"] = _csrf_token()
     payload["others"] = [{"code": c, "icon": segments.SEGMENTS[c]["icon"],
                           "name": segments.text(c, lang)["name"], "url": url_for("segment_page", code=c)}
                          for c in segments.ORDER if c != code]
     seo = _seo(lang, f"{S['name']} — {i18n.t('lp2_seg_title_tail', lang)} · BotYalla", S["sub"][:158],
                url_for("segment_page", code=code))
     return _render_public(payload, seo)
+
+
+@app.route("/case-study")
+def case_study():
+    """رابط قصير للإعلانات ← نموذج الحالة المرجعية في صفحة المصانع."""
+    return redirect(url_for("segment_page", code="factory") + "#case")
+
+
+_PHONE_RE = _re.compile(r"^\+?\d{8,15}$")
+
+
+@app.route("/case-study/lead", methods=["POST"])
+def case_study_lead():
+    """نموذج «الحالة المرجعية» (شرائح B2B): يحفظ العميل المحتمل مع نص موافقته ووقتها
+    (قانون 151/2020)، ويُنبّه فريق المبيعات على تليجرام، ويرجّع روابط البوت الرسمي.
+
+    **لا يرسل الملف لرقم العميل من هنا:** رسالة يبدأها النشاط لرقم لم يراسلنا تحتاج
+    قالباً معتمَداً من Meta، والالتفاف عليها يُسقط جودة الرقم الرسمي. العميل يضغط
+    «استلمها على واتساب» فيبدأ هو المحادثة، والبوت يرسل الملف (flow_engine._send_case_study)."""
+    import segments, platform_kb
+    lang = session.get("lang", i18n.DEFAULT)
+    ar = lang != "en"
+    if _rate_limited(request.remote_addr or "?", limit=5, window=3600, bucket="case_lead"):
+        return jsonify(ok=False, error=("محاولات كتير — جرّب بعد شوية." if ar else
+                                        "Too many attempts — try again later.")), 429
+    d = request.get_json(silent=True) or {}
+    clean = lambda k, n: str(d.get(k) or "").strip()[:n]
+    name, company, role = clean("name", 80), clean("company", 120), clean("role", 80)
+    phone = _re.sub(r"[\s\-()]", "", clean("phone", 25))
+    seg = d.get("segment") if d.get("segment") in segments.CASE_SEGMENTS else "factory"
+    if not (name and company and _PHONE_RE.match(phone)):
+        return jsonify(ok=False, error=("اكتب الاسم والشركة ورقم واتساب صحيح." if ar else
+                                        "Enter your name, company and a valid WhatsApp number.")), 400
+    if d.get("consent") is not True:
+        return jsonify(ok=False, error=("لازم توافق على التواصل معاك عشان نبعتلك الحالة." if ar else
+                                        "Please agree to be contacted so we can send it.")), 400
+    consent = ("أوافق على تواصل BotYalla معي على واتساب بخصوص طلبي، ويمكنني إلغاء ذلك في أي وقت."
+               if ar else "I agree that BotYalla may contact me on WhatsApp about my request; I can opt out anytime.")
+    lead = {"source": "case_study", "segment": seg, "name": name, "company": company,
+            "role": role, "phone": phone, "consent": consent, "consent_at": int(_time.time()),
+            "lang": lang}
+    row = platform_kb.official_bot()
+    if row:
+        try:
+            db.add_lead(row["id"], 0, lead)          # يظهر في «العملاء المحتملون» للبوت الرسمي + تصديره
+        except Exception:
+            log.exception("case study lead: store failed")
+    notify_admins(f"🏭 طلب الحالة المرجعية / Case study lead\n👤 {name} — {role or '-'}\n🏢 {company}"
+                  f"\n📱 +{phone.lstrip('+')}\n🎯 {seg}")
+    AN.queue(session, "case_lead", segment=seg)
+    bots = _official_bots(lang, segments.CASE)
+    return jsonify(ok=True, wa=(bots.get("wa") or {}).get("url"), tg=(bots.get("tg") or {}).get("url"))
 
 
 @app.route("/")

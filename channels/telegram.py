@@ -21,6 +21,10 @@ class TelegramChannel(Channel):
         chat_id = self._extract_chat_id(peer)
         await self.bot.send_message(chat_id=chat_id, text=text)
 
+    async def send_document_link(self, peer: str, url: str, filename: str, caption: str = ""):
+        chat_id = self._extract_chat_id(peer)
+        await self.bot.send_document(chat_id=chat_id, document=url, caption=caption[:1024] or None)
+
     async def send_buttons(self, peer: str, text: str, options: list):
         chat_id = self._extract_chat_id(peer)
         kb = ReplyKeyboardMarkup(_rows(options), resize_keyboard=True, one_time_keyboard=True)

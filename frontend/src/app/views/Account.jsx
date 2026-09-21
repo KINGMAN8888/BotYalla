@@ -711,7 +711,7 @@ export function Pricing() {
   // المعرّفات هنا لا بد أن تطابق `plans.ORDER` في الخادم — أي معرّف قديم يترك
   // البطاقة بأيقونة افتراضية والشارة معلّقة بلا أن يكسر شيئاً ظاهراً.
   const icons = { free: "bot", merchant: "store", whatsapp: "phone", agency: "crown" };
-  const [cycle, setCycle] = useState("monthly");
+  const [cycle, setCycle] = useState("annual");         // السنوي افتراضياً — المعادل الشهري ظاهر
   const annual = cycle === "annual";
   const fill = (k, n) => t(k).replace("{n}", n);
   const topSave = plans.reduce((m, p) => Math.max(m, p.annual_saving_pct || 0), 0);
@@ -737,6 +737,11 @@ export function Pricing() {
                         ? "bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] text-[#07090F]"
                         : "text-ink-3 hover:text-ink-2")}>
               {t(c === "annual" ? "cycle_annual" : "cycle_monthly")}
+              {c === "annual" && topSave > 0 && (
+                <span className="ms-1.5 rounded-full bg-au-teal px-1.5 py-0.5 text-[10.5px] font-extrabold text-[#04140E]">
+                  −{topSave}%
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -896,6 +901,13 @@ export function Subscribe() {
         </div>
         <div className="mt-2 text-[12.5px] text-ink-3">
           {t("sub_cycle")}: {t(annual ? "cycle_annual" : "cycle_monthly")} ({days} {BY.lang === "ar" ? "يوم" : "days"}) · {t("pay_secure_note")}
+          {/* السنوي افتراضي في صفحة الأسعار — فالتبديل متاح هنا أيضاً قبل الدفع، لا مفاجأة بالمبلغ */}
+          {" · "}
+          <a href={`${BY.urls.subscribe}${planId}?cycle=${annual ? "monthly" : "annual"}`}
+             className="font-bold text-au-cyan underline">
+            {annual ? bi("ادفع شهرياً بدلاً من ذلك", "Pay monthly instead")
+                    : bi("وفّر بالدفع السنوي", "Save with annual billing")}
+          </a>
         </div>
         {/* نقل الرصيد يُعرض قبل الدفع لا بعده — المشترك يعرف ما سيحدث لأيامه المدفوعة */}
         {carry && carry.credit > 0 && (

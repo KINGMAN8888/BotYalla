@@ -10,7 +10,9 @@ import { BY, t, Icon, Reveal, GlassCard, fill, num } from "./ui.jsx";
 
 export default function PricingPublic() {
   const plans = BY.plans || [];
-  const [cycle, setCycle] = useState("monthly");
+  // السنوي افتراضياً (خطة النمو: تدفق نقدي) — والسعر الشهري المعادل ونسبة التوفير ظاهران
+  // تحته، والمبدّل متاح في صفحة الدفع أيضاً: لا مفاجأة بمبلغ أكبر
+  const [cycle, setCycle] = useState("annual");
   const annual = cycle === "annual";
   const top = plans.reduce((m, p) => Math.max(m, p.annual_saving_pct || 0), 0);
   const authed = !!(BY.auth && BY.auth.in);
@@ -43,6 +45,11 @@ export default function PricingPublic() {
                   transition={{ type: "spring", stiffness: 420, damping: 34 }} />
               )}
               <span className="relative">{t(c === "annual" ? "lp2_annual" : "lp2_monthly")}</span>
+              {c === "annual" && top > 0 && (
+                <span className="relative ms-2 rounded-full bg-au-teal px-2 py-0.5 text-[11px] font-extrabold text-[#04140E]">
+                  −{top}%
+                </span>
+              )}
             </button>
           ))}
         </div>

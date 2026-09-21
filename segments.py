@@ -157,8 +157,39 @@ SEGMENTS = {
             "welcome": "Welcome 👋 You run a brand or online store — BotYalla replies to your ad messages instantly and closes the order with the address.\nWhat do you need today? 👇",
         },
     },
+    "agency": {
+        "icon": "crown",
+        "ar": {
+            "name": "وكالات التسويق والمطوّرين",
+            "h1": "بيع بوتات باسمك لعملائك — واحنا نشغّلها",
+            "sub": "باقة الوكالة بالبطاقة البيضاء: لوحة تحكم واحدة لكل بوتات عملائك على تليجرام وواتساب، بدون شعار BotYalla، وأنت تحدد سعرك.",
+            "pains": ["كل عميل عايز بوت ومفيش وقت تبرمج من الصفر", "تكلفة سيرفرات وصيانة لكل بوت لوحده", "العميل يشوف اسم أداة تانية فيروح لها مباشرة"],
+            "wins": ["بوتات عملائك من لوحة تحكم واحدة", "بدون شعار BotYalla (بطاقة بيضاء)", "قوالب جاهزة: متجر وحجز وأسئلة شائعة وخدمة عملاء", "برنامج شركاء بعمولة على كل عميل تجيبه"],
+            "demo": [(True, "عندي 5 عملاء محتاجين بوت واتساب — أبدأ إزاي؟"),
+                     (False, "باقة الوكالة بتديك بوتات كتير من لوحة واحدة وباسمك — أبعتلك التفاصيل؟")],
+            "welcome": "أهلاً بيك 👋 شايف إنك وكالة أو مطوّر — BotYalla بيخليك تبيع بوتات تليجرام وواتساب باسمك لعملائك من لوحة واحدة.\nمحتاج إيه النهارده؟ 👇",
+            "ai": "The customer is a marketing agency or freelancer. Stress: the Agency plan (white-label, many client bots from one dashboard, no BotYalla branding, they set their own price), ready templates, and the partner program. Never promise revenue figures.",
+        },
+        "en": {
+            "name": "Marketing agencies & developers",
+            "h1": "Sell bots under your own brand — we run them",
+            "sub": "The white-label Agency plan: one dashboard for all your clients' Telegram and WhatsApp bots, no BotYalla branding, and you set your own price.",
+            "pains": ["Every client wants a bot and there's no time to build from scratch", "Server and maintenance costs for each bot", "Clients see another tool's name and go to it directly"],
+            "wins": ["All client bots from one dashboard", "No BotYalla branding (white-label)", "Ready templates: store, booking, FAQ, customer service", "Partner program with commission on every client you bring"],
+            "demo": [(True, "I have 5 clients who need a WhatsApp bot — how do I start?"),
+                     (False, "The Agency plan gives you many bots from one dashboard under your brand — shall I send the details?")],
+            "welcome": "Welcome 👋 You're an agency or developer — BotYalla lets you sell Telegram and WhatsApp bots under your own brand from one dashboard.\nWhat do you need today? 👇",
+        },
+    },
 }
-ORDER = ("market", "gold", "factory", "company", "center", "brand")
+ORDER = ("market", "gold", "factory", "company", "center", "brand", "agency")
+
+# «الحالة المرجعية النموذجية» (business/BotYalla_Case_Study.pdf): رمز بداية لا شريحة — العميل
+# يضغط زر «استلمها على واتساب» فيبدأ هو المحادثة (نافذة مجانية بلا قالب، سياسة Meta)،
+# والبوت الرسمي يرسل الملف فوراً. لا يُرسَل الملف لرقم لم يبدأ المحادثة أبداً.
+CASE = "case"
+CASE_SEGMENTS = ("factory", "company", "agency")      # صفحات يظهر فيها نموذج طلب الحالة
+CASE_PDF = "/static/BotYalla_Case_Study.pdf"
 _TAG = re.compile(r"(?:#|seg-)([a-z]{2,15})\b")
 
 

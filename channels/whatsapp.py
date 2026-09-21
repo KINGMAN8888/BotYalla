@@ -212,6 +212,14 @@ class WhatsAppChannel(Channel):
             log.exception("WhatsApp media upload failed")
             return None
 
+    async def send_document_link(self, peer, url, filename, caption=""):
+        """Cloud API تجلب الملف من الرابط بنفسها — لا رفع ولا مرجع يُخزَّن."""
+        p = self._base(peer, "document")
+        p["document"] = {"link": url, "filename": filename[:240]}
+        if caption:
+            p["document"]["caption"] = caption[:1024]
+        return await self._post(p)
+
     async def send_media(self, peer, asset, bot_id, caption=None, options=None):
         """حتى 3 خيارات قصيرة (≤20 حرفاً): رسالة تفاعلية بترويسة صورة/فيديو وأزرار
         تحتها — «الفيديو التفاعلي». أكثر من ذلك: الوسائط ثم الخيارات قائمة مرقّمة

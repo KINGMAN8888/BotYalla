@@ -95,6 +95,15 @@ class LoggedChannel:
         self._log(peer, (caption or "") + tail, r, "media")
         return r
 
+    async def send_document_link(self, peer, url, filename, caption=""):
+        fn = getattr(self._c, "send_document_link", None)
+        if fn:
+            r = await fn(peer, url, filename, caption)
+        else:                                   # قناة بلا دعم للمستندات: الرابط نصاً
+            r = await self._c.send_text(peer, f"{caption}\n{url}".strip())
+        self._log(peer, f"📄 {filename} — {caption}".strip(" —"), r, "media")
+        return r
+
     async def send_typing(self, peer):
         fn = getattr(self._c, "send_typing", None)
         if fn:
@@ -271,6 +280,22 @@ def _platform_facts(bot_row, cfg):
 def _lang_of(text):
     import ai_agent
     return "en" if ai_agent._is_en(text) else "ar"
+
+
+async def _send_case_study(channel, peer):
+    """الحالة المرجعية لمن ضغط «استلمها على واتساب/تليجرام» — هو بدأ المحادثة، فالإرسال
+    داخل نافذة يفتحها العميل (لا رسالة يبدأها النشاط). الرابط من PUBLIC_URL وحدها."""
+    import os, segments
+    base = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    if not base.startswith("https://"):
+        return
+    try:
+        await channel.send_document_link(
+            peer, base + segments.CASE_PDF, "BotYalla_Case_Study.pdf",
+            "📄 الحالة المرجعية النموذجية من BotYalla — نموذج محسوب بأرقام السوق المعلنة، "
+            "مش نتايج عميل. بتشرح إزاي البوت بيوفّر وقت ويقفل طلبات.")
+    except Exception:
+        log.exception("case study document failed for %s", peer)
 
 
 def _segment_of(bot_id, peer, text=""):
@@ -799,6 +824,8 @@ async def _ai_mode(bot_row, cfg, raw, channel, peer, msg, f):
         db.clear_chat_state(bot_id, peer)
         seg = (msg.get("start_arg") or "")[4:] if (msg.get("start_arg") or "").startswith("seg-") else None
         seg = seg or _segment_of(bot_id, peer, msg.get("text", ""))
+        if seg == "case" and _official(bot_row, cfg):
+            await _send_case_study(channel, peer)
         greeting, starters = _welcome_of(bot_row, cfg, f, msg.get("text", ""), seg)
         await _greet(bot_row, cfg, channel, peer, greeting, starters)
         return True

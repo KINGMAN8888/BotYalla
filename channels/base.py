@@ -23,6 +23,10 @@ class Channel:
         تدعمه لا تفعل شيئاً."""
         return None
 
+    async def send_document_link(self, peer: str, url: str, filename: str, caption: str = ""):
+        """مستند (PDF) من رابط عام. الافتراضي للقنوات بلا دعم: الرابط نصاً."""
+        await self.send_text(peer, f"{caption}\n{url}".strip())
+
     async def send_media(self, peer: str, asset: dict, bot_id: int, caption: str = None,
                          options: list = None):
         """صورة أو فيديو من مكتبة الوسائط (asset = صفّ assets)، مع أزرار اختيارية
