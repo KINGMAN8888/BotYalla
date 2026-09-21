@@ -38,7 +38,7 @@ DEFAULT_CS_FLOW = {
 RESPONSE_MODES = ("flow", "hybrid", "ai")
 _BG = set()                     # مهام خلفية قصيرة (علامة القراءة) — مرجع يمنع جمعها قبل انتهائها
 HUMAN_IDLE = 12 * 3600          # تولٍّ منسيّ يعود للبوت بعدها
-START_SOURCES = ("qr", "link", "poster", "share")
+START_SOURCES = ("qr", "link", "poster", "share", "ads")   # ads: روابط إعلانات ماسنجر/إنستجرام
 AI_PRICE_FALLBACK = 25          # قرشاً للرد فوق الحصة — لو ضاع الإعداد
 
 

@@ -493,8 +493,8 @@ export function Analytics() {
       <Card className="mt-4">
         <SectionTitle icon="link">{t("src_title")}</SectionTitle>
         {d && Object.values(d.sources || {}).some(Boolean) ? (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {[["qr", "grid"], ["link", "link"], ["poster", "image"], ["share", "users"]].map(([k, ic]) => (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            {[["qr", "grid"], ["link", "link"], ["poster", "image"], ["share", "users"], ["ads", "megaphone"]].map(([k, ic]) => (
               <div key={k} className="rounded-2xl bg-white/[0.03] p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
                 <Icon name={ic} size={18} className="text-au-cyan" />
                 <div className="mt-2 text-[24px] font-extrabold text-ink tnum">{num((d.sources || {})[k] || 0)}</div>

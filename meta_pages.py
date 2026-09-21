@@ -67,7 +67,7 @@ def _err(r):
         return f"HTTP {r.status_code}"
 
 
-IG_FIELDS = "name,instagram_business_account{id,username},connected_instagram_account{id,username}"
+IG_FIELDS = "name,username,instagram_business_account{id,username},connected_instagram_account{id,username}"
 
 
 def _ig_of(info):
@@ -141,7 +141,7 @@ def connect(page_id, token, app_id="", secret="", ig_hint=""):
                    if rejected else "")
     return {"page_token": page_token, "name": info.get("name") or page_id,
             "ig_id": str(ig.get("id") or ""), "ig_username": ig.get("username") or "",
-            "ig_reason": ig_reason, "warning": warning}
+            "ig_reason": ig_reason, "warning": warning, "username": info.get("username") or ""}
 
 
 def _subscribe(c, page_id, page_token, fields):

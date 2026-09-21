@@ -1380,6 +1380,7 @@ def bot_detail(bot_id):
                        "pay": _pay_state(b),
                        "plan": p, "usage": usage,
                        "links": _bot_links(b),
+                       "meta": _meta_panel(b),
                        "isNew": bool(request.args.get("new")),
                        "unread": db.unread_total(bot_id),
                        "versions": db.list_config_versions(bot_id),
@@ -3252,7 +3253,8 @@ def _meta_make_bots(owner_id, res, page_id, want_fb, want_ig, name, template, of
         if not (want_fb if ch == "messenger" else want_ig) or not own:
             continue
         cfg = T.initial_config(name, template, {"username": handle, "name": res["name"]}, "")
-        cfg.update(page_token=sealed, page_id=page_id, created_via="meta_connect")
+        cfg.update(page_token=sealed, page_id=page_id, created_via="meta_connect",
+                   page_username=res.get("username") or "")
         if official:
             cfg.update(platform_kb=True, response_mode="ai")
         if res.get("warning"):
@@ -3261,7 +3263,8 @@ def _meta_make_bots(owner_id, res, page_id, want_fb, want_ig, name, template, of
         if existing and existing["owner_id"] == owner_id:
             # إعادة ربط نفس الحساب: تحديث التوكن والحقول فقط، لا بوت مكرر
             cur = json.loads(existing["config_json"] or "{}")
-            cur.update(page_token=sealed, page_id=page_id, meta_setup_warning=res.get("warning", "")[:500])
+            cur.update(page_token=sealed, page_id=page_id, meta_setup_warning=res.get("warning", "")[:500],
+                       page_username=res.get("username") or cur.get("page_username", ""))
             db.update_bot_config(existing["id"], cur)
             made.append({"id": existing["id"], "channel": ch, "url": url_for("bot_detail", bot_id=existing["id"]),
                          "updated": True})
@@ -3844,13 +3847,14 @@ def sync_telegram(bot_id):
 #  الوصول للبوت: رابط مباشر · QR · ملصق للطباعة  (TESTER_FEEDBACK_PLAN §2)
 # ============================================================================
 _QR_SOURCES = ("qr", "poster", "share")
-_PEER_RE = _re.compile(r"^(tg|wa):\d{1,20}\Z")
+_PEER_RE = _re.compile(r"^(tg|wa|fb|ig):\d{1,20}\Z")
 
 
 def _uses_engine(b):
     """هل يمرّ البوت بمحرك الفلو (فتعمل عليه أوضاع الذكاء الاصطناعي والوسائط)؟
     واتساب كله يمرّ به؛ وعلى تليجرام قوالب المحادثة وحدها."""
-    return (b.get("channel") or "telegram") == "whatsapp" or b.get("template") in ai.FLOW_TEMPLATES
+    return (b.get("channel") or "telegram") in ("whatsapp", "messenger", "instagram") or \
+        b.get("template") in ai.FLOW_TEMPLATES
 
 
 def _own_asset_id(v):
@@ -3860,6 +3864,22 @@ def _own_asset_id(v):
     except ValueError:
         return None
     return aid if aid > 0 and db.get_asset(aid, owner_id=uid()) else None
+
+
+def _meta_panel(b):
+    """ما تعرضه صفحة بوت ماسنجر/إنستجرام عن الصفحة المربوطة — بلا التوكن (مختوم ولا يغادر)."""
+    ch = b.get("channel") or ""
+    if ch not in ("messenger", "instagram"):
+        return None
+    cfg = json.loads(b.get("config_json") or "{}")
+    page_id = str(cfg.get("page_id") or "")
+    base = os.getenv("PUBLIC_URL", "").strip().rstrip("/") or request.host_url.rstrip("/")
+    return {"channel": ch, "page_id": page_id, "page_name": cfg.get("bot_name") or "",
+            "page_username": cfg.get("page_username") or "",
+            "ig_username": (cfg.get("bot_username") or "").lstrip("@") if ch == "instagram" else "",
+            "warning": cfg.get("meta_setup_warning") or "", "webhook": base + "/wh/meta",
+            "has_token": bool(cfg.get("page_token")),
+            "admin": current_role() == "admin"}
 
 
 def _bot_links(b):
@@ -3875,6 +3895,23 @@ def _bot_links(b):
         return {"kind": "whatsapp", "handle": f"+{digits}", "plain": base,
                 "open": base + "?text=" + _up.quote("start"), "share": base + "?text=" + _up.quote("start"),
                 "qr": url_for("bot_qr", bot_id=b["id"]), "poster": url_for("bot_poster", bot_id=b["id"])}
+    ch = b.get("channel") or "telegram"
+    if ch in ("messenger", "instagram"):
+        # m.me / ig.me يفتحان المحادثة مباشرة، و`ref` يصل في حدث referral فيُحتسب مصدر الدخول
+        # (نفس src-qr · src-poster · src-share التي تقرؤها التحليلات في تليجرام)
+        if ch == "messenger":
+            target = (cfg.get("page_username") or "").strip() or str(cfg.get("page_id") or "").strip()
+            if not target:
+                return None
+            base, handle = f"https://m.me/{target}", (cfg.get("bot_name") or f"m.me/{target}")
+        else:
+            ig = (cfg.get("bot_username") or "").strip().lstrip("@")
+            if not _re.fullmatch(r"[A-Za-z0-9._]{1,30}", ig):
+                return None
+            base, handle = f"https://ig.me/m/{ig}", f"@{ig}"
+        return {"kind": ch, "handle": handle, "plain": base,
+                "open": base + "?ref=src-link", "share": base + "?ref=src-share",
+                "qr": url_for("bot_qr", bot_id=b["id"]), "poster": url_for("bot_poster", bot_id=b["id"])}
     uname = (cfg.get("bot_username") or "").strip().lstrip("@")
     if not _re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", uname):
         return None
@@ -3885,7 +3922,11 @@ def _bot_links(b):
 
 
 def _qr_target(links, src):
-    return f"{links['plain']}?start=src-{src}" if links["kind"] == "telegram" else links["open"]
+    if links["kind"] == "telegram":
+        return f"{links['plain']}?start=src-{src}"
+    if links["kind"] in ("messenger", "instagram"):
+        return f"{links['plain']}?ref=src-{src}"
+    return links["open"]
 
 
 def _qr_svg(data, scale=8, dark="#07090F"):

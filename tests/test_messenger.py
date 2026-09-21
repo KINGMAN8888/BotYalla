@@ -67,7 +67,7 @@ class FakeGraph:
         if url.endswith(f"/{PAGE}/subscribed_apps"):
             return R(200, {"data": [{"id": "1337778974883863", "subscribed_fields": ["messages"]}]})
         if url.endswith(f"/{PAGE}"):
-            body = {"name": "Raghad Store"}
+            body = {"name": "Raghad Store", "username": "raghad.store.eg"}
             if FakeGraph.has_ig:
                 body["instagram_business_account"] = {"id": IG, "username": "raghad.store"}
             return R(200, body)
@@ -411,6 +411,55 @@ class AdminMetaTests(_PageBase):
             self.assertEqual(db.list_meta_events(1)[0]["kind"], "unrouted")
         finally:
             flow_engine.handle_message = orig
+
+
+class BotPageTests(_PageBase):
+    """صفحة بوت ماسنجر/إنستجرام: روابط m.me/ig.me بمصدرها، لوحة الصفحة، وصندوق الوارد."""
+    def bots(self):
+        self.assertTrue(self.connect(1).get_json()["ok"])
+        return db.get_bot_by_token(f"fb:{PAGE}"), db.get_bot_by_token(f"ig:{IG}")
+
+    def test_links_open_the_right_app_with_a_source(self):
+        fb, ig = self.bots()
+        with A.app.test_request_context():
+            lf, li = A._bot_links(fb), A._bot_links(ig)
+        self.assertEqual((lf["kind"], lf["plain"]), ("messenger", "https://m.me/raghad.store.eg"))
+        self.assertEqual((li["kind"], li["plain"], li["handle"]), ("instagram", "https://ig.me/m/raghad.store", "@raghad.store"))
+        self.assertEqual(A._qr_target(lf, "qr"), "https://m.me/raghad.store.eg?ref=src-qr")
+        self.assertTrue(lf["open"].endswith("?ref=src-link"))
+
+    def test_page_id_is_the_fallback_without_a_vanity_name(self):
+        fb, _ = self.bots()
+        cfg = json.loads(fb["config_json"]); cfg.pop("page_username", None)
+        db.update_bot_config(fb["id"], cfg)
+        with A.app.test_request_context():
+            self.assertEqual(A._bot_links(db.get_bot(fb["id"]))["plain"], f"https://m.me/{PAGE}")
+
+    def test_bot_page_shows_the_page_panel_without_the_token(self):
+        fb, _ = self.bots()
+        html = self.client(1).get(f"/bot/{fb['id']}").get_data(as_text=True)
+        self.assertIn('"meta": {"channel": "messenger"', html)
+        self.assertIn("/wh/meta", html)
+        self.assertNotIn("EAA-page-token", html)
+        self.assertEqual(self.client(1).get(f"/bot/{fb['id']}/qr.svg").status_code, 200)
+        poster = self.client(1).get(f"/bot/{fb['id']}/poster").get_data(as_text=True)
+        self.assertIn("Messenger", poster)
+
+    def test_inbox_opens_a_messenger_conversation(self):
+        fb, _ = self.bots()
+        peer = f"fb:{PSID}"
+        db.log_message(fb["id"], peer, "in", "customer", "سلام")
+        r = self.client(1).get(f"/bot/{fb['id']}/inbox?peer={peer}")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(f'"peer": "{peer}"', r.get_data(as_text=True))
+
+    def test_ad_link_ref_becomes_a_counted_source(self):
+        ch = CM.MessengerChannel("fb", PAGE, "t")
+        n = ch.normalize({"entry": [{"id": PAGE, "messaging": [{"sender": {"id": PSID}, "timestamp": 9,
+                          "referral": {"ref": "src-ads", "source": "SHORTLINK"}}]}]})
+        self.assertEqual((n["kind"], n["start_arg"]), ("start", "src-ads"))
+        import flow_engine
+        self.assertEqual(flow_engine._start_source("", "src-ads"), "ads")
 
 
 if __name__ == "__main__":

@@ -154,8 +154,8 @@ function BotCard({ b, i }) {
             {(b.channel || "telegram") === "whatsapp" && (
               <Pill tone="mute"><img src="/static/whatsapp.png" alt="WhatsApp" className="size-[11px] object-contain inline-block" />WA</Pill>
             )}
-            {b.channel === "messenger" && <Pill tone="mute"><Icon name="chat" size={11} />Messenger</Pill>}
-            {b.channel === "instagram" && <Pill tone="mute"><Icon name="camera" size={11} />Instagram</Pill>}
+            {b.channel === "messenger" && <Pill tone="mute"><img src="/static/messenger.svg" alt="" className="size-[11px]" />Messenger</Pill>}
+            {b.channel === "instagram" && <Pill tone="mute"><img src="/static/instagram.svg" alt="" className="size-[11px]" />Instagram</Pill>}
             {b.running ? <Pill tone="on" dot>{t("running")}</Pill> : <Pill tone="off">{t("stopped")}</Pill>}
           </div>
         </div>
@@ -913,7 +913,10 @@ function MetaConnect() {
     <Card className="mb-6 bg-[linear-gradient(125deg,rgb(0_132_255/0.14),rgb(225_48_108/0.12))]
                      shadow-[inset_0_0_0_1px_rgb(0_132_255/0.3)]">
       <h2 className="m-0 flex flex-wrap items-center gap-2.5 text-[19px] font-extrabold text-ink">
-        <Icon name="chat" size={22} className="text-[#4DA3FF]" />
+        <span className="inline-flex items-center -space-x-1.5 rtl:space-x-reverse">
+          <img src="/static/messenger.svg" alt="Messenger" className="size-6" />
+          <img src="/static/instagram.svg" alt="Instagram" className="size-6" />
+        </span>
         {bi("بوت ماسنجر وإنستجرام", "Messenger & Instagram bot")}
         <Pill tone="mute">{bi("تجريبي — للفريق فقط", "Beta — team only")}</Pill>
       </h2>

@@ -643,6 +643,7 @@ T = {
  "src_link":         {"ar": "الرابط", "en": "Link"},
  "src_poster":       {"ar": "الملصق", "en": "Poster"},
  "src_share":        {"ar": "المشاركة", "en": "Shares"},
+ "src_ads":          {"ar": "الإعلانات", "en": "Ads"},
  "src_none":         {"ar": "لسه مفيش زيارات من روابطك — شارك الرابط أو اطبع الملصق.", "en": "No visits from your links yet — share the link or print the poster."},
  # --- وكيل الإعداد ---
  "ai_agent_title":   {"ar": "وكيل الإعداد الذكي", "en": "Smart setup agent"},

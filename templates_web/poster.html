@@ -48,7 +48,7 @@
   <a href="{{ back }}">{{ 'رجوع' if lang=='ar' else 'Back' }}</a>
 </div>
 <main class="sheet">
-  <span class="badge">{{ 'Telegram' if channel=='telegram' else 'WhatsApp' }}</span>
+  <span class="badge">{{ {'telegram': 'Telegram', 'whatsapp': 'WhatsApp', 'messenger': 'Messenger', 'instagram': 'Instagram'}.get(channel, channel) }}</span>
   <h1>{{ name }}</h1>
   <p class="cta">{{ 'امسح الكود وكلّمنا على طول — بنرد 24 ساعة' if lang=='ar' else 'Scan to chat with us — we reply 24/7' }}</p>
   <div class="qr" role="img" aria-label="QR {{ handle }}">{{ qr }}</div>

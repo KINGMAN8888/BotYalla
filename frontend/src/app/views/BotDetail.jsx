@@ -7,10 +7,18 @@ import { AssetPicker, postJSON } from "../media.jsx";
 
 const fill = (k, o) => Object.entries(o).reduce((a, [x, y]) => a.replace(`{${x}}`, y), t(k));
 
-/* شعار القناة (صور المالك في static/) */
-const ChannelLogo = ({ isWa }) => (isWa
-  ? <img src="/static/whatsapp.png" alt="WhatsApp" className="size-[12px] object-contain inline-block" />
-  : <img src="/static/Telegram.svg.png" alt="Telegram" className="size-[12px] object-contain inline-block" />);
+/* شعار القناة واسمها (الصور في static/) — تليجرام · واتساب · ماسنجر · إنستجرام */
+export const CHANNELS = {
+  telegram:  { logo: "/static/Telegram.svg.png", name: "Telegram" },
+  whatsapp:  { logo: "/static/whatsapp.png",     name: "WhatsApp" },
+  messenger: { logo: "/static/messenger.svg",    name: "Messenger" },
+  instagram: { logo: "/static/instagram.svg",    name: "Instagram" },
+};
+const chOf = (bot) => CHANNELS[bot.channel] ? bot.channel : "telegram";
+const ChannelLogo = ({ channel, isWa, size = 12 }) => {
+  const c = CHANNELS[channel || (isWa ? "whatsapp" : "telegram")] || CHANNELS.telegram;
+  return <img src={c.logo} alt={c.name} style={{ width: size, height: size }} className="inline-block object-contain" />;
+};
 
 /* ============================================================== قائمة «المزيد»
    رأس الصفحة كان صفّاً من ستة أزرار ينكسر على الموبايل. الأساسي ظاهر،
@@ -43,14 +51,16 @@ const MENU_ROW = "flex w-full items-center gap-2.5 rounded-xl border-0 bg-transp
 /* ======================================================== «بوتك جاهز للعملاء» */
 function LiveCard({ bot, links, isNew }) {
   const [copied, setCopied] = useState(false);
-  const isWa = (bot.channel || "telegram") === "whatsapp";
+  const ch = chOf(bot);
+  const openLabel = { messenger: bi("افتح في ماسنجر", "Open in Messenger"),
+                      instagram: bi("افتح في إنستجرام", "Open in Instagram") }[ch] || t("live_open");
 
   if (!links) {
     return (
       <Card className="mb-6">
         <SectionTitle icon="link">{t("live_title")}</SectionTitle>
         <p className="m-0 text-[13px] text-ink-3">{t("live_no_user")}</p>
-        {!isWa && (
+        {ch === "telegram" && (
           <Form action={`/bot/${bot.id}/sync-telegram`} className="mt-4">
             <Btn variant="ghost" sm icon="link" type="submit">{t("tg_sync_btn")}</Btn>
           </Form>
@@ -86,12 +96,12 @@ function LiveCard({ bot, links, isNew }) {
         </a>
         <div className="min-w-0 text-center sm:text-start">
           <SectionTitle icon="rocket">{t("live_title")}</SectionTitle>
-          <div dir="ltr" className="-mt-2 mb-2 truncate text-[22px] font-extrabold tracking-tight text-ink sm:text-start">
-            {links.handle}
+          <div dir="ltr" className="-mt-2 mb-2 flex items-center justify-center gap-2 truncate text-[22px] font-extrabold tracking-tight text-ink sm:justify-start">
+            <ChannelLogo channel={ch} size={22} />{links.handle}
           </div>
           <p className="mt-0 mb-4 text-[13px] leading-relaxed text-ink-3">{t("live_sub")}</p>
           <div className="flex flex-wrap justify-center gap-2 sm:justify-start">
-            <Btn variant="green" sm icon="play" href={links.open} target="_blank" rel="noopener">{t("live_open")}</Btn>
+            <Btn variant="green" sm icon="play" href={links.open} target="_blank" rel="noopener">{openLabel}</Btn>
             <Btn variant="ghost" sm icon={copied ? "check" : "copy"} type="button" onClick={copy}>{copied ? t("live_copied") : t("live_copy")}</Btn>
             <Btn variant="ghost" sm icon="link" type="button" onClick={share}>{t("live_share")}</Btn>
             <Btn variant="ghost" sm icon="image" href={links.poster} target="_blank" rel="noopener">{t("live_poster")}</Btn>
@@ -832,6 +842,125 @@ function WhatsAppPanel({ bot, usage }) {
   );
 }
 
+/* =================================================== ماسنجر/إنستجرام: الصفحة المربوطة
+   هوية الصفحة وروابطها الرسمية · روابط الإعلانات بمصدرها · قواعد Meta كما يطبّقها البوت. */
+function MetaPanel({ bot, info, links }) {
+  const [copied, setCopied] = useState("");
+  if (!info) return null;
+  const ig = info.channel === "instagram";
+  const page = info.page_username || info.page_id;
+  const fbUrl = `https://www.facebook.com/${page}`;
+  const inboxUrl = `https://business.facebook.com/latest/inbox/${ig ? "instagram" : "messenger"}?asset_id=${info.page_id}`;
+  const igUrl = info.ig_username ? `https://www.instagram.com/${info.ig_username}` : "";
+  const base = links ? links.plain : "";
+  const adLinks = base ? [
+    [bi("إعلانات فيسبوك وإنستجرام", "Facebook & Instagram ads"), `${base}?ref=src-ads`],
+    [bi("منشور أو ستوري", "Post or story"), `${base}?ref=src-share`],
+    [bi("البايو والموقع", "Bio & website"), `${base}?ref=src-link`],
+  ] : [];
+  const copy = async (u) => {
+    try { await navigator.clipboard.writeText(u); setCopied(u); setTimeout(() => setCopied(""), 1500); }
+    catch { window.prompt(bi("انسخ الرابط", "Copy the link"), u); }
+  };
+  const tint = ig ? "bg-[linear-gradient(125deg,rgb(255_0_105/0.16),rgb(118_56_250/0.14))] shadow-[inset_0_0_0_1px_rgb(255_0_105/0.3)]"
+                  : "bg-[linear-gradient(125deg,rgb(0_153_255/0.16),rgb(160_51_255/0.13))] shadow-[inset_0_0_0_1px_rgb(0_153_255/0.3)]";
+
+  return (
+    <>
+      <Card className={"mb-6 " + tint}>
+        <div className="flex flex-wrap items-center gap-4">
+          <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-white/95 shadow-[0_12px_30px_-12px_rgb(0_0_0/0.6)]">
+            <ChannelLogo channel={info.channel} size={34} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[12.5px] font-bold text-ink-3">
+              {ig ? bi("حساب إنستجرام احترافي مربوط بصفحة", "Instagram professional account linked to Page")
+                  : bi("صفحة فيسبوك — ماسنجر", "Facebook Page — Messenger")}
+            </div>
+            <div className="truncate text-[20px] font-extrabold text-ink">
+              {ig && info.ig_username ? `@${info.ig_username}` : (info.page_name || info.page_id)}
+            </div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[12px] text-ink-3" dir="ltr">
+              <ChannelLogo channel="messenger" size={13} />
+              <span className="font-mono">{info.page_name ? `${info.page_name} · ` : ""}{info.page_id}</span>
+            </div>
+          </div>
+          {info.has_token
+            ? <Pill tone="on" dot>{bi("متصلة بـ Meta", "Connected to Meta")}</Pill>
+            : <Pill tone="warn">{bi("التوكن ناقص", "Token missing")}</Pill>}
+        </div>
+        <div className="mt-5 flex flex-wrap gap-2">
+          <Btn sm variant="ghost" href={fbUrl} target="_blank" rel="noopener">
+            <img src="/static/facebook.svg" alt="" className="size-4" />{bi("الصفحة على فيسبوك", "Page on Facebook")}
+          </Btn>
+          {igUrl && (
+            <Btn sm variant="ghost" href={igUrl} target="_blank" rel="noopener">
+              <img src="/static/instagram.svg" alt="" className="size-4" />{bi("الحساب على إنستجرام", "Account on Instagram")}
+            </Btn>
+          )}
+          <Btn sm variant="ghost" href={inboxUrl} target="_blank" rel="noopener">
+            <Icon name="inbox" size={15} />{bi("صندوق Meta Business Suite", "Meta Business Suite inbox")}
+          </Btn>
+          {info.admin && (
+            <Btn sm variant="ghost" icon="settings" href="/admin/meta">{bi("التحكم في الصفحة", "Page control")}</Btn>
+          )}
+        </div>
+        {info.warning && (
+          <p className="mt-4 mb-0 rounded-xl bg-yellow-400/[0.08] px-4 py-3 text-[12.5px] leading-relaxed text-yellow-200">
+            <Icon name="shield" size={13} className="me-1 align-[-2px]" />
+            {bi("ملحوظة من Meta عند الربط: ", "Note from Meta at connection: ")}<span dir="ltr">{info.warning}</span>
+          </p>
+        )}
+      </Card>
+
+      <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card>
+          <SectionTitle icon="megaphone">{bi("روابط الإعلانات والمنشورات", "Ad & post links")}</SectionTitle>
+          <p className="mt-0 mb-3 text-[12.5px] leading-relaxed text-ink-3">
+            {bi("كل رابط بيفتح محادثة مع البوت على طول، والتحليلات بتعرف العميل جه منين.",
+                "Each link opens a chat with the bot directly, and analytics know where the customer came from.")}
+          </p>
+          {adLinks.length ? adLinks.map(([label, u]) => (
+            <div key={u} className="mb-2 flex items-center gap-2 rounded-xl bg-black/25 px-3 py-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+              <div className="min-w-0 flex-1">
+                <div className="text-[12px] font-bold text-ink-2">{label}</div>
+                <code className="block truncate text-[12px] text-au-cyan" dir="ltr">{u}</code>
+              </div>
+              <Btn sm variant="ghost" icon={copied === u ? "check" : "copy"} type="button" onClick={() => copy(u)}>
+                {copied === u ? t("live_copied") : t("live_copy")}
+              </Btn>
+            </div>
+          )) : <p className="m-0 text-[12.5px] text-ink-3">{t("live_no_user")}</p>}
+        </Card>
+
+        <Card>
+          <SectionTitle icon="shield">{bi("إزاي البوت بيشتغل مع Meta", "How the bot works with Meta")}</SectionTitle>
+          <ul className="m-0 flex list-none flex-col gap-2.5 p-0 text-[12.5px] leading-relaxed text-ink-2">
+            {[
+              bi("بيرد فوراً على أي رسالة، وبيدّي أزرار سريعة (حتى 13 اختيار).", "Replies instantly to every message with quick-reply buttons (up to 13)."),
+              bi("الرد الحر مسموح 24 ساعة بعد آخر رسالة من العميل بس — البث والرد اليدوي بيلتزموا بده لوحدهم.",
+                 "Free replies are allowed only within 24 hours of the customer's last message — broadcasts and manual replies follow this automatically."),
+              bi("لو رديت إنت من Meta Business Suite أو من الموبايل، البوت بيسكت في المحادثة دي وردّك بيظهر في صندوق الوارد.",
+                 "If you reply from Meta Business Suite or your phone, the bot goes quiet in that chat and your reply shows in the inbox."),
+              bi("لو المحادثة اتحوّلت لصندوق الصفحة، البوت بيسجّل الرسايل من غير ما يرد.", "If the chat is handed to the Page inbox, the bot logs messages without replying."),
+              ig ? bi("إنستجرام مش بيستقبل ملفات — المستندات بتتبعت كرابط.", "Instagram doesn't accept files — documents are sent as links.")
+                 : bi("ماسنجر بيستقبل صور وملفات من العميل وبتظهر في صندوق الوارد.", "Messenger accepts customer photos and files, shown in the inbox."),
+            ].map((x, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <Icon name="check" size={14} className="mt-0.5 shrink-0 text-au-teal" />{x}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-4 rounded-xl bg-white/[0.04] p-3 text-[12px] text-ink-3">
+            <div className="mb-1 font-bold text-ink-2">{bi("عنوان الويبهوك", "Webhook URL")}</div>
+            <code className="block overflow-x-auto text-au-cyan" dir="ltr">{info.webhook}</code>
+          </div>
+        </Card>
+      </div>
+    </>
+  );
+}
+
 /* زرّ «محادثة» بجانب كل عميل — يفتح صندوق الوارد على محادثته */
 function ChatBtn({ botId, peer }) {
   if (!peer) return null;
@@ -849,7 +978,10 @@ export default function BotDetail() {
   const cfg = bot.config || {};
   const meta = BY.templates.find((x) => x.k === bot.template) || { icon: "bot", label: bot.template };
   const isFlow = ["flow", "customer_service", "feedback", "support"].includes(bot.template);
-  const isWa = (bot.channel || "telegram") === "whatsapp";
+  const ch = chOf(bot);
+  const isWa = ch === "whatsapp";
+  const isMeta = ch === "messenger" || ch === "instagram";
+  const { meta: metaInfo = null } = P;
 
   return (
     <>
@@ -897,14 +1029,23 @@ export default function BotDetail() {
       <div className="mb-6 flex flex-wrap items-center gap-2">
         {bot.running ? <Pill tone="on" dot>{t("running")}</Pill> : <Pill tone="off">{t("stopped")}</Pill>}
         <Pill tone="mute">
-          <ChannelLogo isWa={isWa} />
-          {isWa ? "WhatsApp" : "Telegram"}
+          <ChannelLogo channel={ch} />
+          {CHANNELS[ch].name}
         </Pill>
-        {cfg.bot_username && (
+        {!isMeta && cfg.bot_username && (
           <Pill tone="mute">
-            <ChannelLogo isWa={isWa} />
+            <ChannelLogo channel={ch} />
             {isWa ? cfg.bot_username : `@${cfg.bot_username}`}
           </Pill>
+        )}
+        {isMeta && metaInfo && (
+          <Pill tone="mute">
+            <ChannelLogo channel="messenger" />
+            {metaInfo.page_name || metaInfo.page_id}
+          </Pill>
+        )}
+        {ch === "instagram" && metaInfo && metaInfo.ig_username && (
+          <Pill tone="mute"><ChannelLogo channel="instagram" />@{metaInfo.ig_username}</Pill>
         )}
         {unread > 0 && (
           <a href={`/bot/${bot.id}/inbox`} className="no-underline">
@@ -926,7 +1067,9 @@ export default function BotDetail() {
       <BrainCard bot={bot} ai={ai} cfg={cfg} />
       <Versions bot={bot} versions={versions} />
 
-      {isWa ? (
+      {isMeta ? (
+        <MetaPanel bot={bot} info={metaInfo} links={links} />
+      ) : isWa ? (
         <WhatsAppPanel bot={bot} usage={usage} />
       ) : (
         <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -948,7 +1091,8 @@ export default function BotDetail() {
         </div>
       )}
 
-      <BotPhotoCard bot={bot} cfg={cfg} isWa={isWa} />
+      {/* صورة ماسنجر/إنستجرام هي صورة الصفحة نفسها — تُدار من فيسبوك لا من هنا */}
+      {!isMeta && <BotPhotoCard bot={bot} cfg={cfg} isWa={isWa} />}
 
       {/* الإعدادات */}
       <Card className="mb-6">

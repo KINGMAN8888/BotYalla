@@ -11,7 +11,7 @@
     "name": "src"
   },
   "src/app/auth.jsx": {
-    "file": "chunk-auth-BUhxqx0b.js",
+    "file": "chunk-auth-WvKuCHua.js",
     "name": "auth",
     "src": "src/app/auth.jsx",
     "isDynamicEntry": true,
@@ -21,7 +21,7 @@
     ]
   },
   "src/app/media.jsx": {
-    "file": "chunk-media-Bcdj4D1e.js",
+    "file": "chunk-media-mUUY_ZEN.js",
     "name": "media",
     "src": "src/app/media.jsx",
     "isDynamicEntry": true,
@@ -31,7 +31,7 @@
     ]
   },
   "src/app/views/Account.jsx": {
-    "file": "chunk-Account-BMkDPG7i.js",
+    "file": "chunk-Account-BaHw54S2.js",
     "name": "Account",
     "src": "src/app/views/Account.jsx",
     "isDynamicEntry": true,
@@ -43,7 +43,7 @@
     ]
   },
   "src/app/views/Admin.jsx": {
-    "file": "chunk-Admin-o_cXsNSR.js",
+    "file": "chunk-Admin-0U7SWfDd.js",
     "name": "Admin",
     "src": "src/app/views/Admin.jsx",
     "isDynamicEntry": true,
@@ -56,7 +56,7 @@
     ]
   },
   "src/app/views/BotDetail.jsx": {
-    "file": "chunk-BotDetail-D3_JEhzP.js",
+    "file": "chunk-BotDetail-CuCUDDPR.js",
     "name": "BotDetail",
     "src": "src/app/views/BotDetail.jsx",
     "isDynamicEntry": true,
@@ -67,7 +67,7 @@
     ]
   },
   "src/app/views/Dashboard.jsx": {
-    "file": "chunk-Dashboard-D1xRDj4O.js",
+    "file": "chunk-Dashboard-BPRuypPO.js",
     "name": "Dashboard",
     "src": "src/app/views/Dashboard.jsx",
     "isDynamicEntry": true,
@@ -78,7 +78,7 @@
     ]
   },
   "src/app/views/Emails.jsx": {
-    "file": "chunk-Emails-CkoEGuUU.js",
+    "file": "chunk-Emails-BLsFbvvg.js",
     "name": "Emails",
     "src": "src/app/views/Emails.jsx",
     "isDynamicEntry": true,
@@ -88,7 +88,7 @@
     ]
   },
   "src/app/views/Inbox.jsx": {
-    "file": "chunk-Inbox-KiFSetxK.js",
+    "file": "chunk-Inbox-Dj2y4mtD.js",
     "name": "Inbox",
     "src": "src/app/views/Inbox.jsx",
     "isDynamicEntry": true,
@@ -99,7 +99,7 @@
     ]
   },
   "src/app/views/Legal.jsx": {
-    "file": "chunk-Legal-BIF4z_k9.js",
+    "file": "chunk-Legal-CyfkPVI6.js",
     "name": "Legal",
     "src": "src/app/views/Legal.jsx",
     "isDynamicEntry": true,
@@ -109,7 +109,7 @@
     ]
   },
   "src/app/views/Revenue.jsx": {
-    "file": "chunk-Revenue-BIbIIBDW.js",
+    "file": "chunk-Revenue-DcqiKnmJ.js",
     "name": "Revenue",
     "src": "src/app/views/Revenue.jsx",
     "isDynamicEntry": true,
@@ -119,7 +119,7 @@
     ]
   },
   "src/app/views/Tools.jsx": {
-    "file": "chunk-Tools-yayoxiMr.js",
+    "file": "chunk-Tools-9Y9wTYAo.js",
     "name": "Tools",
     "src": "src/app/views/Tools.jsx",
     "isDynamicEntry": true,
@@ -131,7 +131,7 @@
     ]
   },
   "src/app/views/WaTemplates.jsx": {
-    "file": "chunk-WaTemplates-D3mhhCc6.js",
+    "file": "chunk-WaTemplates-RatPqJyL.js",
     "name": "WaTemplates",
     "src": "src/app/views/WaTemplates.jsx",
     "isDynamicEntry": true,
@@ -141,7 +141,7 @@
     ]
   },
   "src/app/views/Wallet.jsx": {
-    "file": "chunk-Wallet-BnrPviK-.js",
+    "file": "chunk-Wallet-CU12WzOo.js",
     "name": "Wallet",
     "src": "src/app/views/Wallet.jsx",
     "isDynamicEntry": true,
@@ -151,7 +151,7 @@
     ]
   },
   "src/console-main.jsx": {
-    "file": "console-Cm83Cu--.js",
+    "file": "console-B2Rd1WJL.js",
     "name": "console",
     "src": "src/console-main.jsx",
     "isEntry": true,
