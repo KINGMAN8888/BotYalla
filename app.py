@@ -2768,7 +2768,18 @@ def admin_meta_diagnose():
     """سلسلة الوصول كاملة: التطبيق ← ويبهوك page/instagram ← الصفحة ← الأذونات ← آخر ما وصل فعلاً."""
     import meta_pages as MP
     pid, tok = _platform_page()
+    source = "platform"
+    if not (pid and tok):
+        # صفحة رُبطت من كارت الداشبورد لا من هنا: نفحص بتوكن أول بوت صفحة مربوط
+        for mb in db.meta_bots():
+            cfg = json.loads((db.get_bot(mb["id"]) or {}).get("config_json") or "{}")
+            if cfg.get("page_id") and cfg.get("page_token"):
+                pid, tok, source = str(cfg["page_id"]), db.unseal(cfg["page_token"]), f"bot:{mb['id']}"
+                break
     checks = MP.diagnose(WAS.app_id(), _meta_secret(), pid, tok, _meta_callback())
+    if source != "platform":
+        checks.insert(2, {"ok": True, "label": "الفحص بتوكن بوت مربوط",
+                          "detail": f"صفحة {pid} — احفظها كصفحة المنصة فوق عشان تتحكم في حقولها"})
     now = int(_time.time())
     for obj, label in (("page", "وصل حدث ماسنجر للسيرفر"), ("instagram", "وصل حدث إنستجرام للسيرفر")):
         t_ok = _WH_STATE["ok"].get(obj)

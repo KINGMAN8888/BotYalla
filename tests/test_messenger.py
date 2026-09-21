@@ -516,6 +516,13 @@ class DiagnoseTests(_PageBase):
         labels = [c["label"] for c in self.post("/admin/meta/diagnose")["checks"]]
         self.assertIn("طلبات ويبهوك مرفوضة التوقيع", labels)
 
+    def test_falls_back_to_a_connected_bot_when_no_platform_page(self):
+        self.assertTrue(self.connect(1).get_json()["ok"])          # رُبطت من كارت الداشبورد
+        labels = [c["label"] for c in self.post("/admin/meta/diagnose")["checks"]]
+        self.assertIn("الفحص بتوكن بوت مربوط", labels)
+        self.assertIn("الصفحة مشتركة في التطبيق", labels)
+        self.assertNotIn("صفحة المنصة محفوظة", labels)
+
     def test_admin_only(self):
         c = A.app.test_client()
         with c.session_transaction() as s:
