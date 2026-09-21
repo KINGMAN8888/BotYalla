@@ -13,6 +13,7 @@
 والـpayload هو العنوان نفسه فيصل للمحرك كأن العميل كتبه. أكثر من ذلك: قائمة مرقّمة
 (نفس سلوك واتساب الذي يقبل المحرك رقمه كإجابة)."""
 import logging
+import re
 
 import httpx
 
@@ -24,6 +25,17 @@ TIMEOUT = 15
 QR_MAX, QR_TITLE = 13, 20
 
 _client = None
+# آخر أزرار أُرسلت لكل عميل (الصفحة، الـpeer) ← الخيارات: رقم يكتبه العميل («2») أو العنوان بلا
+# الإيموجي («دعم فني») يُترجم للخيار نفسه — إنستجرام على الويب لا يعرض الأزرار أصلاً، والعميل يكتب.
+# في الذاكرة (عملية gunicorn واحدة)، ومحدود الحجم.
+_LAST_OPTS = {}
+_LAST_MAX = 5000
+_NAMES = {}                           # peer ← اسم العميل (أو "" لو فشل الجلب) — لا نسأل Graph كل رسالة
+_EMOJI = re.compile(r"[^\w\s؀-ۿ]", re.UNICODE)
+
+
+def _plain(s):
+    return " ".join(_EMOJI.sub(" ", s or "").split()).lower()
 
 
 async def _http():
@@ -72,16 +84,25 @@ class MessengerChannel(Channel):
     async def send_text(self, peer, text):
         return await self._send(peer, {"text": (text or "")[:2000]})
 
+    def _remember(self, peer, opts):
+        if len(_LAST_OPTS) > _LAST_MAX:
+            _LAST_OPTS.clear()
+        _LAST_OPTS[(self.page_id, peer)] = list(opts)
+
     async def send_buttons(self, peer, text, options):
         opts = [str(o) for o in (options or [])]
         if not opts:
             return await self.send_text(peer, text)
+        self._remember(peer, opts)
+        numbered = "\n".join(f"{i + 1}. {o}" for i, o in enumerate(opts))
         if len(opts) <= QR_MAX and all(len(o) <= QR_TITLE for o in opts):
+            # إنستجرام يعرض الأزرار في التطبيق فقط لا على الويب: القائمة المرقّمة في النص أيضاً،
+            # والرقم أو العنوان يُقبلان كإجابة (`_one`). ماسنجر يعرضها في كل مكان.
+            body = (text or "👇") if self.platform != "ig" else f"{text or ''}\n\n{numbered}".strip()
             return await self._send(peer, {
-                "text": (text or "👇")[:2000],
+                "text": body[:2000],
                 "quick_replies": [{"content_type": "text", "title": o, "payload": o} for o in opts]})
-        body = (text or "") + "\n\n" + "\n".join(f"{i + 1}. {o}" for i, o in enumerate(opts))
-        return await self.send_text(peer, body)
+        return await self.send_text(peer, (text or "") + "\n\n" + numbered)
 
     async def send_image(self, peer, url, caption=None):
         res = await self._send(peer, {"attachment": {"type": "image",
@@ -156,6 +177,43 @@ class MessengerChannel(Channel):
         msgs = self.normalize_all(raw)
         return msgs[0] if msgs else None
 
+    def _as_option(self, peer, text):
+        """«2» أو «دعم فني» (بلا الإيموجي) ← عنوان الخيار الذي أُرسل لهذا العميل آخر مرة."""
+        opts = _LAST_OPTS.get((self.page_id, peer))
+        if not opts:
+            return text
+        t = text.strip()
+        if t.isdigit() and 1 <= int(t) <= len(opts):
+            return opts[int(t) - 1]
+        p = _plain(t)
+        for o in opts:
+            if p and p == _plain(o):
+                return o
+        return text
+
+    async def profile_name(self, peer):
+        """اسم العميل لصندوق الوارد: ماسنجر `first_name last_name` (User Profile API)، وإنستجرام
+        `name` أو `username`. مرة واحدة لكل عميل؛ الفشل (إذن ناقص/خصوصية) يُحفظ فلا يتكرر."""
+        if peer in _NAMES:
+            return _NAMES[peer]
+        fields = "name,username" if self.platform == "ig" else "first_name,last_name"
+        name = ""
+        try:
+            c = await _http()
+            r = await c.get(f"{GRAPH}/{self._to(peer)}", params={"fields": fields, "access_token": self.token})
+            if r.status_code == 200:
+                d = r.json() or {}
+                name = (d.get("name") or " ".join(x for x in (d.get("first_name"), d.get("last_name")) if x)
+                        or (("@" + d["username"]) if d.get("username") else ""))
+            else:
+                log.info("profile lookup %s for %s: %s", r.status_code, self.platform, r.text[:200])
+        except Exception:
+            log.info("profile lookup failed", exc_info=True)
+        if len(_NAMES) > _LAST_MAX:
+            _NAMES.clear()
+        _NAMES[peer] = name[:80]
+        return _NAMES[peer]
+
     def _one(self, ev):
         sender = str((ev.get("sender") or {}).get("id") or "")
         if not sender or sender == self.page_id:
@@ -182,6 +240,8 @@ class MessengerChannel(Channel):
         self._peer_of_mid[mid] = peer
         qr = (m.get("quick_reply") or {}).get("payload")
         text = str(qr or m.get("text") or "").strip()
+        if text and not qr:
+            text = self._as_option(peer, text)
         if not text and m.get("attachments"):
             a = m["attachments"][0]
             return {"id": mid, "peer": peer, "text": "", "name": "", "kind": "media",

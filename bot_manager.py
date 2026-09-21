@@ -923,6 +923,10 @@ class BotManager:
                 if not db.mark_msg_seen(msg.get("id")):
                     continue
                 db.bump_received(row["id"], row["owner_id"])
+                if not msg.get("name"):
+                    # الاسم لصندوق الوارد — المحادثة المسمّاة لا تُسأل عنها Graph ثانيةً
+                    conv = db.get_conversation(row["id"], msg["peer"]) or {}
+                    msg["name"] = conv.get("name") or await ch.profile_name(msg["peer"])
                 try:
                     await flow_engine.handle_message(row, ch, msg)
                 except Exception:

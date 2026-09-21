@@ -40,6 +40,14 @@ class FakeAsync:
         FakeAsync.sent.append((url, json, params))
         return R(200, {"message_id": "m1"})
 
+    gets = []
+
+    async def get(self, url, params=None, **k):
+        FakeAsync.gets.append((url, params))
+        if "first_name" in (params or {}).get("fields", ""):
+            return R(200, {"first_name": "منى", "last_name": "علي"})
+        return R(200, {"name": "", "username": "mona.ig"})
+
 
 # ------------------------------------------------------------------ Graph مزيّف (sync) للربط
 class FakeGraph:
@@ -159,6 +167,32 @@ class ChannelTests(unittest.TestCase):
         asyncio.run(ig.send_document_link(f"ig:{IGSID}", "https://x/a.pdf", "a.pdf", "الملف"))
         self.assertIn("https://x/a.pdf", FakeAsync.sent[-1][1]["message"]["text"])
 
+    def test_instagram_shows_the_menu_as_text_too_messenger_as_buttons(self):
+        opts = ["🛠 دعم فني", "❓ استفسار"]
+        ig = CM.MessengerChannel("ig", IG, "t")
+        asyncio.run(ig.send_buttons(f"ig:{IGSID}", "محتاج إيه؟", opts))
+        body = FakeAsync.sent[-1][1]["message"]
+        self.assertIn("1. 🛠 دعم فني", body["text"])                  # الويب لا يعرض الأزرار
+        self.assertEqual(len(body["quick_replies"]), 2)
+        asyncio.run(self.ch.send_buttons(f"fb:{PSID}", "محتاج إيه؟", opts))
+        self.assertEqual(FakeAsync.sent[-1][1]["message"]["text"], "محتاج إيه؟")
+
+    def test_typed_number_or_plain_label_becomes_the_option(self):
+        opts = ["🛠 دعم فني", "❓ استفسار", "💡 اعرف أكتر"]
+        asyncio.run(self.ch.send_buttons(f"fb:{PSID}", "محتاج إيه؟", opts))
+        self.assertEqual(self.ch.normalize(ev_text("2", mid="n1"))["text"], "❓ استفسار")
+        self.assertEqual(self.ch.normalize(ev_text("دعم فني", mid="n2"))["text"], "🛠 دعم فني")
+        self.assertEqual(self.ch.normalize(ev_text("9", mid="n3"))["text"], "9")          # خارج المدى
+        self.assertEqual(self.ch.normalize(ev_text("سؤال تاني", mid="n4"))["text"], "سؤال تاني")
+
+    def test_profile_name_messenger_and_instagram_cached(self):
+        CM._NAMES.clear(); FakeAsync.gets = []
+        self.assertEqual(asyncio.run(self.ch.profile_name(f"fb:{PSID}")), "منى علي")
+        self.assertEqual(asyncio.run(self.ch.profile_name(f"fb:{PSID}")), "منى علي")
+        self.assertEqual(len(FakeAsync.gets), 1, "الاسم يُسأل عنه مرة واحدة")
+        ig = CM.MessengerChannel("ig", IG, "t")
+        self.assertEqual(asyncio.run(ig.profile_name(f"ig:{IGSID}")), "@mona.ig")
+
     def test_mark_read_knows_the_sender_of_a_message(self):
         n = self.ch.normalize(ev_text("سلام", mid="mid.9"))
         asyncio.run(self.ch.mark_read(n["id"]))
@@ -213,6 +247,10 @@ class ConnectTests(unittest.TestCase):
             MP.connect("abc", "EAA-page-token-xxxxxxxx")
 
 
+async def _fake_name(self, peer):
+    return "منى علي"
+
+
 class _PageBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -225,6 +263,8 @@ class _PageBase(unittest.TestCase):
 
     def setUp(self):
         A._login_attempts.clear()
+        self._pn = CM.MessengerChannel.profile_name
+        CM.MessengerChannel.profile_name = _fake_name
         FakeGraph.calls, FakeGraph.me_is_page, FakeGraph.has_ig, FakeGraph.subscribe_ok = [], True, True, True
         FakeGraph.reject = set()
         self._c = MP.httpx.Client
@@ -236,6 +276,7 @@ class _PageBase(unittest.TestCase):
 
     def tearDown(self):
         MP.httpx.Client = self._c
+        CM.MessengerChannel.profile_name = self._pn
 
     def client(self, uid):
         c = A.app.test_client()
@@ -290,6 +331,7 @@ class RouteAndWebhookTests(_PageBase):
 
         async def fake(row, ch, msg):
             seen.append((row["id"], msg["peer"], msg["text"]))
+            self.assertEqual(msg["name"], "منى علي")            # صندوق الوارد يعرف العميل
         flow_engine.handle_message = fake
         try:
             asyncio.run(BM.manager._handle_meta_pages(ev_text("سلام", mid="mid.a")))
