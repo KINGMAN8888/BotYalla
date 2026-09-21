@@ -167,8 +167,10 @@ def meta_side_events(row, entry, pfx):
         peer = f"{pfx}:{cust}" if cust else None
         m = ev.get("message") or {}
         if m.get("is_echo"):
-            if ours and str(m.get("app_id") or "") == ours:
+            from channels.messenger import is_our_echo
+            if (ours and str(m.get("app_id") or "") == ours) or is_our_echo(own, cust, m.get("mid")):
                 continue                                # ردّ البوت نفسه — مسجَّل عند إرساله
+            # ما بقي إنسان: صندوق الصفحة (app_id صندوق Meta 263902037430900) أو تطبيق الموبايل
             if peer and (m.get("text") or m.get("attachments")) and db.mark_msg_seen("echo:" + str(m.get("mid"))):
                 db.log_message(bot_id, peer, "out", "human", m.get("text") or "📎",
                                kind="text" if m.get("text") else "media")

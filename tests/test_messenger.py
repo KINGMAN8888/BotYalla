@@ -265,6 +265,7 @@ class _PageBase(unittest.TestCase):
         A._login_attempts.clear()
         self._pn = CM.MessengerChannel.profile_name
         CM.MessengerChannel.profile_name = _fake_name
+        CM._LAST_SEND.clear(); CM._OUR_MIDS.clear(); CM._LAST_OPTS.clear()
         FakeGraph.calls, FakeGraph.me_is_page, FakeGraph.has_ig, FakeGraph.subscribe_ok = [], True, True, True
         FakeGraph.reject = set()
         self._c = MP.httpx.Client
@@ -571,6 +572,49 @@ class DiagnoseTests(_PageBase):
             s["uid"] = self.shop; s["_csrf"] = CSRF
         self.assertIn(c.post("/admin/meta/diagnose", json={}, headers={"X-CSRF-Token": CSRF}).status_code, (302, 403))
         self.assertIn(c.post("/admin/meta/app-webhooks", json={}, headers={"X-CSRF-Token": CSRF}).status_code, (302, 403))
+
+
+class EchoTests(_PageBase):
+    """إنستجرام يرسل صدى رسائل البوت بلا app_id — يجب ألا يُحسب رداً بشرياً فيُسكت البوت."""
+    def setUp(self):
+        super().setUp()
+        FakeAsync.sent = []
+        self._cl = CM._client
+        CM._client = FakeAsync()
+        self.assertTrue(self.connect(1).get_json()["ok"])
+        self.ig = db.get_bot_by_token(f"ig:{IG}")
+        db.set_bot_active(self.ig["id"], True)
+        self.peer = f"ig:{IGSID}"
+
+    def tearDown(self):
+        CM._client = self._cl
+        super().tearDown()
+
+    def echo(self, mid, text="أهلاً بيك في BotYalla"):
+        return {"object": "instagram", "entry": [{"id": IG, "messaging": [{
+            "sender": {"id": IG}, "recipient": {"id": IGSID}, "timestamp": 1,
+            "message": {"mid": mid, "text": text, "is_echo": True}}]}]}
+
+    def mode(self):
+        return (db.get_conversation(self.ig["id"], self.peer) or {}).get("mode", "bot")
+
+    def test_bot_reply_echo_without_app_id_keeps_the_bot_talking(self):
+        ch = BM._meta_channel(self.ig)
+        asyncio.run(ch.send_text(self.peer, "أهلاً بيك في BotYalla"))
+        asyncio.run(BM.manager._handle_meta_pages(self.echo("m-echo-1")))
+        self.assertEqual(self.mode(), "bot")
+
+    def test_known_message_id_is_ours_even_later(self):
+        CM._OUR_MIDS.add("m-known")
+        asyncio.run(BM.manager._handle_meta_pages(self.echo("m-known")))
+        self.assertEqual(self.mode(), "bot")
+
+    def test_a_real_human_reply_still_hands_over(self):
+        """صندوق Meta Business Suite (app_id صندوقه) بلا إرسال حديث من البوت ← إنسان."""
+        ev = self.echo("m-human", "معاك أحمد من الفريق")
+        ev["entry"][0]["messaging"][0]["message"]["app_id"] = 263902037430900
+        asyncio.run(BM.manager._handle_meta_pages(ev))
+        self.assertEqual(self.mode(), "human")
 
 
 if __name__ == "__main__":

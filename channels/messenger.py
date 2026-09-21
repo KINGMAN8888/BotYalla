@@ -34,6 +34,22 @@ _NAMES = {}                           # peer ← اسم العميل (أو "" ل
 _EMOJI = re.compile(r"[^\w\s؀-ۿ]", re.UNICODE)
 
 
+# صدى رسائل البوت نفسه: إنستجرام يرسل `message_echoes` **بلا app_id**، فلا يُميَّز رد البوت من رد
+# صاحب الصفحة بالتطبيق. نتذكر كل ما أرسلناه: معرّف الرسالة (mid) من رد الـSend API، ووقت بدء
+# الإرسال لكل عميل — الصدى قد يصل قبل أن يعود رد الـAPI (نفس حلقة asyncio).
+_OUR_MIDS = set()
+_LAST_SEND = {}                      # (حسابنا، العميل) ← وقت آخر إرسال من البوت
+ECHO_WINDOW = 30                     # ثانية: صدى خلالها بعد إرسال البوت = صدى البوت
+
+
+def is_our_echo(own_id, customer_id, mid):
+    """هل هذا الصدى رسالة أرسلها البوت (لا إنسان من Meta Business Suite/الموبايل)؟"""
+    import time as _t
+    if mid and mid in _OUR_MIDS:
+        return True
+    return _t.time() - _LAST_SEND.get((str(own_id), str(customer_id)), 0) < ECHO_WINDOW
+
+
 def _plain(s):
     return " ".join(_EMOJI.sub(" ", s or "").split()).lower()
 
@@ -65,6 +81,12 @@ class MessengerChannel(Channel):
     async def _call(self, body, count=True):
         if count and self.on_send is not None and (await self.on_send()) is False:
             return None
+        rid = str((body.get("recipient") or {}).get("id") or "")
+        if "message" in body and rid:
+            import time as _t
+            if len(_LAST_SEND) > _LAST_MAX:
+                _LAST_SEND.clear()
+            _LAST_SEND[(self.page_id, rid)] = _t.time()        # قبل الإرسال — الصدى قد يسبق الرد
         try:
             c = await _http()
             r = await c.post(f"{GRAPH}/me/messages", json=body,
@@ -72,7 +94,12 @@ class MessengerChannel(Channel):
             if r.status_code >= 400:
                 log.error("Messenger API %s (%s): %s", r.status_code, self.platform, r.text[:400])
                 return None
-            return r.json()
+            res = r.json() or {}
+            if res.get("message_id"):
+                if len(_OUR_MIDS) > _LAST_MAX:
+                    _OUR_MIDS.clear()
+                _OUR_MIDS.add(res["message_id"])
+            return res
         except Exception:
             log.exception("Messenger API call failed")
             return None
