@@ -728,7 +728,7 @@ export function AdminPlatform() {
           <SectionTitle icon="phone">{t("plat_contact")}</SectionTitle>
           <div className="grid gap-4 sm:grid-cols-3">
             <F name="support_email" label={t("plat_email")} ph="info@botyalla.com" />
-            <F name="support_whatsapp" label={t("plat_whatsapp")} ph="201097585951" />
+            <F name="support_whatsapp" label={t("plat_whatsapp")} ph="201281275886" />
             <F name="support_telegram" label={t("plat_telegram")} ph="username" />
           </div>
           <div className="mt-6"><Btn icon="check" type="submit">{t("save")}</Btn></div>

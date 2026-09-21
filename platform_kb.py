@@ -76,11 +76,13 @@ def facts():
                      "features": feats})
 
     plat = {k: (db.get_platform(k, "") or "").strip() for k in _PUBLIC_KEYS}
-    pay = ["فودافون كاش" + (f" ({plat['vodafone_number']})" if plat["vodafone_number"] else ""),
-           "انستاباي" + (f" ({plat['instapay_handle']})" if plat["instapay_handle"] else ""),
-           "تحويل بنكي"]
+    # أرقام المحافظ لا تُقال في المحادثة: رقم فودافون كاش خط شخصي، ومكانه صفحة الدفع داخل الحساب
+    # (تظهر للمشترك لحظة الدفع مع الإيصال). البوت يوجّه إليها بدل نشر الرقم لكل من يسأل.
+    pay = ["فودافون كاش", "انستاباي", "تحويل بنكي",
+           "بيانات التحويل بتظهر في صفحة الدفع جوه حسابك بعد ما تختار الباقة"]
+    # واتساب التواصل = الرقم الرسمي للمنصة (رقم البوت الرسمي) وحده — لا أي رقم آخر
     support = {k: v for k, v in (("email", plat["support_email"]),
-                                 ("whatsapp", plat["support_whatsapp"]),
+                                 ("whatsapp", official_wa_number()),
                                  ("telegram", plat["support_telegram"])) if v}
 
     site = _site()
@@ -233,6 +235,22 @@ _MENU_REPLY = {
 def menu_reply(key, lang="ar"):
     """رد قائمة البداية لمساعد المنصة (يطلب ما يحتاجه الفريق فعلاً)؛ None = الرد العام."""
     return _MENU_REPLY.get((key, lang))
+
+
+def official_wa_number():
+    """رقم واتساب الرسمي الذي يُعطى للعملاء: `official_wa_number` إن ضبطه الأدمن، وإلا رقم بوت
+    المساعد الرسمي على واتساب، وإلا الرقم الرسمي الثابت. لا يرجع أبداً رقماً شخصياً."""
+    import re
+    n = re.sub(r"\D", "", db.get_platform("official_wa_number", "") or "")
+    if len(n) >= 8:
+        return n
+    row = official_bot()
+    if row and (row.get("channel") or "telegram") == "whatsapp":
+        import json
+        n = re.sub(r"\D", "", json.loads(row.get("config_json") or "{}").get("bot_username") or "")
+        if len(n) >= 8:
+            return n
+    return "201281275886"
 
 
 def official_bot():

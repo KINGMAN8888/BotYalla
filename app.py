@@ -5203,7 +5203,7 @@ def seed_platform_defaults():
     db.set_platform("platform_bot_token", "")
     db.set_platform("admin_chat_id", "")
     db.set_platform("support_email", "info@botyalla.com")
-    db.set_platform("support_whatsapp", "201097585951")
+    db.set_platform("support_whatsapp", OFFICIAL_WA)
     db.set_platform("support_telegram", "")
     # سعر الرسالة التسويقية **بالقروش**. مصر: $0.0644 للرسالة بعد خفض Meta
     # 1 يناير 2026 (كان $0.1073)، عند ~50.9ج/دولار ≈ 3.28ج. راجع
@@ -5468,6 +5468,10 @@ def _wh_object(body):
 
 # إيميلات دعم افتراضية قديمة — تُستبدل بإيميل الدومين الرسمي عند الإقلاع.
 _OLD_SUPPORT_EMAILS = ("info@youssefalsherief.tech",)
+# رقم واتساب الرسمي للمنصة (رقم البوت الرسمي) — الوحيد الذي يظهر للعملاء. الرقم الشخصي القديم
+# كان القيمة الافتراضية لـ support_whatsapp فظهر في ردود البوت وتذييل الموقع؛ يُستبدل مرة واحدة.
+OFFICIAL_WA = "201281275886"
+_OLD_SUPPORT_WA = ("201097585951", "+201097585951", "01097585951")
 
 def contact_defaults():
     """يضمن وجود بيانات التواصل حتى لو كانت القاعدة قديمة قبل هذه الإضافة.
@@ -5476,8 +5480,9 @@ def contact_defaults():
     cur = (db.get_platform("support_email") or "").strip().lower()
     if not cur or cur in _OLD_SUPPORT_EMAILS:
         db.set_platform("support_email", "info@botyalla.com")
-    if not db.get_platform("support_whatsapp"):
-        db.set_platform("support_whatsapp", "201097585951")
+    wa = (db.get_platform("support_whatsapp") or "").strip()
+    if not wa or wa in _OLD_SUPPORT_WA:
+        db.set_platform("support_whatsapp", OFFICIAL_WA)
 
 def seed_default_admin():
     """ينشئ حساب أدمن عند أول تشغيل (لو لا يوجد أي مستخدم). كلمة المرور من ADMIN_PASS،

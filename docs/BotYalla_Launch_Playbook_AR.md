@@ -221,7 +221,7 @@ frame-src   'self' https://www.googletagmanager.com               ← أضِفه
 ### 3.3 صفر حضور على السوشيال ميديا
 
 **ما وجدته:** الروابط الخارجية الوحيدة على الموقع كلها هي:
-`wa.me/201097585951` · `youssefalsherief.tech` · خطوط جوجل.
+`wa.me/201281275886` · `youssefalsherief.tech` · خطوط جوجل.
 
 **لا يوجد:** فيسبوك · إنستجرام · تيك توك · لينكدإن · يوتيوب · X · قناة تليجرام.
 
@@ -737,7 +737,7 @@ v=spf1 include:_spf.mail.hostinger.com include:spf.brevo.com ~all
 
 **الخطوات:**
 1. `facebook.com/pages/create` ← الاسم `BotYalla` ← التصنيف **Software Company** ← الوصف القصير.
-2. صورة البروفايل + الغلاف + الرابط + معلومات التواصل (واتساب `+201097585951`).
+2. صورة البروفايل + الغلاف + الرابط + معلومات التواصل (واتساب `+201281275886`).
 3. **أضِف زر إجراء (CTA):** «Sign Up» ← `https://botyalla.com/register?utm_source=facebook&utm_medium=cta`
 4. **`business.facebook.com`** ← Create Business Portfolio ← الاسم القانوني ← الإيميل الرسمي.
 5. Business Settings ← Accounts ← Pages ← Add ← اربط صفحتك.
@@ -806,7 +806,7 @@ v=spf1 include:_spf.mail.hostinger.com include:spf.brevo.com ~all
 
 ### 14.5 واتساب للأعمال — قناة البيع المباشر
 
-1. حمّل **WhatsApp Business** (ليس العادي) على رقم `+201097585951` أو رقم مخصّص.
+1. حمّل **WhatsApp Business** (ليس العادي) على رقم `+201281275886` أو رقم مخصّص.
 2. **الملف التجاري كاملاً:** الاسم · التصنيف · الوصف · الرابط · ساعات العمل · العنوان.
 3. **رسالة الترحيب:**
    > «أهلاً بيك في BotYalla 👋
@@ -816,7 +816,7 @@ v=spf1 include:_spf.mail.hostinger.com include:spf.brevo.com ~all
 5. **الوسوم (Labels):** `مهتم` · `جرّب` · `مشترك` · `وكالة` · `متابعة`
 6. **حالة واتساب (Status):** انشر عليها يومياً — أعلى معدل مشاهدة من أي منصة في مصر.
 7. **رابط `wa.me` بنص جاهز:**
-   `https://wa.me/201097585951?text=عايز%20أعرف%20أكتر%20عن%20BotYalla`
+   `https://wa.me/201281275886?text=عايز%20أعرف%20أكتر%20عن%20BotYalla`
 
 ---
 

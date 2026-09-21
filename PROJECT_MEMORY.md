@@ -7,7 +7,7 @@
 ---
 
 ## 1) ما هو المشروع
-**BotYalla** — منصة SaaS عربية/إنجليزية تتيح لأصحاب الأنشطة إنشاء وتشغيل **بوتات محادثة بدون برمجة** على **تليجرام وواتساب**، مع اشتراكات ودفع محلي. المالك: **Youssef Alsherief** (info@botyalla.com · 201097585951 · youssefalsherief.tech).
+**BotYalla** — منصة SaaS عربية/إنجليزية تتيح لأصحاب الأنشطة إنشاء وتشغيل **بوتات محادثة بدون برمجة** على **تليجرام وواتساب**، مع اشتراكات ودفع محلي. المالك: **Youssef Alsherief** (info@botyalla.com · واتساب الرسمي 201281275886 · youssefalsherief.tech).
 
 - **الخادم:** Python + Flask + SQLite + python-telegram-bot + httpx (لواتساب Cloud API).
 - **الواجهة:** React 19 + Vite 8 + Tailwind 4 — تُبنى إلى `static/dist/` وتُقدَّم من Flask. عربي/إنجليزي (RTL/LTR)، تصميم داكن.
@@ -148,7 +148,7 @@ CSRF شامل (باستثناء `/wh/whatsapp` — التوقيع هو الحا�
 ## 4) بيانات ثابتة يجب معرفتها
 - **الأدمن الافتراضي:** يُضبط عبر `ADMIN_USER`/`ADMIN_PASS` في `.env` (الافتراضي `admin`/`admin1234` — غيّرها فوراً). **لا تكتب كلمة مرور حقيقية في أي ملف متتبَّع في git.**
 - **بيانات الدفع (مضبوطة مسبقاً في `platform`):** فودافون كاش `01097585951` · انستاباي `youssefalsherief@instapay` (+ QR في `static/instapay_qr.jpg`) · بنك Mashreq.
-- **تواصل الدعم:** `support_email=info@botyalla.com` · `support_whatsapp=201097585951` · `support_telegram` (فارغ — يملؤه الأدمن).
+- **تواصل الدعم:** `support_email=info@botyalla.com` · `support_whatsapp=201281275886` (الرقم الرسمي — الشخصي القديم يُستبدل تلقائياً عند الإقلاع، والبوت يعطي `platform_kb.official_wa_number()` وحده) · `support_telegram` (فارغ — يملؤه الأدمن).
 - **بوت تنبيهات الدفع:** يحتاج توكن بوت + `admin_chat_id` من إعدادات المنصة (بدونه لا تصل تنبيهات تليجرام ولا تعمل التذكيرات، لكن كل شيء يظهر في لوحة الأدمن).
 - **واتساب:** يحتاج `wa_verify_token` و`wa_app_secret` في إعدادات المنصة — **بدونهما الويبهوك يرفض كل شيء عمداً (fail-closed)**.
 - **الإيميل:** `SMTP_HOST` · `SMTP_PORT` · `SMTP_USER` · `SMTP_PASS` · `SMTP_FROM` · `SMTP_TLS` · `SMTP_REPLY_TO` (اختياري — وإلا إيميل الدعم) في `.env`، والترتيب المعتمد: **Brevo يرسل** (`no-reply@` بلا صندوق — يكفي توثيق الدومين في Brevo) و**Hostinger يستقبل** على `info@botyalla.com` (Reply-To). حتى 2026-09-14 كان توثيق Brevo ناقصاً (لا DKIM، والـ SPF بلا Brevo) — الخطوات في docs/EMAIL_DNS.md، و**`PUBLIC_URL`** (مثل `https://botyalla.com`) — بدونه لا تُرسل روابط الاسترجاع عمداً.

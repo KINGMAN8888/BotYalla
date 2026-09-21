@@ -220,7 +220,7 @@ frame-src   'self' https://www.googletagmanager.com               ← add for GT
 
 ### 3.3 Zero social media presence
 
-**What I found:** the only external links on the site are `wa.me/201097585951`, `youssefalsherief.tech`, and Google Fonts.
+**What I found:** the only external links on the site are `wa.me/201281275886`, `youssefalsherief.tech`, and Google Fonts.
 
 **Missing:** Facebook · Instagram · TikTok · LinkedIn · YouTube · X · Telegram channel.
 
@@ -735,7 +735,7 @@ The free tier is always your strongest offer. Do not devalue it with rolling dis
 **The order matters:** personal account (exists) → Page → Business Manager → ad account → pixel.
 
 1. `facebook.com/pages/create` → name `BotYalla` → category **Software Company** → short description.
-2. Profile image + cover + link + contact info (WhatsApp `+201097585951`).
+2. Profile image + cover + link + contact info (WhatsApp `+201281275886`).
 3. **Add a CTA button:** "Sign Up" → `https://botyalla.com/register?utm_source=facebook&utm_medium=cta`
 4. **`business.facebook.com`** → Create Business Portfolio → legal name → official email.
 5. Business Settings → Accounts → Pages → Add → link your Page.
@@ -804,7 +804,7 @@ The free tier is always your strongest offer. Do not devalue it with rolling dis
 
 ### 14.5 WhatsApp Business — the direct sales channel
 
-1. Install **WhatsApp Business** (not the regular app) on `+201097585951` or a dedicated number.
+1. Install **WhatsApp Business** (not the regular app) on `+201281275886` or a dedicated number.
 2. **Complete the business profile:** name · category · description · link · hours · address.
 3. **Greeting message:**
    > "Welcome to BotYalla 👋
@@ -814,7 +814,7 @@ The free tier is always your strongest offer. Do not devalue it with rolling dis
 5. **Labels:** `interested` · `trialling` · `subscribed` · `agency` · `follow-up`
 6. **WhatsApp Status:** post daily — the highest view rate of any platform in Egypt.
 7. **A `wa.me` link with prefilled text:**
-   `https://wa.me/201097585951?text=I%20want%20to%20know%20more%20about%20BotYalla`
+   `https://wa.me/201281275886?text=I%20want%20to%20know%20more%20about%20BotYalla`
 
 ---
 
