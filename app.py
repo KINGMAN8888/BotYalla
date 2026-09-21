@@ -2580,7 +2580,8 @@ def admin_platform():
             flash("تم الحفظ." if session.get("lang")!="en" else "Saved.", "ok")
         return redirect(url_for("admin_platform"))
     return react_page("admin_platform", "platform_title",
-                      {"plat": dict({k: v for k, v in db.all_platform().items() if k != "email_unsub_key"},
+                      {"plat": dict({k: v for k, v in db.all_platform().items()
+                                     if k not in ("email_unsub_key", "meta_page_token")},
                                     mkt_msg_price_egp=f"{mkt_price() / 100:g}",
                                     ai_reply_price_egp=f"{FE.ai_reply_price() / 100:g}"),
                        "running": manager.platform_running(),
@@ -2627,6 +2628,142 @@ def _growth_rows(lang):
                     "wa": (bots.get("wa") or {}).get("url", ""), "tg": (bots.get("tg") or {}).get("url", ""),
                     "chats": src.get(f"seg_{code}", 0)})
     return out, row
+
+
+# =========================================================================== «/admin/meta»
+# ماسنجر + إنستجرام تحت تحكم الأدمن وحده: صفحة المنصة (تُحفظ مرة — توكنها مختوم في platform)،
+# حقول الاشتراك، بوتات المنصة الرسمية من التوكن المحفوظ، ربط صفحة لأي مستخدم، كل بوتات
+# الصفحات، وسجل الأحداث. لا شيء هنا للدعم ولا للعملاء.
+def _platform_page():
+    return (db.get_platform("meta_page_id", "") or "").strip(), db.unseal(db.get_platform("meta_page_token", ""))
+
+
+@app.route("/admin/meta")
+@require_roles("admin")
+def admin_meta():
+    import meta_pages as MP
+    pid, tok = _platform_page()
+    st = MP.status(pid, tok, WAS.app_id()) if (pid and tok) else None
+    return react_page("admin_meta", "adm_meta", {
+        "page": {"id": pid, "configured": bool(pid and tok), "status": st},
+        "fields": [{"k": f, "group": g, "handled": h} for f, g, h in MP.ALL_FIELDS],
+        "defaults": MP.DEFAULT_FIELDS,
+        "bots": db.meta_bots(),
+        "events": db.list_meta_events(150),
+        "templates": [{"k": k, "l": v.get("label", k) if isinstance(v, dict) else k} for k, v in T.TEMPLATES.items()],
+        "webhook": (os.getenv("PUBLIC_URL", "").rstrip("/") or request.host_url.rstrip("/")) + "/wh/meta",
+    })
+
+
+def _admin_json():
+    return request.get_json(silent=True) or {}
+
+
+@app.route("/admin/meta/page", methods=["POST"])
+@require_roles("admin")
+def admin_meta_page():
+    """حفظ صفحة المنصة مرة واحدة: توكن صفحة أو مستخدم ← توكن صفحة دائم مختوم + اشتراك افتراضي."""
+    import meta_pages as MP
+    d = _admin_json()
+    page_id = str(d.get("page_id") or "").strip()
+    token = str(d.get("token") or "").strip() or _platform_page()[1]   # فارغ = إعادة الاشتراك بالمحفوظ
+    try:
+        res = MP.connect(page_id, token, WAS.app_id(), _meta_secret())
+    except MP.PagesError as e:
+        return jsonify(ok=False, error=f"Meta ({e.step}): {e}")
+    db.set_platform("meta_page_id", page_id)
+    db.set_platform("meta_page_token", db.seal(res["page_token"]))
+    log.info("platform page saved: %s (ig=%s) by admin=%s", page_id, bool(res["ig_id"]), uid())
+    return jsonify(ok=True, name=res["name"], ig=res["ig_username"], warning=res["warning"])
+
+
+@app.route("/admin/meta/fields", methods=["POST"])
+@require_roles("admin")
+def admin_meta_fields():
+    import meta_pages as MP
+    pid, tok = _platform_page()
+    if not (pid and tok):
+        return jsonify(ok=False, error="احفظ صفحة المنصة أولاً.")
+    fields = [f for f in (_admin_json().get("fields") or []) if f in MP.FIELD_NAMES]
+    ok, bad = MP.subscribe(pid, tok, fields)
+    return jsonify(ok=bool(ok) or not fields, accepted=ok, rejected=bad)
+
+
+@app.route("/admin/meta/unsubscribe", methods=["POST"])
+@require_roles("admin")
+def admin_meta_unsubscribe():
+    import meta_pages as MP
+    pid, tok = _platform_page()
+    if not (pid and tok):
+        return jsonify(ok=False, error="لا صفحة محفوظة.")
+    ok, err = MP.unsubscribe(pid, tok)
+    return jsonify(ok=ok, error=err)
+
+
+@app.route("/admin/meta/official", methods=["POST"])
+@require_roles("admin")
+def admin_meta_official():
+    """بوتات المنصة الرسمية على ماسنجر/إنستجرام من التوكن المحفوظ — بلا لصق يدوي."""
+    import meta_pages as MP
+    pid, tok = _platform_page()
+    if not (pid and tok):
+        return jsonify(ok=False, error="احفظ صفحة المنصة أولاً.")
+    d = _admin_json()
+    try:
+        res = MP.connect(pid, tok, WAS.app_id(), _meta_secret())
+    except MP.PagesError as e:
+        return jsonify(ok=False, error=f"Meta ({e.step}): {e}")
+    want_fb, want_ig = d.get("messenger") is not False, d.get("instagram") is not False and bool(res["ig_id"])
+    made, failed = _meta_make_bots(uid(), res, pid, want_fb, want_ig, "BotYalla", "customer_service",
+                                   official=True)
+    for m in made:                                         # المساعد الرسمي يعمل فوراً
+        manager.start_bot(m["id"])
+    return jsonify(ok=bool(made), bots=made, failed=failed, warning=res["warning"],
+                   error="" if made else "الحساب مربوط ببوت تاني بالفعل.")
+
+
+@app.route("/admin/meta/assign", methods=["POST"])
+@require_roles("admin")
+def admin_meta_assign():
+    """ربط صفحة لمستخدم بعينه (الميزة تُمنح يدوياً في هذه المرحلة) — البوتات تُنشأ في حسابه
+    وتعمل تلقائياً بعدها: توكن الصفحة المشتق من توكن مستخدم طويل لا ينتهي."""
+    import meta_pages as MP
+    d = _admin_json()
+    target = db.get_user_by_name(str(d.get("username") or "").strip())
+    if not target:
+        return jsonify(ok=False, error="اسم المستخدم غير موجود.")
+    want_fb, want_ig = d.get("messenger") is True, d.get("instagram") is True
+    if not (want_fb or want_ig):
+        return jsonify(ok=False, error="اختار ماسنجر أو إنستجرام أو الاتنين.")
+    try:
+        res = MP.connect(d.get("page_id"), d.get("token"), WAS.app_id(), _meta_secret())
+    except MP.PagesError as e:
+        return jsonify(ok=False, error=f"Meta ({e.step}): {e}")
+    if want_ig and not res["ig_id"]:
+        return jsonify(ok=False, error="الصفحة دي مش مربوط بيها حساب إنستجرام احترافي.")
+    template = d.get("template") if d.get("template") in T.TEMPLATES else "customer_service"
+    name = (str(d.get("name") or "").strip() or res["name"])[:60]
+    made, failed = _meta_make_bots(target["id"], res, str(d.get("page_id")).strip(), want_fb, want_ig,
+                                   name, template)
+    if d.get("start") is not False:
+        for m in made:
+            manager.start_bot(m["id"])
+    log.info("admin %s assigned page %s to user=%s bots=%s", uid(), d.get("page_id"), target["id"],
+             [m["id"] for m in made])
+    return jsonify(ok=bool(made), bots=made, failed=failed, warning=res["warning"],
+                   error="" if made else "الحساب مربوط ببوت مستخدم تاني بالفعل.")
+
+
+@app.route("/admin/meta/bot/<int:bot_id>/resubscribe", methods=["POST"])
+@require_roles("admin")
+def admin_meta_resubscribe(bot_id):
+    import meta_pages as MP
+    b = db.get_bot(bot_id)
+    if not b or b.get("channel") not in ("messenger", "instagram"):
+        abort(404)
+    cfg = json.loads(b["config_json"] or "{}")
+    ok, bad = MP.subscribe(cfg.get("page_id", ""), db.unseal(cfg.get("page_token", "")), MP.DEFAULT_FIELDS)
+    return jsonify(ok=bool(ok), accepted=ok, rejected=bad)
 
 
 @app.route("/admin/growth")
@@ -3098,6 +3235,43 @@ setTimeout(function(){try{window.close();}catch(e){}},400);})();
 </script></body></html>"""
 
 
+def _meta_secret():
+    return db.get_platform("wa_es_app_secret", "") or db.get_platform("wa_app_secret", "") or ""
+
+
+def _meta_make_bots(owner_id, res, page_id, want_fb, want_ig, name, template, official=False):
+    """ينشئ بوت ماسنجر و/أو إنستجرام لمالك بعينه من نتيجة meta_pages.connect ← (made, failed).
+    `official`: بوتات المنصة نفسها — مساعد BotYalla الرسمي (معرفة المنصة + الذكاء) على الصفحة."""
+    sealed = db.seal(res["page_token"])
+    made, failed = [], []
+    for ch, pfx, own, handle in (("messenger", "fb", page_id, res["name"]),
+                                 ("instagram", "ig", res["ig_id"], "@" + res["ig_username"] if res["ig_username"] else "")):
+        if not (want_fb if ch == "messenger" else want_ig) or not own:
+            continue
+        cfg = T.initial_config(name, template, {"username": handle, "name": res["name"]}, "")
+        cfg.update(page_token=sealed, page_id=page_id, created_via="meta_connect")
+        if official:
+            cfg.update(platform_kb=True, response_mode="ai")
+        if res.get("warning"):
+            cfg["meta_setup_warning"] = res["warning"][:500]
+        existing = db.get_bot_by_token(f"{pfx}:{own}")
+        if existing and existing["owner_id"] == owner_id:
+            # إعادة ربط نفس الحساب: تحديث التوكن والحقول فقط، لا بوت مكرر
+            cur = json.loads(existing["config_json"] or "{}")
+            cur.update(page_token=sealed, page_id=page_id, meta_setup_warning=res.get("warning", "")[:500])
+            db.update_bot_config(existing["id"], cur)
+            made.append({"id": existing["id"], "channel": ch, "url": url_for("bot_detail", bot_id=existing["id"]),
+                         "updated": True})
+            continue
+        try:
+            bid = db.create_bot(owner_id, f"{name} · {'Messenger' if ch == 'messenger' else 'Instagram'}",
+                                f"{pfx}:{own}", template, cfg, ch)
+            made.append({"id": bid, "channel": ch, "url": url_for("bot_detail", bot_id=bid)})
+        except Exception:
+            failed.append(ch)                             # الحساب مربوط ببوت مستخدم آخر
+    return made, failed
+
+
 @app.route("/meta/connect", methods=["POST"])
 @require_roles("admin", "support")
 def meta_connect():
@@ -3115,9 +3289,8 @@ def meta_connect():
         return jsonify(ok=False, error=("اختار ماسنجر أو إنستجرام أو الاتنين." if ar else
                                         "Choose Messenger, Instagram or both.")), 400
     template = d.get("template") if d.get("template") in T.TEMPLATES else "customer_service"
-    secret = db.get_platform("wa_es_app_secret", "") or db.get_platform("wa_app_secret", "") or ""
     try:
-        res = MP.connect(d.get("page_id"), d.get("token"), WAS.app_id(), secret)
+        res = MP.connect(d.get("page_id"), d.get("token"), WAS.app_id(), _meta_secret())
     except MP.PagesError as e:
         return jsonify(ok=False, step=e.step, error=(f"Meta رفضت ({e.step}): {e}" if ar else
                                                      f"Meta refused ({e.step}): {e}"))
@@ -3129,22 +3302,7 @@ def meta_connect():
             "الصفحة دي مش مربوط بيها حساب إنستجرام احترافي — اربطه من إعدادات الصفحة أو اختار ماسنجر بس."
             if ar else "No Instagram professional account is linked to this Page — link it or choose Messenger only."))
     name = (str(d.get("name") or "").strip() or res["name"])[:60]
-    sealed = db.seal(res["page_token"])
-    made, failed = [], []
-    for ch, pfx, own, handle in (("messenger", "fb", str(d.get("page_id")).strip(), res["name"]),
-                                 ("instagram", "ig", res["ig_id"], "@" + res["ig_username"] if res["ig_username"] else "")):
-        if not (want_fb if ch == "messenger" else want_ig):
-            continue
-        cfg = T.initial_config(name, template, {"username": handle, "name": res["name"]}, "")
-        cfg.update(page_token=sealed, page_id=str(d.get("page_id")).strip(), created_via="meta_connect")
-        if res["warning"]:
-            cfg["meta_setup_warning"] = res["warning"][:500]
-        try:
-            bid = db.create_bot(uid(), f"{name} · {'Messenger' if ch == 'messenger' else 'Instagram'}",
-                                f"{pfx}:{own}", template, cfg, ch)
-            made.append({"id": bid, "channel": ch, "url": url_for("bot_detail", bot_id=bid)})
-        except Exception:
-            failed.append(ch)                             # الحساب مربوط ببوت آخر بالفعل
+    made, failed = _meta_make_bots(uid(), res, str(d.get("page_id")).strip(), want_fb, want_ig, name, template)
     if not made:
         return jsonify(ok=False, error=("الحساب ده مربوط ببوت تاني بالفعل." if ar else
                                         "This account is already connected to another bot."))
@@ -4290,6 +4448,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
                 {"k": "settings",         "u": url_for("settings"),         "i": "sparkles", "l": i18n.t("nav_ai", lang)},
                 {"k": "admin_analytics",  "u": url_for("admin_analytics"),  "i": "chart",    "l": i18n.t("adm_analytics", lang)},
                 {"k": "admin_growth",     "u": url_for("admin_growth"),     "i": "megaphone", "l": i18n.t("adm_growth", lang)},
+                {"k": "admin_meta",       "u": url_for("admin_meta"),       "i": "chat",     "l": i18n.t("adm_meta", lang)},
                 {"k": "admin_emails",     "u": url_for("admin_emails"),     "i": "mail",     "l": i18n.t("adm_emails", lang)},
                 {"k": "admin_platform",   "u": url_for("admin_platform"),   "i": "settings", "l": i18n.t("nav_platform", lang)},
             ]

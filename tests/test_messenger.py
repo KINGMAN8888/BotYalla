@@ -60,6 +60,8 @@ class FakeGraph:
             return R(200, {"access_token": "EAA-long-user"})
         if url.endswith("/me/accounts"):
             return R(200, {"data": [{"id": PAGE, "name": "Raghad", "access_token": "EAA-page-from-user"}]})
+        if url.endswith(f"/{PAGE}/subscribed_apps"):
+            return R(200, {"data": [{"id": "1337778974883863", "subscribed_fields": ["messages"]}]})
         if url.endswith(f"/{PAGE}"):
             body = {"name": "Raghad Store"}
             if FakeGraph.has_ig:
@@ -67,11 +69,20 @@ class FakeGraph:
             return R(200, body)
         return R(404, {"error": {"message": "nope"}})
 
+    reject = set()                       # حقول ترفضها Meta (تحتاج أذونات)
+
     def post(self, url, params=None, **k):
         FakeGraph.calls.append(("POST", url, dict(params or {})))
         if url.endswith("/subscribed_apps"):
-            return R(200, {"success": True}) if FakeGraph.subscribe_ok else R(400, {"error": {"message": "perm"}})
+            asked = set((params or {}).get("subscribed_fields", "").split(","))
+            if not FakeGraph.subscribe_ok or asked & FakeGraph.reject:
+                return R(400, {"error": {"message": "perm"}})
+            return R(200, {"success": True})
         return R(404, {})
+
+    def delete(self, url, params=None, **k):
+        FakeGraph.calls.append(("DELETE", url, dict(params or {})))
+        return R(200, {"success": True})
 
 
 def ev_text(text, sender=PSID, mid="mid.1", **extra):
@@ -171,7 +182,7 @@ class ConnectTests(unittest.TestCase):
             MP.connect("abc", "EAA-page-token-xxxxxxxx")
 
 
-class RouteAndWebhookTests(unittest.TestCase):
+class _PageBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         db.init_db()
@@ -184,10 +195,13 @@ class RouteAndWebhookTests(unittest.TestCase):
     def setUp(self):
         A._login_attempts.clear()
         FakeGraph.calls, FakeGraph.me_is_page, FakeGraph.has_ig, FakeGraph.subscribe_ok = [], True, True, True
+        FakeGraph.reject = set()
         self._c = MP.httpx.Client
         MP.httpx.Client = FakeGraph
         with db.get_conn() as c:
             c.execute("DELETE FROM bots")
+            c.execute("DELETE FROM meta_events")
+        db.set_platform("meta_page_id", ""); db.set_platform("meta_page_token", "")
 
     def tearDown(self):
         MP.httpx.Client = self._c
@@ -204,6 +218,8 @@ class RouteAndWebhookTests(unittest.TestCase):
         body.update(kw)
         return self.client(uid).post("/meta/connect", json=body, headers={"X-CSRF-Token": CSRF})
 
+
+class RouteAndWebhookTests(_PageBase):
     def test_team_only_in_phase_one(self):
         r = self.connect(self.shop)
         self.assertIn(r.status_code, (302, 403))
@@ -260,6 +276,121 @@ class RouteAndWebhookTests(unittest.TestCase):
         db.add_bot_user(fb["id"], int(PSID), "منى", peer=f"fb:{PSID}")
         db.add_bot_user(fb["id"], 42, "tg", peer="tg:42")
         self.assertEqual(db.list_bot_peers(fb["id"]), [f"fb:{PSID}"])
+
+
+class AdminMetaTests(_PageBase):
+    """«/admin/meta»: للأدمن وحده · صفحة المنصة تُحفظ مرة · الحقول · الرسمي · الربط لمستخدم."""
+    def setUp(self):
+        super().setUp()
+        self.started = []
+        self._start = A.manager.start_bot
+        A.manager.start_bot = lambda bid: self.started.append(bid) or (True, "")
+        with db.get_conn() as c:
+            c.execute("INSERT OR IGNORE INTO users(username,pw_hash,role,created_at) VALUES('agent','x','support',0)")
+        self.agent = db.get_user_by_name("agent")["id"]
+
+    def tearDown(self):
+        A.manager.start_bot = self._start
+        super().tearDown()
+
+    def post(self, uid, url, body=None):
+        return self.client(uid).post(url, json=body or {}, headers={"X-CSRF-Token": CSRF})
+
+    def save_page(self):
+        return self.post(1, "/admin/meta/page", {"page_id": PAGE, "token": "EAA-page-token-xxxxxxxx"}).get_json()
+
+    def test_admin_only_even_for_support(self):
+        self.assertIn(self.client(self.agent).get("/admin/meta").status_code, (302, 403))
+        self.assertIn(self.post(self.agent, "/admin/meta/page", {"page_id": PAGE, "token": "x" * 30}).status_code,
+                      (302, 403))
+        self.assertEqual(FakeGraph.calls, [])
+
+    def test_platform_page_is_saved_once_and_never_shown(self):
+        self.assertTrue(self.save_page()["ok"])
+        self.assertEqual(db.get_platform("meta_page_id"), PAGE)
+        self.assertEqual(db.unseal(db.get_platform("meta_page_token")), "EAA-page-token-xxxxxxxx")
+        sealed = db.get_platform("meta_page_token")
+        for url in ("/admin/meta", "/admin/platform"):
+            html = self.client(1).get(url).get_data(as_text=True)
+            self.assertNotIn("EAA-page-token", html, url)
+            self.assertNotIn(sealed[:24], html, url)
+        # «حدّث واشترك» بلا توكن جديد = نفس المحفوظ
+        self.assertTrue(self.post(1, "/admin/meta/page", {"page_id": PAGE, "token": ""}).get_json()["ok"])
+
+    def test_fields_rejected_by_meta_are_reported_the_rest_subscribed(self):
+        self.save_page()
+        FakeGraph.reject = {"calls"}
+        d = self.post(1, "/admin/meta/fields", {"fields": ["messages", "feed", "calls", "not_a_field"]}).get_json()
+        self.assertEqual(d["accepted"], ["messages", "feed"])
+        self.assertEqual(list(d["rejected"]), ["calls"])
+
+    def test_official_bots_come_from_the_saved_token(self):
+        self.save_page()
+        d = self.post(1, "/admin/meta/official", {"messenger": True, "instagram": True}).get_json()
+        self.assertTrue(d["ok"], d)
+        fb = db.get_bot_by_token(f"fb:{PAGE}")
+        cfg = json.loads(fb["config_json"])
+        self.assertTrue(cfg["platform_kb"])
+        self.assertEqual(cfg["response_mode"], "ai")
+        self.assertEqual(sorted(self.started), sorted(b["id"] for b in d["bots"]))
+        d2 = self.post(1, "/admin/meta/official", {}).get_json()      # لا تكرار — تحديث التوكن
+        self.assertTrue(all(b.get("updated") for b in d2["bots"]))
+
+    def test_assign_creates_bots_in_the_users_account(self):
+        d = self.post(1, "/admin/meta/assign", {"username": "shop", "page_id": PAGE,
+                                               "token": "EAA-page-token-xxxxxxxx", "messenger": True,
+                                               "instagram": False}).get_json()
+        self.assertTrue(d["ok"], d)
+        self.assertEqual(db.get_bot_by_token(f"fb:{PAGE}")["owner_id"], self.shop)
+        self.assertIsNone(db.get_bot_by_token(f"ig:{IG}"))
+        self.assertEqual(self.started, [d["bots"][0]["id"]])
+
+    def test_side_events_echo_handover_standby_and_log(self):
+        self.save_page()
+        self.post(1, "/admin/meta/official", {"messenger": True, "instagram": False})
+        fb = db.get_bot_by_token(f"fb:{PAGE}")
+        db.set_bot_active(fb["id"], True)
+        peer = f"fb:{PSID}"
+
+        def entry(**kw):
+            e = {"id": PAGE}
+            e.update(kw)
+            return {"object": "page", "entry": [e]}
+        seen = []
+        import flow_engine
+        orig = flow_engine.handle_message
+
+        async def fake(row, ch, msg):
+            seen.append(msg["text"])
+        flow_engine.handle_message = fake
+        try:
+            asyncio.run(BM.manager._handle_meta_pages(entry(messaging=[{
+                "sender": {"id": PAGE}, "recipient": {"id": PSID}, "timestamp": 3,
+                "message": {"is_echo": True, "mid": "e1", "text": "أهلاً، معاك أحمد"}}])))
+            self.assertEqual(db.get_conversation(fb["id"], peer)["mode"], "human")
+            db.set_conversation_mode(fb["id"], peer, "bot")
+            asyncio.run(BM.manager._handle_meta_pages(entry(messaging=[{
+                "sender": {"id": PAGE}, "recipient": {"id": PSID}, "timestamp": 4,
+                "message": {"is_echo": True, "app_id": 1337778974883863, "mid": "e2", "text": "رد البوت"}}])))
+            self.assertEqual(db.get_conversation(fb["id"], peer)["mode"], "bot")
+            asyncio.run(BM.manager._handle_meta_pages(entry(messaging=[{
+                "sender": {"id": PSID}, "recipient": {"id": PAGE}, "timestamp": 5,
+                "pass_thread_control": {"new_owner_app_id": "263902037430900"}}])))
+            self.assertEqual(db.get_conversation(fb["id"], peer)["mode"], "human")
+            asyncio.run(BM.manager._handle_meta_pages(entry(standby=[{
+                "sender": {"id": PSID}, "recipient": {"id": PAGE}, "timestamp": 6,
+                "message": {"mid": "s1", "text": "حد موجود؟"}}],
+                changes=[{"field": "feed", "value": {"item": "comment", "verb": "add",
+                                                     "message": "بكام؟", "from": {"name": "منى"}}}])))
+            self.assertEqual(seen, [], "لا رد على standby ولا على صدى")
+            kinds = [e["kind"] for e in db.list_meta_events(20)]
+            self.assertIn("handover", kinds)
+            self.assertIn("feed", kinds)
+            asyncio.run(BM.manager._handle_meta_pages({"object": "page", "entry": [
+                {"id": "999", "messaging": [{"sender": {"id": "1"}, "read": {"watermark": 1}}]}]}))
+            self.assertEqual(db.list_meta_events(1)[0]["kind"], "unrouted")
+        finally:
+            flow_engine.handle_message = orig
 
 
 if __name__ == "__main__":

@@ -501,6 +501,18 @@ def init_db():
             FOREIGN KEY(referred_user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
+        -- سجل أحداث صفحات فيسبوك/إنستجرام غير الرسائل (تسليم المحادثة · تفاعلات · تعليقات ·
+        -- سياسات…) — يُعرض في «/admin/meta». يُقصّ لآخر 3000 حدث (log_meta_event).
+        CREATE TABLE IF NOT EXISTS meta_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER,
+            account TEXT NOT NULL,             -- fb:<page_id> · ig:<ig_user_id>
+            kind TEXT NOT NULL,
+            peer TEXT,
+            summary TEXT,
+            created_at INTEGER NOT NULL
+        );
+
         -- عمولات التجديد (بعد أول دفعة) — سطر لكل دفعة معتمدة داخل سقف الـ12 شهراً.
         -- UNIQUE(payment_id) هو حارس الازدواج: اعتماد نفس الدفعة مرتين (ويب + زرّ تليجرام)
         -- لا يحتسب عمولتها مرتين.
@@ -2179,6 +2191,47 @@ def _credit_renewal(c, r, referred_user_id, payment_id, amount):
     c.execute("UPDATE affiliates SET total_earned=total_earned+? WHERE user_id=?",
               (commission, r["affiliate_user_id"]))
     return (r["affiliate_user_id"], commission)
+
+
+META_EVENTS_KEEP = 3000
+
+
+def log_meta_event(account, kind, summary="", bot_id=None, peer=None):
+    now = int(time.time())
+    with get_conn() as c:
+        cur = c.execute("INSERT INTO meta_events(bot_id,account,kind,peer,summary,created_at) "
+                        "VALUES(?,?,?,?,?,?)", (bot_id, account, kind, peer, (summary or "")[:500], now))
+        if cur.lastrowid % 200 == 0:                 # قصّ دوري لا مع كل حدث
+            c.execute("DELETE FROM meta_events WHERE id <= ?", (cur.lastrowid - META_EVENTS_KEEP,))
+        return cur.lastrowid
+
+
+def list_meta_events(limit=150, account=None):
+    q, args = "SELECT * FROM meta_events", []
+    if account:
+        q += " WHERE account=?"; args.append(account)
+    q += " ORDER BY id DESC LIMIT ?"; args.append(int(limit))
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(q, args).fetchall()]
+
+
+def meta_bots():
+    """كل بوتات ماسنجر/إنستجرام في المنصة (للأدمن) — بلا الإعداد (فيه توكن الصفحة)."""
+    with get_conn() as c:
+        rows = c.execute("SELECT b.id, b.owner_id, b.name, b.channel, b.is_active, b.created_at, "
+                         "u.username FROM bots b JOIN users u ON u.id=b.owner_id "
+                         "WHERE b.channel IN ('messenger','instagram') ORDER BY b.id DESC").fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        full = get_bot(d["id"]) or {}
+        d["account"] = full.get("token") or ""
+        try:
+            d["page_id"] = json.loads(full.get("config_json") or "{}").get("page_id", "")
+        except ValueError:
+            d["page_id"] = ""
+        out.append(d)
+    return out
 
 
 def commission_of_payment(payment_id):

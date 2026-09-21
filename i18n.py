@@ -740,6 +740,7 @@ T = {
  "brain_menu":       {"ar": "قائمة البداية: «محتاج إيه؟» (دعم فني · استفسار · اعرف أكتر · محتاج مساعدة) — والبوت يتصرّف حسب الاختيار. لو العميل بعت رسايل كتير من غير ما يوصل لهدف، المحادثة تتحوّل لك فوراً على تليجرام.",
                       "en": "Start menu: “What do you need?” (Tech support · A question · Learn more · I need help) — the bot acts on the choice. If a customer sends many messages without reaching a goal, the chat is handed to you on Telegram at once."},
  "adm_growth":       {"ar": "روابط الحملات", "en": "Campaign links"},
+ "adm_meta":         {"ar": "ماسنجر وإنستجرام", "en": "Messenger & Instagram"},
  "brain_optins":     {"ar": "موافقين على العروض: {n} من {t} · طلبوا الإيقاف: {o}", "en": "Opted in to offers: {n} of {t} · Opted out: {o}"},
  "brain_optins_csv": {"ar": "صدّر قائمة الموافقين (CSV)", "en": "Export opted-in list (CSV)"},
  "brain_ratings":    {"ar": "تقييمات العملاء: {n} · ممتاز {a} · كويس {b} · محتاج تحسين {c}",

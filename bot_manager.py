@@ -143,6 +143,84 @@ def _meta_channel(row):
     return MessengerChannel(pfx, own_id, db.unseal(cfg.get("page_token", "")))
 
 
+def _our_app_id():
+    import os
+    return os.getenv("META_APP_ID", "").strip()
+
+
+def meta_side_events(row, entry, pfx):
+    """كل ما ليس رسالة جديدة من العميل في حدث صفحة — يُتصرَّف فيه أو يُسجَّل للأدمن.
+
+    * **صدى من إنسان** (`message.is_echo` بلا app_id تطبيقنا): صاحب الصفحة ردّ من Meta Business
+      Suite/الموبايل ← يُسجَّل رداً بشرياً ويسكت البوت في المحادثة (نفس «التولّي»).
+    * **تسليم المحادثة** (handover): الصفحة أخذت المحادثة ← وضع بشري؛ أعادتها لتطبيقنا ← البوت.
+    * **standby**: رسائل وصلت والمحادثة ليست معنا ← تُسجَّل في الصندوق بلا رد.
+    * **إلغاء الرسائل** (optin STOP) ← لا بث لهذا العميل.
+    * الباقي (قراءة · تسليم · تفاعل · تعديل · تعليقات · سياسات · عملاء محتملون) ← سجل الأحداث."""
+    bot_id, account = row["id"], f"{pfx}:{entry.get('id')}"
+    own = str(entry.get("id"))
+    ours = _our_app_id()
+    for ev in entry.get("messaging") or []:
+        sender = str((ev.get("sender") or {}).get("id") or "")
+        recipient = str((ev.get("recipient") or {}).get("id") or "")
+        cust = recipient if sender == own else sender
+        peer = f"{pfx}:{cust}" if cust else None
+        m = ev.get("message") or {}
+        if m.get("is_echo"):
+            if ours and str(m.get("app_id") or "") == ours:
+                continue                                # ردّ البوت نفسه — مسجَّل عند إرساله
+            if peer and (m.get("text") or m.get("attachments")) and db.mark_msg_seen("echo:" + str(m.get("mid"))):
+                db.log_message(bot_id, peer, "out", "human", m.get("text") or "📎",
+                               kind="text" if m.get("text") else "media")
+                db.set_conversation_mode(bot_id, peer, "human")
+            continue
+        if "pass_thread_control" in ev or "take_thread_control" in ev or "request_thread_control" in ev:
+            p = ev.get("pass_thread_control") or {}
+            back_to_us = bool(p) and str(p.get("new_owner_app_id") or "") == ours
+            if peer and "request_thread_control" not in ev:
+                db.set_conversation_mode(bot_id, peer, "bot" if back_to_us else "human")
+            db.log_meta_event(account, "handover", "للبوت" if back_to_us else "للصفحة (إنسان)",
+                              bot_id=bot_id, peer=peer)
+            continue
+        opt = ev.get("optin") or {}
+        status = str(opt.get("notification_messages_status") or "").upper()
+        if status in ("STOP_NOTIFICATIONS", "RESUME_NOTIFICATIONS") and peer:
+            num = int(cust) if cust.isdigit() else 0
+            if status.startswith("STOP"):
+                db.add_bot_user(bot_id, num, "", peer=peer)
+                db.set_opt_out(bot_id, num)
+            db.log_meta_event(account, "optout" if status.startswith("STOP") else "optin", status,
+                              bot_id=bot_id, peer=peer)
+            continue
+        for k, label in (("read", "قراءة"), ("delivery", "تسليم"), ("reaction", "تفاعل"),
+                         ("message_edit", "تعديل رسالة"), ("account_linking", "ربط حساب"),
+                         ("policy_enforcement", "تنفيذ سياسة"), ("feedback", "تقييم"),
+                         ("messaging_feedback", "تقييم")):
+            if k in ev:
+                v = ev.get(k) or {}
+                extra = v.get("emoji") or v.get("reaction") or v.get("text") or v.get("action") or v.get("reason") or ""
+                if k in ("read", "delivery"):
+                    extra = ""
+                db.log_meta_event(account, k, f"{label} {extra}".strip(), bot_id=bot_id, peer=peer)
+                break
+    for ev in entry.get("standby") or []:              # المحادثة مع تطبيق/إنسان آخر: سجّل فقط
+        m = ev.get("message") or {}
+        cust = str((ev.get("sender") or {}).get("id") or "")
+        if m and not m.get("is_echo") and cust and cust != own:
+            if db.mark_msg_seen("sb:" + str(m.get("mid"))):
+                db.log_message(bot_id, f"{pfx}:{cust}", "in", "customer", m.get("text") or "📎",
+                               kind="text" if m.get("text") else "media")
+    for ch in entry.get("changes") or []:              # feed · inbox_labels · lead forms · سياسات
+        v = ch.get("value") or {}
+        field = ch.get("field") or "change"
+        label = v.get("label") if isinstance(v.get("label"), dict) else {}
+        summary = (v.get("message") or label.get("page_label_name") or
+                   " ".join(str(x) for x in (v.get("item"), v.get("verb")) if x) or "")
+        who = (v.get("from") or {}).get("name") or ""
+        db.log_meta_event(account, field, f"{who}: {summary}".strip(": ") if who else str(summary),
+                          bot_id=bot_id)
+
+
 def channel_for(row):
     """قناة الإرسال لأي بوت ويبهوك (واتساب · ماسنجر · إنستجرام) — None لتليجرام."""
     ch = row.get("channel") or "telegram"
@@ -828,8 +906,18 @@ class BotManager:
         for entry in payload.get("entry") or []:
             row = db.get_bot_by_token(f"{pfx}:{entry.get('id')}")
             if not row or not row.get("is_active"):
-                log.warning("Meta %s event for unknown or inactive account: %s", pfx, entry.get("id"))
+                # صفحة المنصة قبل إنشاء بوتها (أو بوت متوقف): يبقى الحدث ظاهراً في «/admin/meta»
+                kinds = sorted({k for ev in entry.get("messaging") or [] for k in ev
+                                if k not in ("sender", "recipient", "timestamp")} |
+                               {c.get("field", "") for c in entry.get("changes") or []})
+                db.log_meta_event(f"{pfx}:{entry.get('id')}", "unrouted",
+                                  ("بوت متوقف · " if row else "بلا بوت · ") + ", ".join(k for k in kinds if k),
+                                  bot_id=row["id"] if row else None)
                 continue
+            try:
+                meta_side_events(row, entry, pfx)
+            except Exception:
+                log.exception("Meta side events failed for bot #%s", row["id"])
             ch = _meta_channel(row)
             for msg in ch.normalize_all({"entry": [entry]}):
                 if not db.mark_msg_seen(msg.get("id")):

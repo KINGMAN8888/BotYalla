@@ -5,6 +5,7 @@ import {
 } from "../kit.jsx";
 import { TicketHead, TicketThread } from "./Account.jsx";
 import { entityLabel } from "../auth.jsx";
+import { postJSON } from "../media.jsx";
 
 /* رسم Chart.js — المكتبة محمّلة من القالب عند الحاجة فقط.
    `enabled` إلزامي: بدونه يُستدعى build() قبل وصول البيانات من fetch
@@ -789,6 +790,218 @@ export function AdminGrowth() {
           </Card>
         ))}
       </div>
+    </>
+  );
+}
+
+/* ============================================================ ماسنجر وإنستجرام (للأدمن وحده)
+   صفحة المنصة تُحفظ مرة (توكنها مختوم في الخادم ولا يعود للمتصفح) · حقول الاشتراك · بوتات
+   المنصة الرسمية من التوكن المحفوظ · ربط صفحة لأي مستخدم · كل بوتات الصفحات · سجل الأحداث. */
+export function AdminMeta() {
+  const { page = {}, fields = [], defaults = [], bots = [], events = [], templates = [], webhook = "" } = P;
+  const st = page.status || null;
+  const [pg, setPg] = useState({ page_id: page.id || "1240480079158277", token: "" });
+  const [sel, setSel] = useState(() => new Set(st && st.subscribed && st.fields.length ? st.fields : defaults));
+  const [asg, setAsg] = useState({ username: "", page_id: "", token: "", name: "", template: "customer_service",
+                                   messenger: true, instagram: true });
+  const [out, setOut] = useState({});
+  const [busy, setBusy] = useState("");
+  const say = (k, v) => setOut((o) => ({ ...o, [k]: v }));
+
+  async function run(k, url, body, reload = true) {
+    setBusy(k); say(k, null);
+    const d = await postJSON(url, body);
+    setBusy("");
+    say(k, d);
+    if (d.ok && reload) setTimeout(() => location.reload(), 900);
+    return d;
+  }
+  const groups = fields.reduce((m, f) => ((m[f.group] = m[f.group] || []).push(f), m), {});
+  const toggle = (k) => setSel((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const Msg = ({ d }) => !d ? null : (
+    <p role="status" className={"mt-3 mb-0 text-[13px] font-bold " + (d.ok ? "text-au-teal" : "text-red-300")}>
+      {d.ok ? bi("تم ✓", "Done ✓") : d.error}
+      {d.warning ? <span className="block text-yellow-300">⚠ {d.warning}</span> : null}
+      {d.rejected && Object.keys(d.rejected).length > 0 && (
+        <span className="mt-1 block font-normal text-ink-3">
+          {bi("مرفوضة من Meta (تحتاج أذونات إضافية): ", "Rejected by Meta (need extra permissions): ")}
+          {Object.keys(d.rejected).join(" · ")}
+        </span>
+      )}
+    </p>
+  );
+
+  return (
+    <>
+      <PageHead icon="chat" title={bi("ماسنجر وإنستجرام", "Messenger & Instagram")}
+        sub={bi("تحكم كامل في صفحات فيسبوك وحسابات إنستجرام — للأدمن فقط.",
+                "Full control of Facebook Pages and Instagram accounts — admins only.")} />
+
+      <Card className="mb-5">
+        <SectionTitle icon="link">{bi("عنوان الويبهوك في Meta", "Webhook URL in Meta")}</SectionTitle>
+        <code className="block overflow-x-auto rounded-xl bg-black/30 px-4 py-3 text-[13px] text-au-cyan" dir="ltr">{webhook}</code>
+        <p className="mt-2 mb-0 text-[12.5px] text-ink-3">
+          {bi("حطه في إعدادات Messenger وInstagram في تطبيق Meta بنفس Verify Token بتاع واتساب.",
+              "Set it in the Messenger and Instagram settings of the Meta app with the same Verify Token as WhatsApp.")}
+        </p>
+      </Card>
+
+      <Card className="mb-5">
+        <SectionTitle icon="shield"
+          extra={page.configured ? <Pill tone={st && st.subscribed ? "on" : "warn"} dot>
+            {st && st.subscribed ? bi("مشترك", "Subscribed") : bi("غير مشترك", "Not subscribed")}</Pill> : null}>
+          {bi("صفحة المنصة", "Platform Page")}
+        </SectionTitle>
+        {page.configured && st && (
+          <div className="mb-4 flex flex-wrap gap-2 text-[13px]">
+            <Pill tone="mute">{st.name || page.id}</Pill>
+            {st.ig_username && <Pill tone="mute"><Icon name="camera" size={11} />@{st.ig_username}</Pill>}
+            <Pill tone="mute">{bi("حقول", "Fields")}: {st.fields.length}</Pill>
+            {st.error && <Pill tone="warn">{st.error}</Pill>}
+          </div>
+        )}
+        <div className="grid gap-3 sm:grid-cols-[1fr_1.4fr_auto] sm:items-end">
+          <Field label="Page ID">
+            <Input value={pg.page_id} onChange={(e) => setPg({ ...pg, page_id: e.target.value })} dir="ltr" inputMode="numeric" />
+          </Field>
+          <Field label={page.configured ? bi("توكن جديد (اختياري)", "New token (optional)") : bi("التوكن", "Token")}>
+            <Input type="password" value={pg.token} onChange={(e) => setPg({ ...pg, token: e.target.value })} dir="ltr"
+                   autoComplete="off" placeholder={page.configured ? bi("فاضي = نفس المحفوظ", "empty = keep saved") : "EAA…"} />
+          </Field>
+          <Btn icon="check" type="button" disabled={busy === "page" || (!page.configured && !pg.token)}
+               onClick={() => run("page", "/admin/meta/page", pg)}>
+            {page.configured ? bi("حدّث واشترك", "Update & subscribe") : bi("احفظ الصفحة", "Save Page")}
+          </Btn>
+        </div>
+        <Msg d={out.page} />
+        {page.configured && (
+          <div className="mt-5 flex flex-wrap gap-2.5 border-t border-white/10 pt-4">
+            <Btn icon="rocket" type="button" disabled={busy === "official"}
+                 onClick={() => run("official", "/admin/meta/official", { messenger: true, instagram: true })}>
+              {bi("شغّل المساعد الرسمي على ماسنجر وإنستجرام", "Run the official assistant on Messenger & Instagram")}
+            </Btn>
+            <Btn variant="ghost" icon="close" type="button" disabled={busy === "unsub"}
+                 onClick={() => { if (confirm(bi("فصل التطبيق عن أحداث الصفحة؟", "Unsubscribe the app from the Page?")))
+                                    run("unsub", "/admin/meta/unsubscribe", {}); }}>
+              {bi("إلغاء الاشتراك", "Unsubscribe")}
+            </Btn>
+          </div>
+        )}
+        <Msg d={out.official || out.unsub} />
+      </Card>
+
+      {page.configured && (
+        <Card className="mb-5">
+          <SectionTitle icon="settings"
+            extra={<div className="flex gap-2">
+              <Btn sm variant="ghost" type="button" onClick={() => setSel(new Set(defaults))}>{bi("المقترح", "Recommended")}</Btn>
+              <Btn sm variant="ghost" type="button" onClick={() => setSel(new Set(fields.map((f) => f.k)))}>{bi("الكل", "All")}</Btn>
+            </div>}>
+            {bi("حقول الاشتراك", "Subscription fields")}
+          </SectionTitle>
+          <div className="grid gap-4 md:grid-cols-2">
+            {Object.entries(groups).map(([g, list]) => (
+              <div key={g} className="rounded-xl bg-white/[0.03] p-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+                <div className="mb-2 text-[12.5px] font-extrabold text-ink-3">{g}</div>
+                {list.map((f) => (
+                  <label key={f.k} className="flex cursor-pointer items-center gap-2 py-1 text-[13px] text-ink" dir="ltr">
+                    <input type="checkbox" checked={sel.has(f.k)} onChange={() => toggle(f.k)} className="size-4 accent-[#8FE9FF]" />
+                    <span className="font-mono text-[12.5px]">{f.k}</span>
+                    <span className={"ms-auto text-[11px] font-bold " + (f.handled ? "text-au-teal" : "text-ink-4")} dir="rtl">
+                      {f.handled ? bi("يعالجه BotYalla", "Handled") : bi("سجل فقط", "Logged only")}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+          <Btn className="mt-4" icon="check" type="button" disabled={busy === "fields"}
+               onClick={() => run("fields", "/admin/meta/fields", { fields: [...sel] })}>
+            {bi("احفظ الاشتراك", "Save subscription")} ({sel.size})
+          </Btn>
+          <Msg d={out.fields} />
+        </Card>
+      )}
+
+      <Card className="mb-5">
+        <SectionTitle icon="users">{bi("ربط صفحة لمستخدم", "Connect a Page for a user")}</SectionTitle>
+        <p className="mt-0 mb-4 text-[12.5px] text-ink-3">
+          {bi("البوتات بتتعمل في حساب المستخدم وتشتغل على طول، وتفضل شغالة لوحدها — توكن الصفحة المشتق من توكن مستخدم طويل مبينتهيش.",
+              "Bots are created in the user's account and start right away — a Page token derived from a long-lived user token never expires.")}
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <Field label={t("username")}><Input value={asg.username} onChange={(e) => setAsg({ ...asg, username: e.target.value })} /></Field>
+          <Field label="Page ID"><Input value={asg.page_id} dir="ltr" inputMode="numeric" onChange={(e) => setAsg({ ...asg, page_id: e.target.value })} /></Field>
+          <Field label={bi("التوكن", "Token")}><Input type="password" value={asg.token} dir="ltr" autoComplete="off"
+                 onChange={(e) => setAsg({ ...asg, token: e.target.value })} /></Field>
+          <Field label={t("biz_name")}><Input value={asg.name} maxLength={60} onChange={(e) => setAsg({ ...asg, name: e.target.value })} /></Field>
+          <Field label={t("bot_type")}>
+            <Select value={asg.template} onChange={(e) => setAsg({ ...asg, template: e.target.value })}>
+              {templates.map((x) => <option key={x.k} value={x.k}>{x.l}</option>)}
+            </Select>
+          </Field>
+          <div className="flex items-end gap-4 pb-2">
+            {[["messenger", "Messenger"], ["instagram", "Instagram"]].map(([k, l]) => (
+              <label key={k} className="flex items-center gap-2 text-[13.5px] font-bold text-ink">
+                <input type="checkbox" checked={asg[k]} onChange={(e) => setAsg({ ...asg, [k]: e.target.checked })}
+                       className="size-4 accent-[#8FE9FF]" />{l}
+              </label>
+            ))}
+          </div>
+        </div>
+        <Btn className="mt-3" icon="link" type="button" disabled={busy === "assign" || !asg.username || !asg.page_id || !asg.token}
+             onClick={() => run("assign", "/admin/meta/assign", asg)}>
+          {bi("اربط للمستخدم", "Connect for user")}
+        </Btn>
+        <Msg d={out.assign} />
+      </Card>
+
+      <Card className="mb-5">
+        <SectionTitle icon="bot">{bi("كل بوتات الصفحات", "All Page bots")} ({bots.length})</SectionTitle>
+        {bots.length ? (
+          <Table head={["#", bi("البوت", "Bot"), bi("المالك", "Owner"), bi("القناة", "Channel"),
+                        bi("الحساب", "Account"), bi("الحالة", "Status"), ""]}>
+            {bots.map((b) => (
+              <Tr key={b.id}>
+                <Td className="tnum">{b.id}</Td>
+                <Td><a href={`/bot/${b.id}`} className="font-bold text-au-cyan no-underline">{b.name}</a></Td>
+                <Td>{b.username}</Td>
+                <Td>{b.channel === "instagram" ? "Instagram" : "Messenger"}</Td>
+                <Td className="font-mono text-[12px]">{b.account}</Td>
+                <Td>{b.is_active ? <Pill tone="on" dot>{t("running")}</Pill> : <Pill tone="off">{t("stopped")}</Pill>}</Td>
+                <Td>
+                  <Btn sm variant="ghost" type="button" disabled={busy === `bot_${b.id}`}
+                       onClick={() => run(`bot_${b.id}`, `/admin/meta/bot/${b.id}/resubscribe`, {}, false)}>
+                    {bi("إعادة الاشتراك", "Resubscribe")}
+                  </Btn>
+                  {out[`bot_${b.id}`] && (
+                    <span className={"ms-2 text-[12px] font-bold " + (out[`bot_${b.id}`].ok ? "text-au-teal" : "text-red-300")}>
+                      {out[`bot_${b.id}`].ok ? "✓" : "✗"}
+                    </span>
+                  )}
+                </Td>
+              </Tr>
+            ))}
+          </Table>
+        ) : <Empty icon="bot" title={bi("مفيش بوتات صفحات لسه", "No Page bots yet")} />}
+      </Card>
+
+      <Card>
+        <SectionTitle icon="clock">{bi("سجل الأحداث", "Event log")} ({events.length})</SectionTitle>
+        {events.length ? (
+          <Table head={[bi("الوقت", "Time"), bi("الحساب", "Account"), bi("النوع", "Kind"), bi("العميل", "Customer"), bi("التفاصيل", "Details")]}>
+            {events.map((e) => (
+              <Tr key={e.id}>
+                <Td className="tnum text-[12px]">{fmtDate(e.created_at)}</Td>
+                <Td className="font-mono text-[12px]">{e.account}</Td>
+                <Td><Pill tone="mute">{e.kind}</Pill></Td>
+                <Td className="font-mono text-[12px]">{e.peer || "—"}</Td>
+                <Td className="text-[12.5px]">{e.summary}</Td>
+              </Tr>
+            ))}
+          </Table>
+        ) : <Empty icon="clock" title={bi("لسه مفيش أحداث", "No events yet")} />}
+      </Card>
     </>
   );
 }

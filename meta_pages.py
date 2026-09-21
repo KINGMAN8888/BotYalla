@@ -20,7 +20,34 @@ import httpx
 log = logging.getLogger("meta_pages")
 GRAPH = "https://graph.facebook.com/v21.0"
 TIMEOUT = 20
-FIELDS = "messages,messaging_postbacks,messaging_referrals"
+# حقول اشتراك الصفحة (Edit Page Subscriptions في لوحة Meta) — كلها قابلة للاختيار من
+# «/admin/meta». `handled`: ما يتصرف فيه BotYalla فعلاً؛ الباقي يُسجَّل في سجل الأحداث فقط.
+ALL_FIELDS = [
+    # (الحقل, المجموعة, يعالجه BotYalla؟)
+    ("messages", "رسائل", True), ("messaging_postbacks", "رسائل", True),
+    ("messaging_referrals", "رسائل", True), ("message_echoes", "رسائل", True),
+    ("message_edits", "رسائل", True), ("message_reactions", "رسائل", True),
+    ("message_reads", "رسائل", True), ("message_deliveries", "رسائل", True),
+    ("standby", "تسليم المحادثة", True), ("messaging_handovers", "تسليم المحادثة", True),
+    ("messaging_optins", "الموافقة", True), ("messaging_optouts", "الموافقة", True),
+    ("feed", "الصفحة", True), ("inbox_labels", "الصفحة", True),
+    ("messaging_feedback", "الصفحة", True), ("response_feedback", "الصفحة", True),
+    ("messaging_customer_information", "الصفحة", True), ("messaging_account_linking", "الصفحة", False),
+    ("messaging_policy_enforcement", "سياسات", True), ("messaging_integrity", "سياسات", True),
+    ("business_integrity", "سياسات", True), ("marketing_message_delivery_failed", "سياسات", True),
+    ("message_template_status_update", "سياسات", False),
+    ("messaging_in_thread_lead_form_submit", "عملاء محتملون", True),
+    ("messaging_payments", "مدفوعات", False), ("messaging_pre_checkouts", "مدفوعات", False),
+    ("messaging_checkout_updates", "مدفوعات", False), ("send_cart", "مدفوعات", False),
+    ("messaging_game_plays", "أخرى", False), ("group_feed", "أخرى", False),
+    ("calls", "مكالمات", False), ("call_permission_reply", "مكالمات", False),
+    ("call_settings_update", "مكالمات", False),
+]
+FIELD_NAMES = [f for f, _, _ in ALL_FIELDS]
+# ما يُشترك فيه تلقائياً عند الربط — ما يعالجه BotYalla. المدفوعات والمكالمات والألعاب
+# تحتاج أذونات وميزات منفصلة من Meta؛ طلبها بلا داعٍ يُفشل الاشتراك كله.
+DEFAULT_FIELDS = [f for f, _, h in ALL_FIELDS if h]
+FIELDS = ",".join(DEFAULT_FIELDS)
 _ID = re.compile(r"^\d{5,25}$")
 
 
@@ -73,11 +100,73 @@ def connect(page_id, token, app_id="", secret=""):
             raise PagesError("page", _err(r))
         info = r.json() or {}
         ig = info.get("instagram_business_account") or {}
-        warning = ""
-        s = c.post(f"{GRAPH}/{page_id}/subscribed_apps",
-                   params={"subscribed_fields": FIELDS, "access_token": page_token})
-        if s.status_code != 200 or not (s.json() or {}).get("success"):
-            warning = f"subscribe: {_err(s)}"
+        ok, rejected = _subscribe(c, page_id, page_token, DEFAULT_FIELDS)
+        warning = ("subscribe: " + "; ".join(f"{k}: {v}" for k, v in list(rejected.items())[:4])
+                   if rejected else "")
     return {"page_token": page_token, "name": info.get("name") or page_id,
             "ig_id": str(ig.get("id") or ""), "ig_username": ig.get("username") or "",
             "warning": warning}
+
+
+def _subscribe(c, page_id, page_token, fields):
+    """اشتراك بالحقول المطلوبة ← (مقبولة, {مرفوضة: السبب}). Meta ترفض الطلب كله لو حقل واحد
+    يحتاج إذناً لا نملكه — فعند الفشل نجرّب حقلاً حقلاً لنعرف ما يعمل ونشترك فيه وحده."""
+    fields = [f for f in fields if f in FIELD_NAMES]
+    if not fields:
+        return [], {}
+    r = c.post(f"{GRAPH}/{page_id}/subscribed_apps",
+               params={"subscribed_fields": ",".join(fields), "access_token": page_token})
+    if r.status_code == 200 and (r.json() or {}).get("success"):
+        return fields, {}
+    ok, bad = [], {}
+    for f in fields:
+        x = c.post(f"{GRAPH}/{page_id}/subscribed_apps",
+                   params={"subscribed_fields": ",".join(ok + [f]), "access_token": page_token})
+        if x.status_code == 200 and (x.json() or {}).get("success"):
+            ok.append(f)
+        else:
+            bad[f] = _err(x)
+    return ok, bad
+
+
+def subscribe(page_id, page_token, fields):
+    """من «/admin/meta»: يستبدل حقول اشتراك الصفحة ← (مقبولة, مرفوضة)."""
+    with httpx.Client(timeout=TIMEOUT) as c:
+        return _subscribe(c, str(page_id), page_token, list(fields or []))
+
+
+def status(page_id, page_token, app_id=""):
+    """حالة الصفحة الحية ← {name, ig_username, fields, subscribed}. لا يرمي — الخطأ في `error`."""
+    out = {"name": "", "ig_username": "", "ig_id": "", "fields": [], "subscribed": False, "error": ""}
+    try:
+        with httpx.Client(timeout=TIMEOUT) as c:
+            r = c.get(f"{GRAPH}/{page_id}", params={
+                "fields": "name,instagram_business_account{id,username}", "access_token": page_token})
+            if r.status_code != 200:
+                out["error"] = _err(r)
+                return out
+            info = r.json() or {}
+            ig = info.get("instagram_business_account") or {}
+            out.update(name=info.get("name") or "", ig_username=ig.get("username") or "",
+                       ig_id=str(ig.get("id") or ""))
+            s = c.get(f"{GRAPH}/{page_id}/subscribed_apps", params={"access_token": page_token})
+            if s.status_code == 200:
+                for a in (s.json() or {}).get("data") or []:
+                    if not app_id or str(a.get("id")) == str(app_id):
+                        out["subscribed"] = True
+                        out["fields"] = list(a.get("subscribed_fields") or [])
+            else:
+                out["error"] = _err(s)
+    except Exception as e:
+        out["error"] = str(e)[:200]
+    return out
+
+
+def unsubscribe(page_id, page_token):
+    """فصل التطبيق عن أحداث الصفحة (لا يحذف البوتات) ← (ok, error)."""
+    try:
+        with httpx.Client(timeout=TIMEOUT) as c:
+            r = c.delete(f"{GRAPH}/{page_id}/subscribed_apps", params={"access_token": page_token})
+            return (r.status_code == 200, "" if r.status_code == 200 else _err(r))
+    except Exception as e:
+        return False, str(e)[:200]
