@@ -12,7 +12,8 @@ os.environ["META_APP_ID"] = "1337778974883863"
 
 import database as db                       # noqa: E402
 import meta_pages as MP                     # noqa: E402
-import bot_manager as BM                    # noqa: E402
+import bot_manager as BM
+import flow_engine as FE                    # noqa: E402
 import channels.messenger as CM             # noqa: E402
 import app as A                             # noqa: E402
 
@@ -27,6 +28,10 @@ class R:
 
     def json(self):
         return self._b
+
+    @property
+    def text(self):
+        return json.dumps(self._b, ensure_ascii=False)
 
 
 # ------------------------------------------------------------------ Send API مزيّف (async)
@@ -574,7 +579,7 @@ class DiagnoseTests(_PageBase):
         self.assertIn(c.post("/admin/meta/app-webhooks", json={}, headers={"X-CSRF-Token": CSRF}).status_code, (302, 403))
 
 
-class EchoTests(_PageBase):
+class _EchoBase(_PageBase):
     """إنستجرام يرسل صدى رسائل البوت بلا app_id — يجب ألا يُحسب رداً بشرياً فيُسكت البوت."""
     def setUp(self):
         super().setUp()
@@ -598,6 +603,9 @@ class EchoTests(_PageBase):
     def mode(self):
         return (db.get_conversation(self.ig["id"], self.peer) or {}).get("mode", "bot")
 
+
+
+class EchoTests(_EchoBase):
     def test_bot_reply_echo_without_app_id_keeps_the_bot_talking(self):
         ch = BM._meta_channel(self.ig)
         asyncio.run(ch.send_text(self.peer, "أهلاً بيك في BotYalla"))
@@ -615,6 +623,64 @@ class EchoTests(_PageBase):
         ev["entry"][0]["messaging"][0]["message"]["app_id"] = 263902037430900
         asyncio.run(BM.manager._handle_meta_pages(ev))
         self.assertEqual(self.mode(), "human")
+
+
+
+class DeliveryTests(_EchoBase):
+    """رسائل تظهر في الصندوق ولا تصل للعميل (والعكس) — ماسنجر/إنستجرام."""
+
+    def test_long_instagram_reply_is_split_under_the_byte_limit(self):
+        ch = CM.MessengerChannel("ig", IG, "t")
+        FakeAsync.sent = []
+        text = ("باقة تاجر بـ 299 جنيه في الشهر وبتديك 3 بوتات على تليجرام. " * 30).strip()
+        asyncio.run(ch.send_buttons(self.peer, text, ["سجل حساب مجاني", "الأسعار"]))
+        bodies = [b["message"] for _, b, _ in FakeAsync.sent]
+        self.assertGreater(len(bodies), 1, "كانت تُرسل رسالة واحدة يرفضها إنستجرام")
+        self.assertTrue(all(len(b["text"].encode()) <= CM.IG_TEXT_BYTES for b in bodies))
+        self.assertTrue(all("quick_replies" not in b for b in bodies[:-1]))
+        self.assertIn("quick_replies", bodies[-1])
+
+    def test_rejected_send_is_not_shown_as_sent(self):
+        class Reject(FakeAsync):
+            async def post(self, url, json=None, params=None, **k):
+                return R(400, {"error": {"message": "(#100) Invalid parameter", "code": 100}})
+        CM._client = Reject()
+        ch = FE.LoggedChannel(BM._meta_channel(self.ig), self.ig["id"], "ai")
+        asyncio.run(ch.send_text(self.peer, "رد لن يصل"))
+        texts = [m["text"] for m in db.list_messages(self.ig["id"], self.peer)]
+        self.assertNotIn("رد لن يصل", texts)
+        self.assertTrue(any(e["kind"] == "send_failed" for e in db.list_meta_events(50)))
+
+    def test_owner_reply_seconds_after_the_bot_still_shows(self):
+        ch = BM._meta_channel(self.ig)
+        asyncio.run(ch.send_text(self.peer, "أهلاً بيك في BotYalla"))
+        asyncio.run(BM.manager._handle_meta_pages(self.echo("m-owner", "معاك يوسف، أقدر أساعدك إزاي؟")))
+        texts = [m["text"] for m in db.list_messages(self.ig["id"], self.peer)]
+        self.assertIn("معاك يوسف، أقدر أساعدك إزاي؟", texts, "كان يُحسب صدى للبوت فيختفي")
+        self.assertEqual(self.mode(), "human")
+
+    def test_thread_owned_by_page_inbox_is_taken_back_then_sent(self):
+        calls = []
+        class Owned(FakeAsync):
+            async def post(self, url, json=None, params=None, **k):
+                calls.append(url.rsplit("/", 1)[1])
+                if url.endswith("/messages") and "take_thread_control" not in calls:
+                    return R(400, {"error": {"message": "thread owner", "error_subcode": 2018109}})
+                return R(200, {"message_id": "m9", "success": True})
+        CM._client = Owned()
+        res = asyncio.run(BM._meta_channel(self.ig).send_text(self.peer, "رجعت أرد"))
+        self.assertEqual(calls, ["messages", "take_thread_control", "messages"])
+        self.assertEqual(res["message_id"], "m9")
+
+    def test_standby_human_reply_and_customer_message_both_show(self):
+        ev = {"object": "instagram", "entry": [{"id": IG, "standby": [
+            {"sender": {"id": IGSID}, "recipient": {"id": IG}, "message": {"mid": "sb1", "text": "لسه مستني"}},
+            {"sender": {"id": IG}, "recipient": {"id": IGSID},
+             "message": {"mid": "sb2", "text": "ثواني وهرد عليك", "is_echo": True, "app_id": 263902037430900}}]}]}
+        asyncio.run(BM.manager._handle_meta_pages(ev))
+        msgs = {(m["direction"], m["text"]) for m in db.list_messages(self.ig["id"], self.peer)}
+        self.assertIn(("in", "لسه مستني"), msgs)
+        self.assertIn(("out", "ثواني وهرد عليك"), msgs)
 
 
 if __name__ == "__main__":

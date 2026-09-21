@@ -68,8 +68,17 @@ class LoggedChannel:
         self._c, self._bot_id, self.sender = inner, bot_id, sender
 
     def _log(self, peer, text, res, kind="text"):
-        # قناة واتساب ترجّع None حين يُرفض الإرسال (حدّ الباقة) — لا نسجّل ما لم يُرسَل
-        if res is None and getattr(self._c, "phone_id", None) is not None:
+        # واتساب وماسنجر/إنستجرام ترجّع None حين يُرفض الإرسال (حدّ الباقة · رفض Meta) — لا نسجّل
+        # ما لم يصل: كان يظهر في الصندوق كأنه اتبعت والعميل لم يستلمه
+        if res is None and (getattr(self._c, "phone_id", None) is not None or
+                            getattr(self._c, "page_id", None) is not None):
+            err = getattr(self._c, "last_error", "")
+            if err and getattr(self._c, "page_id", None):
+                try:
+                    db.log_meta_event(f"{self._c.platform}:{self._c.page_id}", "send_failed",
+                                      err[:200], bot_id=self._bot_id, peer=peer)
+                except Exception:
+                    pass
             return
         try:
             db.log_message(self._bot_id, peer, "out", self.sender, text or "", kind=kind)

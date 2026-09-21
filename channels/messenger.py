@@ -23,6 +23,9 @@ log = logging.getLogger("channels.messenger")
 GRAPH = "https://graph.facebook.com/v21.0"
 TIMEOUT = 15
 QR_MAX, QR_TITLE = 13, 20
+# حدّ نص الرسالة: إنستجرام 1000 **بايت** UTF-8 (الحرف العربي بايتان)، ماسنجر 2000 حرف. الأطول
+# يُرفض كله من Meta — فيظهر في صندوقنا ولا يصل للعميل. نقسّمه رسائل متتالية عند سطر/مسافة.
+IG_TEXT_BYTES, FB_TEXT_CHARS = 1000, 2000
 
 _client = None
 # آخر أزرار أُرسلت لكل عميل (الصفحة، الـpeer) ← الخيارات: رقم يكتبه العميل («2») أو العنوان بلا
@@ -38,16 +41,54 @@ _EMOJI = re.compile(r"[^\w\s؀-ۿ]", re.UNICODE)
 # صاحب الصفحة بالتطبيق. نتذكر كل ما أرسلناه: معرّف الرسالة (mid) من رد الـSend API، ووقت بدء
 # الإرسال لكل عميل — الصدى قد يصل قبل أن يعود رد الـAPI (نفس حلقة asyncio).
 _OUR_MIDS = set()
-_LAST_SEND = {}                      # (حسابنا، العميل) ← وقت آخر إرسال من البوت
-ECHO_WINDOW = 30                     # ثانية: صدى خلالها بعد إرسال البوت = صدى البوت
+_LAST_SEND = {}                      # (حسابنا، العميل) ← [(وقت، نص)] لآخر ما أرسله البوت
+ECHO_WINDOW = 90                     # ثانية: نص مطابق لما أرسلناه خلالها = صدى البوت
+ECHO_BLIND = 8                       # صدى بلا نص (صورة/ملف) بعد إرسالنا بثوانٍ = صدى البوت
 
 
-def is_our_echo(own_id, customer_id, mid):
-    """هل هذا الصدى رسالة أرسلها البوت (لا إنسان من Meta Business Suite/الموبايل)؟"""
+def _norm_text(s):
+    return " ".join(str(s or "").split())
+
+
+def is_our_echo(own_id, customer_id, mid, text=None, app_id=None, ours=None):
+    """هل هذا الصدى رسالة أرسلها البوت (لا إنسان من Meta Business Suite/الموبايل)؟
+    بالمعرّف أولاً، ثم بتطابق النص — لا بالتوقيت وحده: ردّ صاحب الصفحة بعد البوت بثوانٍ كان
+    يُحسب صدى للبوت فيختفي من صندوق الوارد. app_id تطبيق آخر (صندوق Business Suite) = إنسان."""
     import time as _t
     if mid and mid in _OUR_MIDS:
         return True
-    return _t.time() - _LAST_SEND.get((str(own_id), str(customer_id)), 0) < ECHO_WINDOW
+    if app_id and ours and str(app_id) == str(ours):
+        return True
+    if app_id:                                   # تطبيق آخر أرسلها — ليست نحن
+        return False
+    now = _t.time()
+    recent = [(t, x) for t, x in _LAST_SEND.get((str(own_id), str(customer_id)), []) if now - t < ECHO_WINDOW]
+    t_ = _norm_text(text)
+    if t_:
+        return any(x == t_ for _, x in recent)
+    return any(now - t < ECHO_BLIND for t, _ in recent)
+
+
+def split_text(text, platform):
+    """نص طويل ← أجزاء ضمن حدّ المنصة، مقسومة عند سطر ثم مسافة."""
+    text = text or ""
+    fits = (lambda s: len(s.encode("utf-8")) <= IG_TEXT_BYTES - 10) if platform == "ig" else \
+           (lambda s: len(s) <= FB_TEXT_CHARS)
+    out = []
+    while text and not fits(text):
+        cut = len(text)
+        while cut > 1 and not fits(text[:cut]):
+            cut = int(cut * 0.9)
+        for sep in ("\n", " "):
+            k = text.rfind(sep, 0, cut)
+            if k > cut // 2:
+                cut = k
+                break
+        out.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    if text or not out:
+        out.append(text)
+    return out
 
 
 def _plain(s):
@@ -73,6 +114,7 @@ class MessengerChannel(Channel):
         self.token = token
         self.on_send = on_send
         self._peer_of_mid = {}                 # mid ← peer: mark_read يحتاج المستلم لا الرسالة
+        self.last_error = ""
 
     # ------------------------------------------------------------------ إرسال
     def _to(self, peer):
@@ -86,13 +128,20 @@ class MessengerChannel(Channel):
             import time as _t
             if len(_LAST_SEND) > _LAST_MAX:
                 _LAST_SEND.clear()
-            _LAST_SEND[(self.page_id, rid)] = _t.time()        # قبل الإرسال — الصدى قد يسبق الرد
+            key = (self.page_id, rid)                            # قبل الإرسال — الصدى قد يسبق الرد
+            _LAST_SEND[key] = (_LAST_SEND.get(key) or [])[-9:] + \
+                [(_t.time(), _norm_text((body.get("message") or {}).get("text")))]
         try:
             c = await _http()
             r = await c.post(f"{GRAPH}/me/messages", json=body,
                              params={"access_token": self.token})
+            if r.status_code >= 400 and "message" in body and rid and self._thread_error(r) and \
+                    await self.take_thread(rid):
+                # المحادثة كانت مع صندوق الصفحة (Business Suite) بعد تسليمها لإنسان — استرجعناها
+                r = await c.post(f"{GRAPH}/me/messages", json=body, params={"access_token": self.token})
             if r.status_code >= 400:
                 log.error("Messenger API %s (%s): %s", r.status_code, self.platform, r.text[:400])
+                self.last_error = r.text[:300]
                 return None
             res = r.json() or {}
             if res.get("message_id"):
@@ -104,12 +153,48 @@ class MessengerChannel(Channel):
             log.exception("Messenger API call failed")
             return None
 
+    @staticmethod
+    def _thread_error(r):
+        """رفض لأن تطبيقاً آخر يملك المحادثة (بروتوكول التسليم)."""
+        try:
+            e = (r.json() or {}).get("error") or {}
+        except Exception:
+            return False
+        msg = str(e.get("message") or "").lower()
+        return e.get("error_subcode") in (2018109, 2018108) or "thread" in msg or "handover" in msg
+
+    async def take_thread(self, rid):
+        """يستعيد المحادثة لتطبيقنا من صندوق الصفحة — لازم قبل أن يرد البوت بعد تسليمها لإنسان."""
+        try:
+            c = await _http()
+            r = await c.post(f"{GRAPH}/me/take_thread_control", params={"access_token": self.token},
+                             json={"recipient": {"id": rid}, "metadata": "botyalla: bot resumed"})
+            if r.status_code >= 400:
+                log.info("take_thread_control %s (%s): %s", r.status_code, self.platform, r.text[:200])
+            return r.status_code < 400
+        except Exception:
+            log.info("take_thread_control failed", exc_info=True)
+            return False
+
     async def _send(self, peer, message):
-        return await self._call({"recipient": {"id": self._to(peer)},
-                                 "messaging_type": "RESPONSE", "message": message})
+        """نص أطول من حدّ المنصة يُرسل أجزاءً (الأزرار مع الجزء الأخير). يرجّع رد آخر جزء،
+        أو None لو فشل أي جزء — فلا يُسجَّل في الصندوق ما لم يصل كاملاً."""
+        parts = split_text(message.get("text"), self.platform) if message.get("text") else [None]
+        res = None
+        for i, part in enumerate(parts):
+            msg = dict(message)
+            if part is not None:
+                msg["text"] = part
+            if i < len(parts) - 1:
+                msg.pop("quick_replies", None)
+            res = await self._call({"recipient": {"id": self._to(peer)},
+                                    "messaging_type": "RESPONSE", "message": msg}, count=(i == 0))
+            if res is None:
+                return None
+        return res
 
     async def send_text(self, peer, text):
-        return await self._send(peer, {"text": (text or "")[:2000]})
+        return await self._send(peer, {"text": text or ""})
 
     def _remember(self, peer, opts):
         if len(_LAST_OPTS) > _LAST_MAX:
@@ -127,7 +212,7 @@ class MessengerChannel(Channel):
             # والرقم أو العنوان يُقبلان كإجابة (`_one`). ماسنجر يعرضها في كل مكان.
             body = (text or "👇") if self.platform != "ig" else f"{text or ''}\n\n{numbered}".strip()
             return await self._send(peer, {
-                "text": body[:2000],
+                "text": body,
                 "quick_replies": [{"content_type": "text", "title": o, "payload": o} for o in opts]})
         return await self.send_text(peer, (text or "") + "\n\n" + numbered)
 

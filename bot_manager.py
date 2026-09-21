@@ -168,7 +168,7 @@ def meta_side_events(row, entry, pfx):
         m = ev.get("message") or {}
         if m.get("is_echo"):
             from channels.messenger import is_our_echo
-            if (ours and str(m.get("app_id") or "") == ours) or is_our_echo(own, cust, m.get("mid")):
+            if is_our_echo(own, cust, m.get("mid"), m.get("text"), m.get("app_id"), ours):
                 continue                                # ردّ البوت نفسه — مسجَّل عند إرساله
             # ما بقي إنسان: صندوق الصفحة (app_id صندوق Meta 263902037430900) أو تطبيق الموبايل
             if peer and (m.get("text") or m.get("attachments")) and db.mark_msg_seen("echo:" + str(m.get("mid"))):
@@ -207,11 +207,20 @@ def meta_side_events(row, entry, pfx):
                 break
     for ev in entry.get("standby") or []:              # المحادثة مع تطبيق/إنسان آخر: سجّل فقط
         m = ev.get("message") or {}
-        cust = str((ev.get("sender") or {}).get("id") or "")
-        if m and not m.get("is_echo") and cust and cust != own:
-            if db.mark_msg_seen("sb:" + str(m.get("mid"))):
-                db.log_message(bot_id, f"{pfx}:{cust}", "in", "customer", m.get("text") or "📎",
+        sender = str((ev.get("sender") or {}).get("id") or "")
+        recipient = str((ev.get("recipient") or {}).get("id") or "")
+        if not m:
+            continue
+        if m.get("is_echo"):
+            # ردّ إنسان من صندوق الصفحة والمحادثة معه — يظهر عندنا في الصندوق أيضاً
+            if recipient and recipient != own and (m.get("text") or m.get("attachments")) and \
+                    db.mark_msg_seen("sbe:" + str(m.get("mid"))):
+                db.log_message(bot_id, f"{pfx}:{recipient}", "out", "human", m.get("text") or "📎",
                                kind="text" if m.get("text") else "media")
+            continue
+        if sender and sender != own and db.mark_msg_seen("sb:" + str(m.get("mid"))):
+            db.log_message(bot_id, f"{pfx}:{sender}", "in", "customer", m.get("text") or "📎",
+                           kind="text" if m.get("text") else "media")
     for ch in entry.get("changes") or []:              # feed · inbox_labels · lead forms · سياسات
         v = ch.get("value") or {}
         field = ch.get("field") or "change"
