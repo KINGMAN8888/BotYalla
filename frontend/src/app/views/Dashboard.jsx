@@ -154,6 +154,8 @@ function BotCard({ b, i }) {
             {(b.channel || "telegram") === "whatsapp" && (
               <Pill tone="mute"><img src="/static/whatsapp.png" alt="WhatsApp" className="size-[11px] object-contain inline-block" />WA</Pill>
             )}
+            {b.channel === "messenger" && <Pill tone="mute"><Icon name="chat" size={11} />Messenger</Pill>}
+            {b.channel === "instagram" && <Pill tone="mute"><Icon name="camera" size={11} />Instagram</Pill>}
             {b.running ? <Pill tone="on" dot>{t("running")}</Pill> : <Pill tone="off">{t("stopped")}</Pill>}
           </div>
         </div>
@@ -879,6 +881,84 @@ function FirstRunChecklist({ ob }) {
   );
 }
 
+/* ماسنجر + إنستجرام — المرحلة الأولى للفريق وحده (/meta/connect يفرض الدور في الخادم).
+   Page ID + توكن (صفحة، أو مستخدم من Graph API Explorer يُحوَّل لتوكن صفحة دائم في الخادم).
+   التوكن يُرسل مرة ولا يعود للمتصفح. الطرح للعملاء = نافذة Meta بضغطة مثل واتساب لاحقاً. */
+function MetaConnect() {
+  const [f, setF] = useState({ page_id: "", token: "", name: "", template: "customer_service",
+                               messenger: true, instagram: true });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+
+  async function send(e) {
+    e.preventDefault();
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch("/meta/connect", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf },
+        body: JSON.stringify(f),
+      });
+      const d = await r.json();
+      if (d.ok) { window.location.href = d.url; return; }
+      setMsg(d.error || `HTTP ${r.status}`);
+    } catch {
+      setMsg(bi("مفيش اتصال بالسيرفر — جرّب تاني.", "No connection to the server — try again."));
+    }
+    setBusy(false);
+  }
+
+  return (
+    <Card className="mb-6 bg-[linear-gradient(125deg,rgb(0_132_255/0.14),rgb(225_48_108/0.12))]
+                     shadow-[inset_0_0_0_1px_rgb(0_132_255/0.3)]">
+      <h2 className="m-0 flex flex-wrap items-center gap-2.5 text-[19px] font-extrabold text-ink">
+        <Icon name="chat" size={22} className="text-[#4DA3FF]" />
+        {bi("بوت ماسنجر وإنستجرام", "Messenger & Instagram bot")}
+        <Pill tone="mute">{bi("تجريبي — للفريق فقط", "Beta — team only")}</Pill>
+      </h2>
+      <p className="mt-1.5 mb-4 max-w-[680px] text-[13px] leading-relaxed text-ink-3">
+        {bi("الصق Page ID وتوكن الصفحة (أو توكن مستخدم من Graph API Explorer — السيرفر يحوّله لتوكن صفحة دائم). بيتعمل بوت لماسنجر و/أو لحساب إنستجرام الاحترافي المربوط بالصفحة، بنفس عقل البوت وصندوق الوارد.",
+            "Paste the Page ID and a Page token (or a user token from Graph API Explorer — the server turns it into a permanent Page token). A bot is created for Messenger and/or the Instagram professional account linked to the Page, with the same bot brain and inbox.")}
+      </p>
+      <form onSubmit={send} className="grid gap-3 sm:grid-cols-2">
+        <Field label="Page ID">
+          <Input value={f.page_id} onChange={set("page_id")} required inputMode="numeric" dir="ltr"
+                 autoComplete="off" spellCheck="false" placeholder="1234567890" />
+        </Field>
+        <Field label={bi("التوكن", "Token")}>
+          <Input type="password" value={f.token} onChange={set("token")} required dir="ltr"
+                 autoComplete="off" spellCheck="false" placeholder="EAA…" />
+        </Field>
+        <Field label={t("biz_name")}>
+          <Input value={f.name} onChange={set("name")} maxLength={60} placeholder={bi("اسم الصفحة لو فاضي", "Page name if empty")} />
+        </Field>
+        <Field label={t("bot_type")}>
+          <Select value={f.template} onChange={set("template")}>
+            {BY.templates.map((x) => <option key={x.k} value={x.k}>{x.label}</option>)}
+          </Select>
+        </Field>
+        <div className="flex flex-wrap items-center gap-5 sm:col-span-2">
+          {[["messenger", "Messenger"], ["instagram", "Instagram"]].map(([k, label]) => (
+            <label key={k} className="flex cursor-pointer items-center gap-2 text-[13.5px] font-bold text-ink">
+              <input type="checkbox" checked={f[k]} onChange={set(k)} className="size-4 accent-[#4DA3FF]" />{label}
+            </label>
+          ))}
+          <Btn icon="link" type="submit" className="ms-auto" disabled={busy || !f.page_id || !f.token}>
+            {busy ? bi("جارٍ الربط…", "Connecting…") : bi("اربط الصفحة", "Connect the Page")}
+          </Btn>
+        </div>
+      </form>
+      {msg && <p role="alert" className="mt-3 mb-0 text-[13px] font-bold text-red-300">{msg}</p>}
+      <p className="mt-3 mb-0 text-[12px] leading-relaxed text-ink-3">
+        <Icon name="shield" size={12} className="me-1 align-[-2px]" />
+        {bi("ماسنجر وإنستجرام بيسمحوا بالرد الحر لمدة 24 ساعة بعد آخر رسالة من العميل بس — البث والرد اليدوي بيلتزموا بده تلقائياً.",
+            "Messenger and Instagram allow free replies only within 24 hours of the customer's last message — broadcasts and manual replies follow this automatically.")}
+      </p>
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   const { bots = [], total = {}, onboarding = {}, oneTap = {} } = P;
   const stage = onboarding.stage;
@@ -897,6 +977,7 @@ export default function Dashboard() {
       {P.waEs && <WaOneTapTop cfg={P.waEs} />}
       {!P.waEs && P.waEsLocked && <WaOneTapLocked />}
       {quick && <OneTapCreate />}
+      {P.metaConnect && <MetaConnect />}
       {!quick && BY.user.role === "admin" && (
         <Card className="mb-6 flex items-start gap-3 bg-yellow-400/[0.06] shadow-[inset_0_0_0_1px_rgb(250_204_21/0.25)]">
           <Icon name="bolt" size={18} className="mt-0.5 text-yellow-300" />

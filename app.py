@@ -137,7 +137,7 @@ _login_attempts = {}   # ip -> (count, first_ts)
 @app.before_request
 def _csrf_protect():
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-        if request.path == "/wh/whatsapp":
+        if request.path in ("/wh/whatsapp", "/wh/meta"):    # التوقيع هو الحارس
             return
         # إلغاء اشتراك البريد بضغطة (RFC 8058): Gmail/Yahoo يرسلان POST من خوادمهما بلا
         # جلسة. الحارس هنا توكن HMAC في الرابط نفسه (mailer.check_unsub) + حدّ للطلبات.
@@ -1166,6 +1166,8 @@ def dashboard():
                        "waEs": WAS.client_config() if wa_ok else None,
                        # للباقات بدون واتساب: كارت مقفول يعرض الميزة ويدعو للترقية (بلا أي إعدادات Meta)
                        "waEsLocked": (not wa_ok) and WAS.configured(),
+                       # ماسنجر + إنستجرام: المرحلة الأولى للفريق وحده (meta_connect)
+                       "metaConnect": current_role() in ("admin", "support"),
                        "waAssist": {"open": db.open_ticket_of_kind(uid(), "wa_setup") if wa_plan else None},
                        "onboarding": _onboarding(bots),
                        # الإنشاء بضغطة متاح فقط لو بوت المنصة يعمل وفيه «وضع إدارة البوتات»
@@ -1228,24 +1230,29 @@ def _owned(bot_id):
     if not b: abort(404)
     return b
 
+# أسرار تشغيلية داخل إعداد البوت — لا تصل للمتصفح أبداً (قائمة واحدة للنسختين تحت)
+_SECRET_CFG = ("wa_token", "wa_pin", "page_token")
+
+
 def _public_bot(b):
     """نسخة من صفّ البوت صالحة لحمولة الصفحة: توكن تليجرام سرّ تشغيل البوت
     كاملاً فلا يصل للمتصفح (ولا لأي XSS محتمل). `wa:<phone_id>` ليس سراً —
     لوحة واتساب تعرضه — فيبقى."""
     b = dict(b)
-    if not str(b.get("token") or "").startswith("wa:"):
+    if not str(b.get("token") or "").startswith(("wa:", "fb:", "ig:")):
         b["token"] = ""
     # توكن واتساب (Meta) ورمز PIN التسجيل سرّان تشغيليّان كتوكن تليجرام — لا تقرأهما الواجهة
     # (الصف يحمل الإعداد مرتين: `config_json` نصاً و`config` محلولاً — نمسح من الاثنين)
     try:
         cfg = json.loads(b.get("config_json") or "{}")
-        if any(k in cfg for k in ("wa_token", "wa_pin")):
-            cfg.pop("wa_token", None); cfg.pop("wa_pin", None)
+        if any(k in cfg for k in _SECRET_CFG):
+            for k in _SECRET_CFG:
+                cfg.pop(k, None)
             b["config_json"] = json.dumps(cfg, ensure_ascii=False)
     except (TypeError, ValueError):
         pass
     if isinstance(b.get("config"), dict):
-        b["config"] = {k: v for k, v in b["config"].items() if k not in ("wa_token", "wa_pin")}
+        b["config"] = {k: v for k, v in b["config"].items() if k not in _SECRET_CFG}
     return b
 
 @app.route("/bot/create", methods=["POST"])
@@ -1348,7 +1355,7 @@ def bot_detail(bot_id):
     orders = db.list_orders(bot_id) if b["template"] == "store" else []
     bookings = db.list_bookings(bot_id) if b["template"] == "booking" else []
     # معرّف المحادثة لكل صف — زرّ «محادثة» بجانب العميل يفتح صندوق الوارد عليه
-    pfx = "wa:" if (b.get("channel") or "telegram") == "whatsapp" else "tg:"
+    pfx = {"whatsapp": "wa:", "messenger": "fb:", "instagram": "ig:"}.get(b.get("channel") or "", "tg:")
     for row in leads + orders + bookings:
         row["peer"] = f"{pfx}{row['tg_user_id']}" if row.get("tg_user_id") else ""
 
@@ -2350,7 +2357,8 @@ def config_restore(bot_id, vid):
     # الحقول التشغيلية لا تُستعاد من نسخة قديمة: ربط المالك والتوكنات وهوية البوت
     for k in ("owner_chat_id", "wa_token", "tg_bot_id", "bot_username", "bot_name",
               "pending_owner_code", "wa_waba_id", "wa_waba_hint", "created_via", "wa_pin",
-              "ai_consent_at", "tg_synced_at", "tg_sync_ok", "tg_sync_errors"):
+              "ai_consent_at", "tg_synced_at", "tg_sync_ok", "tg_sync_errors",
+              "page_token", "page_id", "wa_coexist", "meta_setup_warning"):
         if k in cur:
             old[k] = cur[k]
         else:
@@ -3088,6 +3096,62 @@ font:15px/1.6 system-ui,sans-serif;display:grid;place-items:center;height:100vh;
 (function(){var d=%(data)s;try{if(window.opener){window.opener.postMessage(d,%(origin)s);}}catch(e){}
 setTimeout(function(){try{window.close();}catch(e){}},400);})();
 </script></body></html>"""
+
+
+@app.route("/meta/connect", methods=["POST"])
+@require_roles("admin", "support")
+def meta_connect():
+    """ماسنجر + إنستجرام — **المرحلة الأولى للفريق وحده** (require_roles): يلصق Page ID
+    وتوكن (صفحة أو مستخدم من Graph Explorer)، فيُنشأ بوت ماسنجر و/أو بوت إنستجرام للحساب
+    المربوط بالصفحة، مشتركين في أحداث الصفحة. الطرح للعملاء = نافذة Login for Business لاحقاً
+    تنتهي بنفس meta_pages.connect. توكن الصفحة يُختم في الإعداد (db.seal) ولا يصل للمتصفح."""
+    import meta_pages as MP
+    ar = session.get("lang") != "en"
+    if _rate_limited(f"u{uid()}", limit=10, window=600, bucket="meta_connect"):
+        return jsonify(ok=False, error=("محاولات كتير — استنى دقايق." if ar else "Too many attempts.")), 429
+    d = request.get_json(silent=True) or {}
+    want_fb, want_ig = d.get("messenger") is True, d.get("instagram") is True
+    if not (want_fb or want_ig):
+        return jsonify(ok=False, error=("اختار ماسنجر أو إنستجرام أو الاتنين." if ar else
+                                        "Choose Messenger, Instagram or both.")), 400
+    template = d.get("template") if d.get("template") in T.TEMPLATES else "customer_service"
+    secret = db.get_platform("wa_es_app_secret", "") or db.get_platform("wa_app_secret", "") or ""
+    try:
+        res = MP.connect(d.get("page_id"), d.get("token"), WAS.app_id(), secret)
+    except MP.PagesError as e:
+        return jsonify(ok=False, step=e.step, error=(f"Meta رفضت ({e.step}): {e}" if ar else
+                                                     f"Meta refused ({e.step}): {e}"))
+    except Exception:
+        log.exception("meta connect crashed for user=%s", uid())
+        return jsonify(ok=False, error=("خطأ غير متوقع — جرّب تاني." if ar else "Unexpected error.")), 500
+    if want_ig and not res["ig_id"]:
+        return jsonify(ok=False, step="page", error=(
+            "الصفحة دي مش مربوط بيها حساب إنستجرام احترافي — اربطه من إعدادات الصفحة أو اختار ماسنجر بس."
+            if ar else "No Instagram professional account is linked to this Page — link it or choose Messenger only."))
+    name = (str(d.get("name") or "").strip() or res["name"])[:60]
+    sealed = db.seal(res["page_token"])
+    made, failed = [], []
+    for ch, pfx, own, handle in (("messenger", "fb", str(d.get("page_id")).strip(), res["name"]),
+                                 ("instagram", "ig", res["ig_id"], "@" + res["ig_username"] if res["ig_username"] else "")):
+        if not (want_fb if ch == "messenger" else want_ig):
+            continue
+        cfg = T.initial_config(name, template, {"username": handle, "name": res["name"]}, "")
+        cfg.update(page_token=sealed, page_id=str(d.get("page_id")).strip(), created_via="meta_connect")
+        if res["warning"]:
+            cfg["meta_setup_warning"] = res["warning"][:500]
+        try:
+            bid = db.create_bot(uid(), f"{name} · {'Messenger' if ch == 'messenger' else 'Instagram'}",
+                                f"{pfx}:{own}", template, cfg, ch)
+            made.append({"id": bid, "channel": ch, "url": url_for("bot_detail", bot_id=bid)})
+        except Exception:
+            failed.append(ch)                             # الحساب مربوط ببوت آخر بالفعل
+    if not made:
+        return jsonify(ok=False, error=("الحساب ده مربوط ببوت تاني بالفعل." if ar else
+                                        "This account is already connected to another bot."))
+    log.info("meta connect: user=%s page=%s bots=%s warning=%s", uid(), d.get("page_id"),
+             [m["id"] for m in made], bool(res["warning"]))
+    return jsonify(ok=True, bots=made, failed=failed, warning=res["warning"],
+                   url=made[0]["url"])
 
 
 @app.route("/whatsapp/es/start", methods=["POST"])
@@ -3906,7 +3970,7 @@ def inbox_send(bot_id):
     if _rate_limited(f"u{uid()}:b{bot_id}", limit=40, window=60, bucket="inbox"):
         return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)})
     # واتساب: لا نص حر بعد 24 ساعة من آخر رسالة للعميل — المخالفة تُقيّد الرقم
-    if (b.get("channel") or "telegram") == "whatsapp" and peer.startswith("wa:") and \
+    if peer.startswith(("wa:", "fb:", "ig:")) and \
             int(_time.time()) - db.peer_last_in(bot_id, peer) > WA_WINDOW:
         return jsonify({"ok": False, "window": True, "error": i18n.t("inbox_wa_window", lang)})
     ok, err = manager.send_to_peer(bot_id, peer, text=text or None, asset=asset)
@@ -5092,6 +5156,7 @@ def wallet_topup():
 
 # ---------- Webhooks ----------
 @app.route("/wh/whatsapp", methods=["GET", "POST"])
+@app.route("/wh/meta", methods=["GET", "POST"])        # ماسنجر + إنستجرام (object=page/instagram)
 def whatsapp_webhook():
     # المسار مُستثنى من CSRF، فالتوقيع هو الحارس الوحيد:
     # بلا سرّ مضبوط لا نقبل شيئاً (fail closed) بدل أن نفتح الباب للجميع.

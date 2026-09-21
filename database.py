@@ -94,6 +94,15 @@ def _decrypt(token):
         return ""
 
 
+def seal(value):
+    """ختم سرّ داخل إعداد البوت (توكن صفحة فيسبوك) بنفس مفتاح توكنات البوتات."""
+    return _encrypt(value) if value else value
+
+
+def unseal(value):
+    return _decrypt(value) if value else ""
+
+
 def _token_idx(token):
     """فهرس أعمى حتمي: نفس التوكن ← نفس القيمة، ولا يُستخرج منه التوكن."""
     token = (token or "").strip()
@@ -1259,8 +1268,9 @@ def is_opted_out(bot_id, peer):
 
 # عملاء قناة البوت نفسها فقط: صفّ المساعد الرسمي (واتساب) يحمل أيضاً عملاء بوت المنصة على
 # تليجرام (`tg:`) — حملة واتساب لهم تفشل وتُحسب تكلفتها على قائمة أطول مما يصل (§3.22).
-_SAME_CHANNEL = ("substr(COALESCE(peer,'tg:'),1,3) = (SELECT CASE WHEN channel='whatsapp' "
-                 "THEN 'wa:' ELSE 'tg:' END FROM bots WHERE id=bot_users.bot_id)")
+_SAME_CHANNEL = ("substr(COALESCE(peer,'tg:'),1,3) = (SELECT CASE channel WHEN 'whatsapp' THEN 'wa:' "
+                 "WHEN 'messenger' THEN 'fb:' WHEN 'instagram' THEN 'ig:' ELSE 'tg:' END "
+                 "FROM bots WHERE id=bot_users.bot_id)")
 
 def list_bot_user_ids(bot_id):
     with get_conn() as c:

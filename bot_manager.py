@@ -128,6 +128,31 @@ def _wa_channel(row):
 
     return WhatsAppChannel(phone_id, cfg.get("wa_token", ""), on_send=guard)
 
+# قنوات تصلها الرسائل بالويبهوك (لا polling): تُسجَّل «مشغّلة» بلا عملية، والإرسال عبر Graph.
+WEBHOOK_CHANNELS = ("whatsapp", "messenger", "instagram")
+META_PAGE_CHANNELS = {"messenger": "fb", "instagram": "ig"}      # القناة ← بادئة التوكن والـpeer
+
+
+def _meta_channel(row):
+    """قناة ماسنجر/إنستجرام من صف البوت. توكن الصفحة مختوم في الإعداد (`db.seal`) — Meta
+    لا تحاسب على رسائل الصفحات فلا عدّاد استهلاك هنا (بخلاف واتساب)."""
+    from channels.messenger import MessengerChannel
+    cfg = json.loads(row["config_json"] or "{}")
+    pfx = META_PAGE_CHANNELS.get(row.get("channel") or "", "fb")
+    own_id = (row["token"] or "").split(":", 1)[-1]
+    return MessengerChannel(pfx, own_id, db.unseal(cfg.get("page_token", "")))
+
+
+def channel_for(row):
+    """قناة الإرسال لأي بوت ويبهوك (واتساب · ماسنجر · إنستجرام) — None لتليجرام."""
+    ch = row.get("channel") or "telegram"
+    if ch == "whatsapp":
+        return _wa_channel(row)
+    if ch in META_PAGE_CHANNELS:
+        return _meta_channel(row)
+    return None
+
+
 def _register_inbox_guard(app, bot_id):
     """لقوالب تليجرام التي لا تمرّ بمحرك الفلو (متجر · حجز · قائمة): يسجّل كل
     رسالة واردة في صندوق الوارد، وحين يتولّى صاحب النشاط المحادثة يوقف القالب
@@ -255,8 +280,8 @@ class BotManager:
         return await self.start_bot_async(bot_id)
 
     async def _start(self, row):
-        if row.get("channel") == "whatsapp":
-            self._apps[row["id"]] = {"type": "whatsapp"}
+        if row.get("channel") in WEBHOOK_CHANNELS:
+            self._apps[row["id"]] = {"type": row.get("channel")}
             return
             
         cfg = json.loads(row["config_json"] or "{}")
@@ -286,7 +311,7 @@ class BotManager:
     async def _stop(self, bot_id):
         app = self._apps.pop(bot_id, None)
         if app:
-            if isinstance(app, dict) and app.get("type") == "whatsapp":
+            if isinstance(app, dict) and app.get("type") in WEBHOOK_CHANNELS:
                 return
             if app.updater and app.updater.running: await app.updater.stop()
             await app.stop(); await app.shutdown()
@@ -333,9 +358,9 @@ class BotManager:
         (والنص يصير تعليقه). يرجّع (وصل, لم يصل)."""
         row = db.get_bot(bot_id)
         if not row: return 0, 0
-        if (row.get("channel") or "telegram") == "whatsapp":
-            # واتساب يمنع المراسلة الحرة بعد 24 ساعة من آخر رسالة للعميل،
-            # والمخالفة تُقيّد الرقم. نبثّ داخل النافذة فقط.
+        if (row.get("channel") or "telegram") in WEBHOOK_CHANNELS:
+            # واتساب وماسنجر وإنستجرام تمنع المراسلة الحرة بعد 24 ساعة من آخر رسالة
+            # للعميل، والمخالفة تُقيّد الرقم/الصفحة. نبثّ داخل النافذة فقط.
             ids = db.list_bot_peers(bot_id, within_seconds=WA_WINDOW)
             skipped = len(db.list_bot_peers(bot_id)) - len(ids)
             if skipped:
@@ -349,7 +374,7 @@ class BotManager:
                                  max(60, len(ids) * per), "broadcast")
 
     async def _broadcast(self, row, ids, text, asset, prog):
-        if (row.get("channel") or "telegram") == "whatsapp":
+        if (row.get("channel") or "telegram") in WEBHOOK_CHANNELS:
             return await self._broadcast_wa(row, ids, text, asset, prog)
 
         from channels.telegram import TelegramChannel
@@ -377,7 +402,7 @@ class BotManager:
             if own: await bot.shutdown()
 
     async def _broadcast_wa(self, row, peers, text, asset, prog):
-        channel = _wa_channel(row)
+        channel = channel_for(row)
         for peer in peers:
             if prog["stop"]:
                 break
@@ -548,7 +573,7 @@ class BotManager:
     async def _send_to_peer(self, row, peer, text=None, asset=None):
         from telegram.error import Forbidden
         from channels.telegram import TelegramChannel
-        is_wa = (row.get("channel") or "telegram") == "whatsapp"
+        is_wa = (row.get("channel") or "telegram") in WEBHOOK_CHANNELS
         own = None
         if is_wa and peer.startswith("tg:"):
             # عميل كلّم بوت المنصة على تليجرام وسُجّل على صفّ المساعد الرسمي (بوت واتساب):
@@ -559,7 +584,7 @@ class BotManager:
             ch = TelegramChannel(self._platform.bot)
             ch.cache_refs = False
         elif is_wa:
-            ch = _wa_channel(row)
+            ch = channel_for(row)
         else:
             app = self._apps.get(row["id"])
             if app is not None and not isinstance(app, dict):
@@ -795,7 +820,33 @@ class BotManager:
             log.exception("Failed to dispatch WhatsApp webhook")
             return False
 
+    async def _handle_meta_pages(self, payload):
+        """ماسنجر (`object=page`) وإنستجرام (`object=instagram`): entry.id = الصفحة/الحساب،
+        فالبوت هو صاحب التوكن `fb:<id>`/`ig:<id>`."""
+        import flow_engine
+        pfx = "fb" if payload.get("object") == "page" else "ig"
+        for entry in payload.get("entry") or []:
+            row = db.get_bot_by_token(f"{pfx}:{entry.get('id')}")
+            if not row or not row.get("is_active"):
+                log.warning("Meta %s event for unknown or inactive account: %s", pfx, entry.get("id"))
+                continue
+            ch = _meta_channel(row)
+            for msg in ch.normalize_all({"entry": [entry]}):
+                if not db.mark_msg_seen(msg.get("id")):
+                    continue
+                db.bump_received(row["id"], row["owner_id"])
+                try:
+                    await flow_engine.handle_message(row, ch, msg)
+                except Exception:
+                    log.exception("Meta %s message failed for bot #%s", pfx, row["id"])
+
     async def _handle_wa_webhook(self, payload):
+        if (payload or {}).get("object") in ("page", "instagram"):
+            try:
+                await self._handle_meta_pages(payload)
+            except Exception:
+                log.exception("Error handling Messenger/Instagram webhook payload")
+            return
         try:
             record_wa_echoes(payload)            # قبل الرسائل: رد الموبايل يُسكت البوت أولاً
         except Exception:

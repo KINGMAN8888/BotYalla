@@ -20,7 +20,7 @@ import database as db
 
 log = logging.getLogger("inbox_relay")
 
-TAG_RE = re.compile(r"#C(\d+):((?:wa|tg):-?\d+)")
+TAG_RE = re.compile(r"#C(\d+):((?:wa|tg|fb|ig):-?\d+)")
 WA_WINDOW = 24 * 3600
 ALERT_EVERY = 20 * 60            # تنبيه «محتاج دعم» واحد لكل محادثة كل 20 دقيقة
 _last_alert = {}
@@ -41,7 +41,7 @@ def recipients(bot_row):
     cfg = json.loads(bot_row.get("config_json") or "{}")
     owner = bot_row.get("owner_id")
     for v in (db.user_tg_channel(owner) if owner else None,
-              cfg.get("owner_chat_id") if (bot_row.get("channel") or "telegram") == "whatsapp" else None):
+              cfg.get("owner_chat_id") if (bot_row.get("channel") or "telegram") in ("whatsapp", "messenger", "instagram") else None):
         if v and str(v) not in out:
             out.append(str(v))
     if db.bot_owner_is_staff(bot_row["id"]):
@@ -67,7 +67,8 @@ def _alert_text(bot_row, peer, headline, detail=""):
     biz = cfg.get("business_name") or bot_row.get("name") or ""
     who = conv.get("name") or ""
     num = peer.split(":", 1)[1] if ":" in peer else peer
-    contact = f"+{num}" if peer.startswith("wa:") else f"Telegram {num}"
+    contact = (f"+{num}" if peer.startswith("wa:") else f"Messenger {num}" if peer.startswith("fb:")
+               else f"Instagram {num}" if peer.startswith("ig:") else f"Telegram {num}")
     recent = [m for m in db.recent_history(bot_row["id"], peer, 8) if m.get("direction") == "in"][-3:]
     lines = [f"{headline} «{biz}»", f"👤 {who + ' · ' if who else ''}{contact}"]
     if detail:
@@ -77,7 +78,7 @@ def _alert_text(bot_row, peer, headline, detail=""):
         lines += [f"  • {(m.get('text') or '📎')[:160]}" for m in recent]
     lines.append("")
     lines.append("↩️ اعمل Reply على الرسالة دي وردّك يوصله مباشرة "
-                 + ("على واتساب." if peer.startswith("wa:") else "على تليجرام."))
+                 + "على " + {"wa": "واتساب", "fb": "ماسنجر", "ig": "إنستجرام"}.get(peer[:2], "تليجرام") + ".")
     lines.append(tag(bot_row["id"], peer))
     return "\n".join(lines)
 
@@ -122,9 +123,10 @@ async def relay_reply(bot_id, peer, tg_user_id, text):
         return False, "⚠️ اكتب نص الرد."
     if not _reply_allowed(row):
         return False, "⚠️ باقتك لا تتيح الرد اليدوي — رقّي الباقة من اللوحة."
-    if peer.startswith("wa:") and int(time.time()) - db.peer_last_in(bot_id, peer) > WA_WINDOW:
-        return False, ("⚠️ عدّت 24 ساعة على آخر رسالة من العميل — واتساب لا يسمح برسالة حرة. "
-                       "استخدم قالباً معتمداً من صفحة البث.")
+    if peer.startswith(("wa:", "fb:", "ig:")) and int(time.time()) - db.peer_last_in(bot_id, peer) > WA_WINDOW:
+        return False, ("⚠️ عدّت 24 ساعة على آخر رسالة من العميل — Meta لا تسمح برسالة حرة بعدها. "
+                       + ("استخدم قالباً معتمداً من صفحة البث." if peer.startswith("wa:") else
+                          "استنى العميل يكتب تاني."))
     ok, err = await bot_manager.manager._send_to_peer(row, peer, text)
     if not ok:
         return False, f"⚠️ الرسالة لم تُرسل ({err})."
