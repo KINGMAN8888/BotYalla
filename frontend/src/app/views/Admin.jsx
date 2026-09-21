@@ -800,10 +800,10 @@ export function AdminGrowth() {
 export function AdminMeta() {
   const { page = {}, fields = [], defaults = [], bots = [], events = [], templates = [], webhook = "" } = P;
   const st = page.status || null;
-  const [pg, setPg] = useState({ page_id: page.id || "1240480079158277", token: "" });
+  const [pg, setPg] = useState({ page_id: page.id || "1240480079158277", token: "", ig_id: "" });
   const [sel, setSel] = useState(() => new Set(st && st.subscribed && st.fields.length ? st.fields : defaults));
   const [asg, setAsg] = useState({ username: "", page_id: "", token: "", name: "", template: "customer_service",
-                                   messenger: true, instagram: true });
+                                   messenger: true, instagram: true, ig_id: "" });
   const [out, setOut] = useState({});
   const [busy, setBusy] = useState("");
   const say = (k, v) => setOut((o) => ({ ...o, [k]: v }));
@@ -860,9 +860,13 @@ export function AdminMeta() {
             {st.error && <Pill tone="warn">{st.error}</Pill>}
           </div>
         )}
-        <div className="grid gap-3 sm:grid-cols-[1fr_1.4fr_auto] sm:items-end">
+        <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1.4fr_auto] sm:items-end">
           <Field label="Page ID">
             <Input value={pg.page_id} onChange={(e) => setPg({ ...pg, page_id: e.target.value })} dir="ltr" inputMode="numeric" />
+          </Field>
+          <Field label={bi("معرّف إنستجرام (اختياري)", "Instagram ID (optional)")}>
+            <Input value={pg.ig_id} onChange={(e) => setPg({ ...pg, ig_id: e.target.value })} dir="ltr" inputMode="numeric"
+                   placeholder="17841427092295524" />
           </Field>
           <Field label={page.configured ? bi("توكن جديد (اختياري)", "New token (optional)") : bi("التوكن", "Token")}>
             <Input type="password" value={pg.token} onChange={(e) => setPg({ ...pg, token: e.target.value })} dir="ltr"
@@ -935,6 +939,9 @@ export function AdminMeta() {
           <Field label={bi("التوكن", "Token")}><Input type="password" value={asg.token} dir="ltr" autoComplete="off"
                  onChange={(e) => setAsg({ ...asg, token: e.target.value })} /></Field>
           <Field label={t("biz_name")}><Input value={asg.name} maxLength={60} onChange={(e) => setAsg({ ...asg, name: e.target.value })} /></Field>
+          <Field label={bi("معرّف إنستجرام (اختياري)", "Instagram ID (optional)")}>
+            <Input value={asg.ig_id} dir="ltr" inputMode="numeric" onChange={(e) => setAsg({ ...asg, ig_id: e.target.value })} />
+          </Field>
           <Field label={t("bot_type")}>
             <Select value={asg.template} onChange={(e) => setAsg({ ...asg, template: e.target.value })}>
               {templates.map((x) => <option key={x.k} value={x.k}>{x.l}</option>)}

@@ -2668,13 +2668,15 @@ def admin_meta_page():
     page_id = str(d.get("page_id") or "").strip()
     token = str(d.get("token") or "").strip() or _platform_page()[1]   # فارغ = إعادة الاشتراك بالمحفوظ
     try:
-        res = MP.connect(page_id, token, WAS.app_id(), _meta_secret())
+        res = MP.connect(page_id, token, WAS.app_id(), _meta_secret(), d.get("ig_id"))
     except MP.PagesError as e:
         return jsonify(ok=False, error=f"Meta ({e.step}): {e}")
     db.set_platform("meta_page_id", page_id)
     db.set_platform("meta_page_token", db.seal(res["page_token"]))
+    db.set_platform("meta_page_ig", res["ig_id"] or str(d.get("ig_id") or "").strip())
     log.info("platform page saved: %s (ig=%s) by admin=%s", page_id, bool(res["ig_id"]), uid())
-    return jsonify(ok=True, name=res["name"], ig=res["ig_username"], warning=res["warning"])
+    return jsonify(ok=True, name=res["name"], ig=res["ig_username"],
+                   warning=" · ".join(x for x in (res["warning"], res.get("ig_reason", "")) if x))
 
 
 @app.route("/admin/meta/fields", methods=["POST"])
@@ -2710,7 +2712,7 @@ def admin_meta_official():
         return jsonify(ok=False, error="احفظ صفحة المنصة أولاً.")
     d = _admin_json()
     try:
-        res = MP.connect(pid, tok, WAS.app_id(), _meta_secret())
+        res = MP.connect(pid, tok, WAS.app_id(), _meta_secret(), db.get_platform("meta_page_ig", ""))
     except MP.PagesError as e:
         return jsonify(ok=False, error=f"Meta ({e.step}): {e}")
     want_fb, want_ig = d.get("messenger") is not False, d.get("instagram") is not False and bool(res["ig_id"])
@@ -2718,7 +2720,8 @@ def admin_meta_official():
                                    official=True)
     for m in made:                                         # المساعد الرسمي يعمل فوراً
         manager.start_bot(m["id"])
-    return jsonify(ok=bool(made), bots=made, failed=failed, warning=res["warning"],
+    return jsonify(ok=bool(made), bots=made, failed=failed,
+                   warning=" · ".join(x for x in (res["warning"], "" if res["ig_id"] else res.get("ig_reason", "")) if x),
                    error="" if made else "الحساب مربوط ببوت تاني بالفعل.")
 
 
@@ -2736,11 +2739,11 @@ def admin_meta_assign():
     if not (want_fb or want_ig):
         return jsonify(ok=False, error="اختار ماسنجر أو إنستجرام أو الاتنين.")
     try:
-        res = MP.connect(d.get("page_id"), d.get("token"), WAS.app_id(), _meta_secret())
+        res = MP.connect(d.get("page_id"), d.get("token"), WAS.app_id(), _meta_secret(), d.get("ig_id"))
     except MP.PagesError as e:
         return jsonify(ok=False, error=f"Meta ({e.step}): {e}")
     if want_ig and not res["ig_id"]:
-        return jsonify(ok=False, error="الصفحة دي مش مربوط بيها حساب إنستجرام احترافي.")
+        return jsonify(ok=False, error=res.get("ig_reason") or "مفيش حساب إنستجرام راجع للصفحة دي.")
     template = d.get("template") if d.get("template") in T.TEMPLATES else "customer_service"
     name = (str(d.get("name") or "").strip() or res["name"])[:60]
     made, failed = _meta_make_bots(target["id"], res, str(d.get("page_id")).strip(), want_fb, want_ig,
@@ -3290,7 +3293,7 @@ def meta_connect():
                                         "Choose Messenger, Instagram or both.")), 400
     template = d.get("template") if d.get("template") in T.TEMPLATES else "customer_service"
     try:
-        res = MP.connect(d.get("page_id"), d.get("token"), WAS.app_id(), _meta_secret())
+        res = MP.connect(d.get("page_id"), d.get("token"), WAS.app_id(), _meta_secret(), d.get("ig_id"))
     except MP.PagesError as e:
         return jsonify(ok=False, step=e.step, error=(f"Meta رفضت ({e.step}): {e}" if ar else
                                                      f"Meta refused ({e.step}): {e}"))
@@ -3298,9 +3301,8 @@ def meta_connect():
         log.exception("meta connect crashed for user=%s", uid())
         return jsonify(ok=False, error=("خطأ غير متوقع — جرّب تاني." if ar else "Unexpected error.")), 500
     if want_ig and not res["ig_id"]:
-        return jsonify(ok=False, step="page", error=(
-            "الصفحة دي مش مربوط بيها حساب إنستجرام احترافي — اربطه من إعدادات الصفحة أو اختار ماسنجر بس."
-            if ar else "No Instagram professional account is linked to this Page — link it or choose Messenger only."))
+        return jsonify(ok=False, step="instagram", error=res.get("ig_reason") or (
+            "مفيش حساب إنستجرام راجع للصفحة دي." if ar else "No Instagram account returned for this Page."))
     name = (str(d.get("name") or "").strip() or res["name"])[:60]
     made, failed = _meta_make_bots(uid(), res, str(d.get("page_id")).strip(), want_fb, want_ig, name, template)
     if not made:

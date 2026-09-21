@@ -886,7 +886,7 @@ function FirstRunChecklist({ ob }) {
    التوكن يُرسل مرة ولا يعود للمتصفح. الطرح للعملاء = نافذة Meta بضغطة مثل واتساب لاحقاً. */
 function MetaConnect() {
   const [f, setF] = useState({ page_id: "", token: "", name: "", template: "customer_service",
-                               messenger: true, instagram: true });
+                               messenger: true, instagram: true, ig_id: "" });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
@@ -932,6 +932,11 @@ function MetaConnect() {
         </Field>
         <Field label={t("biz_name")}>
           <Input value={f.name} onChange={set("name")} maxLength={60} placeholder={bi("اسم الصفحة لو فاضي", "Page name if empty")} />
+        </Field>
+        <Field label={bi("معرّف حساب إنستجرام (اختياري)", "Instagram account ID (optional)")}
+               hint={bi("لو Meta ما رجعتش الحساب تلقائياً — من إعدادات النشاط التجاري ← حسابات Instagram.",
+                        "If Meta doesn't return it automatically — Business settings → Instagram accounts.")}>
+          <Input value={f.ig_id} onChange={set("ig_id")} inputMode="numeric" dir="ltr" placeholder="17841…" />
         </Field>
         <Field label={t("bot_type")}>
           <Select value={f.template} onChange={set("template")}>

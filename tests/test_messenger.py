@@ -60,6 +60,10 @@ class FakeGraph:
             return R(200, {"access_token": "EAA-long-user"})
         if url.endswith("/me/accounts"):
             return R(200, {"data": [{"id": PAGE, "name": "Raghad", "access_token": "EAA-page-from-user"}]})
+        if url.endswith("/debug_token"):
+            return R(200, {"data": {"scopes": FakeGraph.scopes}})
+        if url.endswith(f"/{IG}"):
+            return R(200, {"id": IG, "username": "botyallia"})
         if url.endswith(f"/{PAGE}/subscribed_apps"):
             return R(200, {"data": [{"id": "1337778974883863", "subscribed_fields": ["messages"]}]})
         if url.endswith(f"/{PAGE}"):
@@ -70,6 +74,7 @@ class FakeGraph:
         return R(404, {"error": {"message": "nope"}})
 
     reject = set()                       # حقول ترفضها Meta (تحتاج أذونات)
+    scopes = ["pages_messaging", "instagram_basic", "instagram_manage_messages"]
 
     def post(self, url, params=None, **k):
         FakeGraph.calls.append(("POST", url, dict(params or {})))
@@ -176,6 +181,21 @@ class ConnectTests(unittest.TestCase):
     def test_subscribe_failure_is_a_warning_not_a_crash(self):
         FakeGraph.subscribe_ok = False
         self.assertIn("perm", MP.connect(PAGE, "EAA-page-token-xxxxxxxx")["warning"])
+
+    def test_missing_instagram_permission_is_named(self):
+        FakeGraph.has_ig = False
+        FakeGraph.scopes = ["pages_messaging"]
+        try:
+            r = MP.connect(PAGE, "EAA-page-token-xxxxxxxx", app_id="1", secret="s")
+        finally:
+            FakeGraph.scopes = ["pages_messaging", "instagram_basic", "instagram_manage_messages"]
+        self.assertEqual(r["ig_id"], "")
+        self.assertIn("instagram_basic", r["ig_reason"])
+
+    def test_manual_instagram_id_is_verified_with_the_page_token(self):
+        FakeGraph.has_ig = False
+        r = MP.connect(PAGE, "EAA-page-token-xxxxxxxx", ig_hint=IG)
+        self.assertEqual((r["ig_id"], r["ig_username"], r["ig_reason"]), (IG, "botyallia", ""))
 
     def test_bad_input(self):
         with self.assertRaises(MP.PagesError):

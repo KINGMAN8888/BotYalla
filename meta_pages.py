@@ -67,9 +67,36 @@ def _err(r):
         return f"HTTP {r.status_code}"
 
 
-def connect(page_id, token, app_id="", secret=""):
-    """← {page_token, name, ig_id, ig_username, warning}. يرمي PagesError قبل أي أثر جانبي
-    لو التوكن أو الصفحة غير صالحين. فشل الاشتراك لا يُسقط الربط بل يرجع `warning`."""
+IG_FIELDS = "name,instagram_business_account{id,username},connected_instagram_account{id,username}"
+
+
+def _ig_of(info):
+    """حساب إنستجرام الصفحة: `instagram_business_account` (الربط الرسمي) أو
+    `connected_instagram_account` (الربط من إعدادات الصفحة) — أيهما وُجد."""
+    return info.get("instagram_business_account") or info.get("connected_instagram_account") or {}
+
+
+def _ig_reason(c, page_token, app_id, secret):
+    """لماذا لا يظهر إنستجرام؟ ← نص عربي محدد. Meta ترجع الحقل فارغاً بلا خطأ في حالتين:
+    التوكن بلا إذن instagram_basic، أو الحساب لم يُختر في نافذة إنشاء التوكن."""
+    scopes = []
+    if app_id and secret:
+        r = c.get(f"{GRAPH}/debug_token", params={"input_token": page_token,
+                                                  "access_token": f"{app_id}|{secret}"})
+        if r.status_code == 200:
+            scopes = ((r.json() or {}).get("data") or {}).get("scopes") or []
+    missing = [p for p in ("instagram_basic", "instagram_manage_messages") if scopes and p not in scopes]
+    if missing:
+        return ("التوكن مفيهوش إذن " + " و".join(missing) + " — اعمل توكن جديد من Graph API Explorer "
+                "بالإذنين دول، واختار حساب إنستجرام في النافذة.")
+    return ("Meta مش راجعة حساب إنستجرام للصفحة بالتوكن ده. غالباً ما اخترتش الحساب في نافذة إنشاء "
+            "التوكن — اعمل توكن جديد واختار الحساب، أو اكتب معرّف حساب إنستجرام في الخانة الاختيارية.")
+
+
+def connect(page_id, token, app_id="", secret="", ig_hint=""):
+    """← {page_token, name, ig_id, ig_username, ig_reason, warning}. يرمي PagesError قبل أي أثر
+    جانبي لو التوكن أو الصفحة غير صالحين. فشل الاشتراك لا يُسقط الربط بل يرجع `warning`.
+    `ig_hint`: معرّف حساب إنستجرام يدوي (يُتحقق منه بتوكن الصفحة) لو لم ترجعه Meta تلقائياً."""
     page_id, token = str(page_id or "").strip(), str(token or "").strip()
     if not _ID.match(page_id) or len(token) < 20:
         raise PagesError("token", "invalid Page ID or token")
@@ -94,18 +121,27 @@ def connect(page_id, token, app_id="", secret=""):
             if not match or not match[0].get("access_token"):
                 raise PagesError("page", "this token has no access to that Page")
             page_token = match[0]["access_token"]
-        r = c.get(f"{GRAPH}/{page_id}", params={
-            "fields": "name,instagram_business_account{id,username}", "access_token": page_token})
+        r = c.get(f"{GRAPH}/{page_id}", params={"fields": IG_FIELDS, "access_token": page_token})
         if r.status_code != 200:
             raise PagesError("page", _err(r))
         info = r.json() or {}
-        ig = info.get("instagram_business_account") or {}
+        ig = _ig_of(info)
+        ig_reason = ""
+        hint = str(ig_hint or "").strip()
+        if not ig.get("id") and _ID.match(hint):
+            h = c.get(f"{GRAPH}/{hint}", params={"fields": "id,username", "access_token": page_token})
+            if h.status_code == 200 and (h.json() or {}).get("id"):
+                ig = h.json()
+            else:
+                ig_reason = f"معرّف إنستجرام {hint} مش متاح بتوكن الصفحة: {_err(h)}"
+        if not ig.get("id") and not ig_reason:
+            ig_reason = _ig_reason(c, page_token, app_id, secret)
         ok, rejected = _subscribe(c, page_id, page_token, DEFAULT_FIELDS)
         warning = ("subscribe: " + "; ".join(f"{k}: {v}" for k, v in list(rejected.items())[:4])
                    if rejected else "")
     return {"page_token": page_token, "name": info.get("name") or page_id,
             "ig_id": str(ig.get("id") or ""), "ig_username": ig.get("username") or "",
-            "warning": warning}
+            "ig_reason": ig_reason, "warning": warning}
 
 
 def _subscribe(c, page_id, page_token, fields):
@@ -140,13 +176,12 @@ def status(page_id, page_token, app_id=""):
     out = {"name": "", "ig_username": "", "ig_id": "", "fields": [], "subscribed": False, "error": ""}
     try:
         with httpx.Client(timeout=TIMEOUT) as c:
-            r = c.get(f"{GRAPH}/{page_id}", params={
-                "fields": "name,instagram_business_account{id,username}", "access_token": page_token})
+            r = c.get(f"{GRAPH}/{page_id}", params={"fields": IG_FIELDS, "access_token": page_token})
             if r.status_code != 200:
                 out["error"] = _err(r)
                 return out
             info = r.json() or {}
-            ig = info.get("instagram_business_account") or {}
+            ig = _ig_of(info)
             out.update(name=info.get("name") or "", ig_username=ig.get("username") or "",
                        ig_id=str(ig.get("id") or ""))
             s = c.get(f"{GRAPH}/{page_id}/subscribed_apps", params={"access_token": page_token})
