@@ -334,6 +334,10 @@ class WhatsAppChannel(Channel):
     MEDIA_TYPES = ("image", "audio", "voice", "video", "document", "sticker")
 
     def _one(self, m, name):
+        sender = str(m.get("from") or "").strip()
+        if not sender.isdigit():
+            log.warning("WhatsApp message without valid 'from': %s", m.get("id"))
+            return None
         mtype = m.get("type")
         text = ""
         if mtype == "text":
@@ -347,13 +351,13 @@ class WhatsAppChannel(Channel):
         elif mtype in self.MEDIA_TYPES:
             part = m.get(mtype) or {}
             caption = part.get("caption", "") or ""
-            return {"id": m.get("id", ""), "peer": f"wa:{m.get('from','')}",
+            return {"id": m.get("id", ""), "peer": f"wa:{sender}",
                     "text": caption, "name": name, "kind": "media",
                     "media": {"ref": part.get("id", ""), "mime": part.get("mime_type", ""),
                               "caption": caption, "type": mtype}}
         else:
             # موقع/جهة اتصال/غيرها: لا نص ولا ملف نحفظه.
-            return {"id": m.get("id", ""), "peer": f"wa:{m.get('from','')}",
+            return {"id": m.get("id", ""), "peer": f"wa:{sender}",
                     "text": "", "name": name, "kind": "unsupported", "media_type": mtype}
 
         low = text.strip().lower()
@@ -366,7 +370,7 @@ class WhatsAppChannel(Channel):
             kind = "start"
         elif low in self.CANCEL_WORDS:
             kind = "cancel"
-        out = {"id": m.get("id", ""), "peer": f"wa:{m.get('from','')}",
+        out = {"id": m.get("id", ""), "peer": f"wa:{sender}",
                "text": text.strip(), "name": name, "kind": kind}
         if arg:
             out["start_arg"] = arg

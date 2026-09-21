@@ -4,6 +4,8 @@ leads، orders، bookings، events (للتحليلات)."""
 import sqlite3, json, os, time, logging, hmac, hashlib
 from contextlib import contextmanager
 
+log = logging.getLogger("database")
+
 # ============================================================================
 #  تشفير توكنات البوتات في القاعدة (Fernet)
 # ============================================================================
@@ -511,6 +513,20 @@ def init_db():
             peer TEXT,
             summary TEXT,
             created_at INTEGER NOT NULL
+        );
+
+        -- روابط «التسجيل السهل»: يصدرها الأدمن لعميل لا يستطيع الوصول لكود البريد، فيسجّل
+        -- بلا تأكيد إجباري على مسؤولية الأدمن. التوكن لا يُخزَّن (hash فقط)، والرابط لمرة واحدة.
+        CREATE TABLE IF NOT EXISTS signup_invites(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash TEXT NOT NULL UNIQUE,
+            note TEXT,
+            created_by INTEGER,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            claimed_at INTEGER,
+            used_by INTEGER,
+            revoked INTEGER NOT NULL DEFAULT 0
         );
 
         -- عمولات التجديد (بعد أول دفعة) — سطر لكل دفعة معتمدة داخل سقف الـ12 شهراً.
@@ -1070,6 +1086,69 @@ def confirm_email_token(token_hash):
         if not r:
             return None
         return r["user_id"] if _confirm_email(c, r["user_id"], r["email"], now) == "ok" else None
+
+def admin_verify_email(user_id, admin_id):
+    """الأدمن يعفي الحساب من تأكيد البريد على مسؤوليته (عميل لا يصل للكود). يرجّع True لو
+    كان محجوباً ورُفع عنه الحجب. لا يدّعي أن البريد مؤكَّد — `verify_required` يُرفع فقط،
+    فيبقى تنبيه «أكّد بريدك» الاختياري واسترجاع كلمة المرور على البريد كما هو."""
+    now = int(time.time())
+    with get_conn() as c:
+        cur = c.execute("UPDATE users SET verify_required=0 WHERE id=? AND verify_required=1 "
+                        "AND email_verified_at IS NULL", (user_id,))
+        c.execute("DELETE FROM email_verifications WHERE user_id=?", (user_id,))
+        if cur.rowcount:
+            c.execute("INSERT INTO settings(user_id,key,value) VALUES(?,?,?) ON CONFLICT(user_id,key) "
+                      "DO UPDATE SET value=excluded.value", (user_id, "email_waived", f"{admin_id}:{now}"))
+        return cur.rowcount == 1
+
+
+INVITE_MAX_DAYS = 14
+
+def create_invite(token_hash, admin_id, days, note=""):
+    now = int(time.time())
+    days = max(1, min(INVITE_MAX_DAYS, int(days or 3)))
+    with get_conn() as c:
+        return c.execute("INSERT INTO signup_invites(token_hash,note,created_by,created_at,expires_at) "
+                         "VALUES(?,?,?,?,?)", (token_hash, (note or "")[:120], admin_id, now,
+                                               now + days * 86400)).lastrowid
+
+def invite_valid(token_hash):
+    now = int(time.time())
+    with get_conn() as c:
+        r = c.execute("SELECT id FROM signup_invites WHERE token_hash=? AND revoked=0 AND claimed_at IS NULL "
+                      "AND expires_at>?", (token_hash or "", now)).fetchone()
+        return r[0] if r else None
+
+def claim_invite(token_hash):
+    """حجز ذرّي للرابط قبل إنشاء الحساب — طلبان متزامنان بنفس الرابط لا ينجحان معاً."""
+    now = int(time.time())
+    with get_conn() as c:
+        cur = c.execute("UPDATE signup_invites SET claimed_at=? WHERE token_hash=? AND revoked=0 "
+                        "AND claimed_at IS NULL AND expires_at>?", (now, token_hash or "", now))
+        return cur.rowcount == 1
+
+def finish_invite(token_hash, user_id):
+    with get_conn() as c:
+        c.execute("UPDATE signup_invites SET used_by=? WHERE token_hash=?", (user_id, token_hash))
+
+def release_invite(token_hash):
+    """فشل إنشاء الحساب بعد الحجز (اسم مأخوذ…) — الرابط يرجع صالحاً لمحاولة ثانية."""
+    with get_conn() as c:
+        c.execute("UPDATE signup_invites SET claimed_at=NULL WHERE token_hash=? AND used_by IS NULL",
+                  (token_hash,))
+
+def revoke_invite(invite_id):
+    with get_conn() as c:
+        return c.execute("UPDATE signup_invites SET revoked=1 WHERE id=? AND used_by IS NULL",
+                         (invite_id,)).rowcount == 1
+
+def list_invites(limit=30):
+    with get_conn() as c:
+        rows = c.execute("SELECT i.id, i.note, i.created_at, i.expires_at, i.claimed_at, i.used_by, i.revoked, "
+                         "u.username AS used_name FROM signup_invites i LEFT JOIN users u ON u.id=i.used_by "
+                         "ORDER BY i.id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
 
 def mark_email_verified(user_id):
     """بريد أكّده مزوّد الدخول (جوجل/فيسبوك) — لا حاجة لكود."""
@@ -1794,6 +1873,7 @@ def list_all_users(limit=500):
         rows = c.execute("""
             SELECT u.id, u.username, u.role, u.is_blocked, u.created_at,
                    u.email, u.email_verified_at, u.phone, u.phone_verified_at, u.entity_type, u.age,
+                   u.verify_required,
                    COALESCE(s.plan,'free') AS plan, s.status AS sub_status, s.expires_at,
                    (SELECT COUNT(*) FROM bots b WHERE b.owner_id=u.id) AS bots
             FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id
@@ -2721,6 +2801,11 @@ MSG_TEXT_MAX = 4000
 def log_message(bot_id, peer, direction, sender, text="", kind="text", media_id=None, name=None):
     """يسجّل رسالة ويحدّث ملخّص المحادثة في معاملة واحدة.
     الوارد يزيد عدّاد غير المقروء؛ ردّ صاحب النشاط يصفّره."""
+    # حماية: peer فاسد (مثل "wa:" بلا رقم) يُفسد صندوق الوارد كله (404 عند فتحه)
+    parts = (peer or "").split(":", 1)
+    if len(parts) != 2 or not parts[1].strip().isdigit():
+        log.warning("log_message: rejected broken peer %r for bot #%s", peer, bot_id)
+        return
     now = int(time.time())
     text = (text or "")[:MSG_TEXT_MAX]
     with get_conn() as c:
@@ -2748,7 +2833,10 @@ def get_conversation(bot_id, peer):
 
 def list_conversations(bot_id, limit=200):
     with get_conn() as c:
-        rows = c.execute("SELECT * FROM conversations WHERE bot_id=? ORDER BY last_at DESC LIMIT ?",
+        # peer الصحيح مثل tg:123 أو wa:201xxx — أي peer بلا أرقام بعد النقطتين مكسور
+        rows = c.execute("SELECT * FROM conversations WHERE bot_id=?"
+                         " AND peer GLOB '[a-z][a-z]:[0-9]*'"
+                         " ORDER BY last_at DESC LIMIT ?",
                          (bot_id, limit)).fetchall()
         return [dict(r) for r in rows]
 

@@ -387,13 +387,26 @@ export function Auth({ mode }) {
       <Card className="!p-7 sm:!p-8">
         <h1 className="m-0 text-center text-[24px] font-extrabold tracking-tight text-ink">{t("register")}</h1>
         <p className="mb-7 mt-2 text-center text-[14px] text-ink-3">{t("register_sub")}</p>
+        {P.invite && (
+          <div className="mb-6 flex items-start gap-3 rounded-2xl bg-[linear-gradient(120deg,rgb(45_212_191/0.16),rgb(124_108_246/0.1))]
+                          px-4 py-3.5 text-[13.5px] leading-relaxed text-ink-2 shadow-[inset_0_0_0_1px_rgb(45_212_191/0.3)]">
+            <Icon name="check" size={18} className="mt-0.5 shrink-0 text-au-teal" />
+            <span>
+              <b className="text-ink">{bi("رابط تسجيل سهل من فريق BotYalla", "An easy sign-up link from the BotYalla team")}</b><br />
+              {bi("املأ البيانات وادخل على طول — مش هنطلب منك كود على الإيميل.",
+                  "Fill in your details and go straight in — no email code needed.")}
+            </span>
+          </div>
+        )}
         <SocialButtons mode="register" />
         <Form action="" noValidate={false}>
           <div className="flex flex-col gap-5">
             <EntityPicker defaultValue={v.entity_type} error={e.entity_type} onChange={setEnt} />
             <UsernameField defaultValue={v.username || ""} error={e.username} onValid={setUOk} onChange={setUname} />
             <div className="grid gap-5 sm:grid-cols-[1fr_120px]">
-              <Field label={t("email")} hint={!e.email && bi("هنبعتلك كود تأكيد عليه.", "We'll send a confirmation code to it.")}>
+              <Field label={t("email")} hint={!e.email && (P.invite
+                  ? bi("اكتبه صح — عليه بترجع كلمة المرور لو نسيتها.", "Type it carefully — it's how you reset a forgotten password.")
+                  : bi("هنبعتلك كود تأكيد عليه.", "We'll send a confirmation code to it."))}>
                 <Input type="email" name="email" required autoComplete="email" dir="ltr" defaultValue={v.email || ""}
                        onChange={(ev) => setEmail(ev.target.value)} />
                 <ErrLine>{e.email}</ErrLine>
@@ -431,6 +444,49 @@ export function Auth({ mode }) {
 }
 
 /* ------------------------------------------------------------ تأكيد البريد */
+/* خطوات مصوّرة بالكلام لمن لا يعرف أين يبحث عن الرسالة — وطريق بشري لو لم يصل */
+const FIND_STEPS = [
+  ["افتح تطبيق الإيميل (Gmail مثلاً) على نفس البريد المكتوب فوق.", "Open your email app (e.g. Gmail) on the address shown above."],
+  ["اكتب في البحث: BotYalla — الرسالة عنوانها فيه «كود التأكيد».", "Search for: BotYalla — the subject mentions your confirmation code."],
+  ["مش ظاهرة؟ افتح «Spam / الرسائل غير المرغوب فيها» و«العروض / Promotions».", "Not there? Open “Spam” and “Promotions”."],
+  ["جوه الرسالة: اضغط الزرار «تأكيد» مرة واحدة، أو انسخ الـ6 أرقام واكتبها هنا.", "Inside it: tap the “Confirm” button once, or copy the 6 digits here."],
+];
+
+function FindCode() {
+  const [open, setOpen] = useState(false);
+  const wa = (P.supportWa || "").replace(/\D/g, "");
+  const msg = bi(`محتاج مساعدة في تأكيد حسابي على BotYalla — الإيميل: ${P.email || ""}`,
+                 `I need help verifying my BotYalla account — email: ${P.email || ""}`);
+  return (
+    <div className="mt-5 rounded-2xl bg-white/[0.04] p-4 text-start shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+        className="flex w-full cursor-pointer items-center justify-between gap-2 border-0 bg-transparent p-0 text-[13.5px] font-extrabold text-ink">
+        <span className="inline-flex items-center gap-2"><Icon name="help" size={16} className="text-au-cyan" />
+          {bi("مش لاقي الكود؟ خطوة بخطوة", "Can't find the code? Step by step")}</span>
+        <span className="text-ink-3">{open ? "−" : "+"}</span>
+      </button>
+      {open && (
+        <ol className="m-0 mt-3 flex list-none flex-col gap-2.5 p-0">
+          {FIND_STEPS.map((s, i) => (
+            <li key={i} className="flex gap-2.5 text-[13px] leading-relaxed text-ink-2">
+              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-au-cyan/15 text-[12px] font-extrabold text-au-cyan">{i + 1}</span>
+              <span>{bi(...s)}</span>
+            </li>
+          ))}
+          <li className="text-[12.5px] text-ink-3">{bi("الرسالة ممكن تتأخر دقيقة أو اتنين. الكود صالح ساعة.", "It can take a minute or two. The code is valid for an hour.")}</li>
+        </ol>
+      )}
+      {wa && (
+        <a href={`https://wa.me/${wa}?text=${encodeURIComponent(msg)}`} target="_blank" rel="noopener"
+           className="mt-3 flex items-center justify-center gap-2 rounded-xl bg-[#25D366]/15 px-4 py-2.5 text-[13px] font-extrabold
+                      text-[#5BE38F] no-underline shadow-[inset_0_0_0_1px_rgb(37_211_102/0.35)] hover:bg-[#25D366]/25">
+          {bi("لسه مش عارف؟ كلّمنا على واتساب ونفعّلك", "Still stuck? Message us on WhatsApp and we'll activate you")}
+        </a>
+      )}
+    </div>
+  );
+}
+
 export function VerifyEmail() {
   const [wait, setWait] = useState(P.wait || 0);
   const [edit, setEdit] = useState(false);
@@ -467,10 +523,7 @@ export function VerifyEmail() {
                     : bi("ابعت كود التأكيد", "Send the code")}
           </Btn>
         </Form>
-        <p className="mb-0 mt-5 text-[12.5px] leading-relaxed text-ink-3">
-          {bi("مش لاقي الرسالة؟ بص في Spam أو «العروض/Promotions» — وممكن تتأخر دقيقة. وفي الرسالة كمان زرار تأكيد بضغطة.",
-              "Can't find it? Check Spam or Promotions — it can take a minute. The email also has a one-tap confirm button.")}
-        </p>
+        <FindCode />
         <div className="mt-5 border-t border-white/10 pt-5 text-start">
           {!edit ? (
             <button type="button" onClick={() => setEdit(true)}

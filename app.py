@@ -616,7 +616,8 @@ def _oauth_on(provider):
 def _auth_props(**kw):
     """حمولة صفحات الدخول والتسجيل: أزرار جوجل/فيسبوك (المفعّلة فقط) وقائمة الدول."""
     return dict({"oauth": {p: _oauth_on(p) for p in _OAUTH},
-                 "countries": [list(c) for c in ACC.COUNTRIES]}, **kw)
+                 "countries": [list(c) for c in ACC.COUNTRIES],
+                 "invite": bool(db.invite_valid(session.get("invite")))}, **kw)
 
 _SIGNUP_FIELDS = ("username", "email", "phone", "phone_cc", "age", "entity_type")
 
@@ -708,8 +709,20 @@ def register():
             need = mailer.configured()
             if not need:
                 log.warning("signup without email verification: SMTP is not configured")
+            # رابط «التسجيل السهل» من الأدمن (/join/<token>): بلا تأكيد إجباري، على مسؤوليته
+            inv = session.get("invite")
+            invited = bool(need and inv and db.claim_invite(inv))
             user_id, err = db.create_account(d["username"], auth.hash_password(d["password"]), d["email"],
-                                              d["phone"], d["age"], d["entity_type"], verify_required=need)
+                                              d["phone"], d["age"], d["entity_type"],
+                                              verify_required=need and not invited)
+            if invited:
+                if err:
+                    db.release_invite(inv)
+                else:
+                    db.finish_invite(inv, user_id)
+                    session.pop("invite", None)
+                    db.set_setting(user_id, "email_waived", "invite")
+                    log.info("invite signup user=%s (email verification waived)", user_id)
             if not err:
                 return _finish_signup(user_id, d, lang, request.form.get("email_news") == "1")
             errs[{"email_taken": "email", "phone_taken": "phone"}.get(err, "username")] = ACC.msg(err, lang)
@@ -816,7 +829,7 @@ def verify_email():
     return react_page("verify_email", "verify_title", {
         "email": u["email"], "sent": bool(ev and ev["expires_at"] > now),
         "wait": max(0, RESEND_GAP - (now - ev["sent_at"])) if ev else 0,
-        "gated": db.email_gate(u)})
+        "gated": db.email_gate(u), "supportWa": __import__("platform_kb").official_wa_number()})
 
 @app.route("/verify-email/resend", methods=["POST"])
 @login_required
@@ -3053,8 +3066,66 @@ def api_admin_stats():
 def admin_users():
     return react_page("admin_users", "admin_users_t",
                       {"users": db.list_all_users(),
+                       "invites": db.list_invites() if current_role() == "admin" else [],
+                       "inviteMaxDays": db.INVITE_MAX_DAYS,
                        "plans": [{"id": k, "name": plans.plan_name(k, session.get("lang", i18n.DEFAULT))}
                                  for k in plans.ORDER]})
+
+@app.route("/admin/users/<int:user_id>/verify-email", methods=["POST"])
+@require_roles("admin")
+def admin_user_verify_email(user_id):
+    """«التسجيل السهل»: عميل لا يصل لكود البريد — الأدمن يفتح له المنصة على مسؤوليته."""
+    lang = session.get("lang", i18n.DEFAULT)
+    u = db.get_user(user_id)
+    if u and db.admin_verify_email(user_id, uid()):
+        log.info("email verification waived user=%s by admin=%s", user_id, uid())
+        _after_verified(u, db.user_lang(user_id))
+        flash(f"✅ «{u['username']}» يقدر يستخدم المنصة دلوقتي من غير كود البريد." if lang != "en"
+              else f"✅ '{u['username']}' can use the platform now without the email code.", "ok")
+    else:
+        flash("الحساب مش مستني تأكيد بريد." if lang != "en" else "This account isn't waiting for email verification.",
+              "error")
+    return redirect(url_for("admin_users"))
+
+@app.route("/admin/invites", methods=["POST"])
+@require_roles("admin")
+def admin_invite_create():
+    """رابط تسجيل لمرة واحدة بلا كود بريد. التوكن يظهر هنا مرة واحدة ولا يُخزَّن."""
+    d = request.get_json(silent=True) or request.form
+    try:
+        days = int(d.get("days") or 3)
+    except (TypeError, ValueError):
+        days = 3
+    tok = _secrets.token_urlsafe(24)
+    iid = db.create_invite(_token_hash(tok), uid(), days, str(d.get("note") or "").strip())
+    log.info("signup invite #%s created by admin=%s", iid, uid())
+    url = _public_url("join_invite", token=tok) or (request.host_url.rstrip("/") + url_for("join_invite", token=tok))
+    return jsonify(ok=True, url=url, invites=db.list_invites())
+
+@app.route("/admin/invites/<int:invite_id>/revoke", methods=["POST"])
+@require_roles("admin")
+def admin_invite_revoke(invite_id):
+    return jsonify(ok=db.revoke_invite(invite_id), invites=db.list_invites())
+
+@app.route("/join/<token>")
+def join_invite(token):
+    """رابط «التسجيل السهل»: يُحفظ في الجلسة ويُستهلك عند إنشاء الحساب (register)."""
+    lang = session.get("lang", i18n.DEFAULT)
+    if _rate_limited(request.remote_addr or "?", limit=20, window=600, bucket="invite"):
+        abort(429)
+    if session.get("uid"):
+        return redirect(url_for("dashboard"))
+    h = _token_hash(token)
+    if db.invite_valid(h):
+        session["invite"] = h
+        flash("أهلاً بيك 👋 سجّل حسابك عادي — مش هنطلب منك كود على الإيميل." if lang != "en"
+              else "Welcome 👋 Just sign up — we won't ask you for an email code.", "ok")
+    else:
+        flash("الرابط ده انتهى أو اتستخدم — كلّم فريق الدعم يبعتلك رابط جديد." if lang != "en"
+              else "This link expired or was used — ask support for a new one.", "error")
+    resp = redirect(url_for("register"))
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
 
 @app.route("/admin/users/<int:user_id>/role", methods=["POST"])
 @require_roles("admin")

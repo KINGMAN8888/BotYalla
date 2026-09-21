@@ -87,9 +87,97 @@ export function AdminOverview() {
 }
 
 /* ------------------------------------------------------------- المستخدمون */
+/* حساب جديد محجوب حتى يؤكد بريده (نفس شرط db.email_gate) */
+const waitingEmail = (u) => u.role === "user" && u.verify_required && !u.email_verified_at;
+
+/* «التسجيل السهل»: روابط لمرة واحدة لعملاء لا يعرفون الوصول لكود البريد — على مسؤولية الأدمن */
+function EasySignup() {
+  const [list, setList] = useState(P.invites || []);
+  const [note, setNote] = useState("");
+  const [days, setDays] = useState("3");
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const make = async () => {
+    setBusy(true);
+    const r = await postJSON("/admin/invites", { note, days });
+    setBusy(false);
+    if (r.ok) { setUrl(r.url); setList(r.invites || []); setNote(""); setCopied(false); }
+  };
+  const revoke = async (id) => {
+    const r = await postJSON(`/admin/invites/${id}/revoke`, {});
+    if (r.invites) setList(r.invites);
+  };
+  const copy = () => navigator.clipboard?.writeText(url).then(() => setCopied(true));
+  const now = Date.now() / 1000;
+  const state = (i) => i.revoked ? [bi("ملغي", "Revoked"), "mute"]
+    : i.used_by ? [bi("اتسجّل: ", "Signed up: ") + (i.used_name || "#" + i.used_by), "on"]
+    : i.expires_at < now ? [bi("انتهى", "Expired"), "mute"] : [bi("مستني", "Waiting"), "warn"];
+  return (
+    <Card className="mb-6">
+      <SectionTitle icon="sparkles">{bi("التسجيل السهل — على مسؤوليتك", "Easy sign-up — on your responsibility")}</SectionTitle>
+      <p className="m-0 mb-4 text-[13px] leading-relaxed text-ink-3">
+        {bi("لعميل مش عارف يوصل لكود الإيميل: ابعتله الرابط ده على واتساب، يفتحه ويسجّل عادي ويدخل على طول من غير كود. "
+            + "الرابط لمرة واحدة. ولو العميل سجّل خلاص وواقف عند الكود، دوّر على اسمه تحت واضغط «فعّله من غير كود».",
+            "For a customer who can't reach the email code: send them this link on WhatsApp. They sign up normally and go straight in, no code. "
+            + "Each link works once. If they already signed up and are stuck at the code, find them below and tap “Activate without code”.")}
+      </p>
+      <div className="grid gap-3 sm:grid-cols-[1fr_140px_auto] sm:items-end">
+        <Field label={bi("ملاحظة (اسم العميل أو رقمه)", "Note (customer name or number)")}>
+          <Input value={note} maxLength={120} onChange={(e) => setNote(e.target.value)} placeholder={bi("مثلاً: منى — 0109…", "e.g. Mona — 0109…")} />
+        </Field>
+        <Field label={bi("صالح لمدة", "Valid for")}>
+          <Select value={days} onChange={(e) => setDays(e.target.value)}>
+            {[1, 3, 7, P.inviteMaxDays || 14].map((d) => <option key={d} value={String(d)}>{d} {bi("يوم", "days")}</option>)}
+          </Select>
+        </Field>
+        <Btn icon="plus" type="button" onClick={make} disabled={busy}>{bi("اعمل رابط", "Create link")}</Btn>
+      </div>
+      {url && (
+        <div className="mt-4 rounded-xl bg-au-teal/10 p-3 shadow-[inset_0_0_0_1px_rgb(45_212_191/0.3)]">
+          <div className="mb-2 text-[12.5px] font-bold text-au-teal">
+            {bi("الرابط جاهز — انسخه دلوقتي، مش هيظهر تاني:", "Link ready — copy it now, it won't be shown again:")}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <code dir="ltr" className="min-w-0 flex-1 break-all rounded-lg bg-black/40 px-3 py-2 text-[12.5px] text-ink">{url}</code>
+            <Btn sm icon={copied ? "check" : "copy"} type="button" onClick={copy}>{copied ? bi("اتنسخ", "Copied") : bi("انسخ", "Copy")}</Btn>
+          </div>
+        </div>
+      )}
+      {list.length > 0 && (
+        <div className="mt-4 flex flex-col gap-1.5">
+          {list.slice(0, 8).map((i) => {
+            const [label, tone] = state(i);
+            return (
+              <div key={i.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-2 text-[12.5px]">
+                <span className="tnum text-ink-3">#{i.id}</span>
+                <span className="min-w-0 flex-1 truncate text-ink-2" dir="auto">{i.note || "—"}</span>
+                <span className="text-ink-3">{fmtDate(i.created_at)}</span>
+                <Pill tone={tone}>{label}</Pill>
+                {!i.used_by && !i.revoked && i.expires_at > now && (
+                  <button type="button" onClick={() => revoke(i.id)}
+                    className="cursor-pointer border-0 bg-transparent text-[12px] font-bold text-red-300 hover:underline">
+                    {bi("إلغاء", "Revoke")}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function AdminUsers() {
   const { users = [], plans = [] } = P;
   const isAdmin = BY.user.role === "admin";
+  const [q, setQ] = useState("");
+  const [only, setOnly] = useState(false);
+  const waiting = users.filter(waitingEmail).length;
+  const needle = q.trim().toLowerCase();
+  const shown = users.filter((u) => (!only || waitingEmail(u)) && (!needle ||
+    [u.username, u.email, u.phone, String(u.id)].some((v) => (v || "").toLowerCase().includes(needle))));
   return (
     <>
       <PageHead icon="users" title={t("admin_users_t")}
@@ -117,9 +205,21 @@ export function AdminUsers() {
         </Card>
       )}
 
+      {isAdmin && <EasySignup />}
+
       <Card>
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <Input value={q} onChange={(e) => setQ(e.target.value)} className="!w-auto min-w-[220px] flex-1"
+                 placeholder={bi("دوّر بالاسم أو الإيميل أو الرقم…", "Search by name, email or phone…")} />
+          <button type="button" onClick={() => setOnly(!only)} aria-pressed={only}
+            className={"cursor-pointer rounded-full border-0 px-4 py-2 text-[12.5px] font-bold transition-colors " +
+                       (only ? "bg-amber-400/20 text-amber-200 shadow-[inset_0_0_0_1px_rgb(251_191_36/0.4)]"
+                             : "bg-white/[0.05] text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]")}>
+            {bi("مستنيين كود الإيميل", "Waiting for email code")} ({num(waiting)})
+          </button>
+        </div>
         <Table head={["#", t("username"), bi("التواصل", "Contact"), t("role"), t("col_plan2"), t("col_bots"), t("col_status"), ""]}>
-          {users.map((u) => (
+          {shown.map((u) => (
             <Tr key={u.id}>
               <Td className="tnum">{u.id}</Td>
               <Td>
@@ -138,6 +238,18 @@ export function AdminUsers() {
                   </div>
                 )}
                 {u.entity_type && <div className="text-ink-3">{entityLabel(u.entity_type)}{u.age ? ` · ${u.age}` : ""}</div>}
+                {waitingEmail(u) && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                    <Pill tone="warn">{bi("واقف عند كود الإيميل", "Stuck at email code")}</Pill>
+                    {isAdmin && (
+                      <Form action={`/admin/users/${u.id}/verify-email`} className="inline"
+                            confirm={bi(`تفعيل «${u.username}» من غير كود الإيميل على مسؤوليتك؟`,
+                                        `Activate '${u.username}' without the email code, on your responsibility?`)}>
+                        <Btn sm type="submit" variant="green" icon="check">{bi("فعّله من غير كود", "Activate without code")}</Btn>
+                      </Form>
+                    )}
+                  </div>
+                )}
               </Td>
               <Td>
                 {isAdmin && u.id !== 1 ? (
