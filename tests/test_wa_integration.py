@@ -55,6 +55,15 @@ def post(msgs, phone="5550001"):
     time.sleep(0.35)          # المعالجة غير محجوبة عمداً
     return r
 
+def wait_for(cond, timeout=5.0):
+    """المعالجة على خيط المدير — جهاز CI أبطأ من 0.35ث أحياناً. ننتظر الشرط لا زمناً ثابتاً."""
+    end = time.time() + timeout
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.05)
+    return cond()
+
 def txt(mid, body):
     return {"id": mid, "from": "201009998877", "type": "text", "text": {"body": body}}
 
@@ -73,8 +82,11 @@ check("duplicate message ignored", len(SENT) == before, f"{before} -> {len(SENT)
 post([txt("m2", "أحمد")])
 post([txt("m3", "01000000000")])
 post([txt("m4", "عايز أستفسر")])
-with db.get_conn() as c:
-    lead = c.execute("SELECT data_json FROM leads WHERE bot_id=?", (bot_id,)).fetchone()
+def _lead():
+    with db.get_conn() as c:
+        return c.execute("SELECT data_json FROM leads WHERE bot_id=?", (bot_id,)).fetchone()
+wait_for(lambda: _lead() is not None and db.get_chat_state(bot_id, "wa:201009998877") is None)
+lead = _lead()
 check("lead saved end-to-end", lead is not None and "أحمد" in lead["data_json"],
       lead["data_json"] if lead else None)
 check("state cleared after finish", db.get_chat_state(bot_id, "wa:201009998877") is None)
