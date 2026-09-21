@@ -115,6 +115,11 @@ class MessengerChannel(Channel):
         self.on_send = on_send
         self._peer_of_mid = {}                 # mid ← peer: mark_read يحتاج المستلم لا الرسالة
         self.last_error = ""
+        # توكن ألغاه فيسبوك (تغيير كلمة السر · جلسة أمنية — OAuthException 190): توكنات بديلة لنفس
+        # الصفحة (بوت الصفحة الآخر · صفحة المنصة) تُجرَّب وأول سليم يُحفظ. callables يضبطها bot_manager.
+        self.token_fallbacks = None            # () -> [token, …]
+        self.on_token_fixed = None             # (token) -> None
+        self.on_token_dead = None              # (error_text) -> None
 
     # ------------------------------------------------------------------ إرسال
     def _to(self, peer):
@@ -135,6 +140,8 @@ class MessengerChannel(Channel):
             c = await _http()
             r = await c.post(f"{GRAPH}/me/messages", json=body,
                              params={"access_token": self.token})
+            if r.status_code >= 400 and self._token_error(r) and await self._heal_token():
+                r = await c.post(f"{GRAPH}/me/messages", json=body, params={"access_token": self.token})
             if r.status_code >= 400 and "message" in body and rid and self._thread_error(r) and \
                     await self.take_thread(rid):
                 # المحادثة كانت مع صندوق الصفحة (Business Suite) بعد تسليمها لإنسان — استرجعناها
@@ -152,6 +159,44 @@ class MessengerChannel(Channel):
         except Exception:
             log.exception("Messenger API call failed")
             return None
+
+    @staticmethod
+    def _token_error(r):
+        """التوكن نفسه لم يعد صالحاً (190) — لا خطأ في الرسالة."""
+        try:
+            e = (r.json() or {}).get("error") or {}
+        except Exception:
+            return False
+        return e.get("code") in (190, 102) or e.get("type") == "OAuthException" and "session" in str(e.get("message", "")).lower()
+
+    async def _heal_token(self):
+        """يجرّب التوكنات البديلة بـ GET /me؛ أول سليم يصبح توكن القناة ويُحفظ. False لو لا بديل."""
+        dead = self.token
+        try:
+            cands = [t for t in (self.token_fallbacks() if self.token_fallbacks else []) if t and t != dead]
+        except Exception:
+            cands = []
+        c = await _http()
+        for t in dict.fromkeys(cands):
+            try:
+                r = await c.get(f"{GRAPH}/me", params={"fields": "id", "access_token": t})
+            except Exception:
+                continue
+            if r.status_code == 200:
+                self.token = t
+                if self.on_token_fixed:
+                    try:
+                        self.on_token_fixed(t)
+                    except Exception:
+                        log.exception("saving healed page token failed")
+                log.warning("%s page %s: dead token replaced by a working one", self.platform, self.page_id)
+                return True
+        if self.on_token_dead:
+            try:
+                self.on_token_dead(self.last_error or "token invalid")
+            except Exception:
+                log.exception("token dead hook failed")
+        return False
 
     @staticmethod
     def _thread_error(r):

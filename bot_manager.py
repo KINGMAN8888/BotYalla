@@ -140,7 +140,53 @@ def _meta_channel(row):
     cfg = json.loads(row["config_json"] or "{}")
     pfx = META_PAGE_CHANNELS.get(row.get("channel") or "", "fb")
     own_id = (row["token"] or "").split(":", 1)[-1]
-    return MessengerChannel(pfx, own_id, db.unseal(cfg.get("page_token", "")))
+    ch = MessengerChannel(pfx, own_id, db.unseal(cfg.get("page_token", "")))
+    bot_id, page_id = row["id"], str(cfg.get("page_id") or (own_id if pfx == "fb" else ""))
+
+    def fallbacks():
+        """توكنات أخرى لنفس الصفحة: بوت ماسنجر/إنستجرام الآخر المربوط بها، وصفحة المنصة."""
+        out = []
+        for b in db.meta_bots():
+            c2 = json.loads((db.get_bot(b["id"]) or {}).get("config_json") or "{}")
+            if b["id"] != bot_id and page_id and str(c2.get("page_id") or "") == page_id and c2.get("page_token"):
+                out.append(db.unseal(c2["page_token"]))
+        if page_id and (db.get_platform("meta_page_id", "") or "").strip() == page_id:
+            out.append(db.unseal(db.get_platform("meta_page_token", "")))
+        return out
+
+    def fixed(tok):
+        fresh = dict(json.loads((db.get_bot(bot_id) or {}).get("config_json") or "{}"))
+        fresh["page_token"] = db.seal(tok)
+        db.update_bot_config(bot_id, fresh)
+        db.log_meta_event(f"{pfx}:{own_id}", "token_healed", "توكن ملغي اتبدّل تلقائياً بتوكن صفحة سليم",
+                          bot_id=bot_id)
+
+    def dead(err):
+        # تنبيه واحد كل 6 ساعات لكل بوت — لا سيل رسائل مع كل رد فاشل
+        now = int(_time.time())
+        if now - _TOKEN_ALERTED.get(bot_id, 0) < 6 * 3600:
+            return
+        _TOKEN_ALERTED[bot_id] = now
+        db.log_meta_event(f"{pfx}:{own_id}", "token_invalid", "التوكن ملغي — اعمل «إعادة ربط» للصفحة", bot_id=bot_id)
+        msg = (f"⚠️ بوت «{row.get('name')}» ({'إنستجرام' if pfx == 'ig' else 'ماسنجر'}) واقف: فيسبوك ألغى توكن الصفحة "
+               "(تغيير كلمة السر أو جلسة أمنية). ادخل «/admin/meta» واعمل إعادة ربط للصفحة عشان البوت يرجع يرد.")
+        async def _alert():
+            for aid in db.admin_chat_ids():
+                try:
+                    await manager.notify_text_async(aid, msg)
+                except Exception:
+                    pass
+        try:
+            asyncio.get_running_loop().create_task(_alert())
+        except RuntimeError:
+            for aid in db.admin_chat_ids():
+                manager.notify_text(aid, msg)
+
+    ch.token_fallbacks, ch.on_token_fixed, ch.on_token_dead = fallbacks, fixed, dead
+    return ch
+
+
+_TOKEN_ALERTED = {}
 
 
 def _our_app_id():

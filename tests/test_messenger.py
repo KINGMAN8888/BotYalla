@@ -683,5 +683,48 @@ class DeliveryTests(_EchoBase):
         self.assertIn(("out", "ثواني وهرد عليك"), msgs)
 
 
+class TokenHealTests(_EchoBase):
+    """فيسبوك ألغى توكن بوت إنستجرام (تغيير كلمة السر): البوت يستعمل توكن سليم لنفس الصفحة ويحفظه."""
+
+    def _dead_for(self, dead):
+        calls = []
+        class F(FakeAsync):
+            async def post(self, url, json=None, params=None, **k):
+                calls.append(("post", params["access_token"]))
+                if params["access_token"] == dead:
+                    return R(400, {"error": {"message": "Error validating access token: The session has been "
+                                             "invalidated because the user changed their password",
+                                             "type": "OAuthException", "code": 190}})
+                return R(200, {"message_id": "ok1"})
+            async def get(self, url, params=None, **k):
+                calls.append(("get", params["access_token"]))
+                return R(400, {"error": {"code": 190}}) if params["access_token"] == dead else R(200, {"id": PAGE})
+        CM._client = F()
+        return calls
+
+    def test_dead_instagram_token_is_replaced_by_the_messenger_bot_token(self):
+        cfg = json.loads(self.ig["config_json"]); cfg["page_token"] = db.seal("DEAD-TOKEN")
+        db.update_bot_config(self.ig["id"], cfg)
+        row = db.get_bot(self.ig["id"])
+        self._dead_for("DEAD-TOKEN")
+        res = asyncio.run(BM._meta_channel(row).send_text(self.peer, "رد"))
+        self.assertEqual(res["message_id"], "ok1")
+        saved = db.unseal(json.loads(db.get_bot(self.ig["id"])["config_json"])["page_token"])
+        self.assertNotEqual(saved, "DEAD-TOKEN", "التوكن السليم اتحفظ للرسائل الجاية")
+        self.assertTrue(any(e["kind"] == "token_healed" for e in db.list_meta_events(50)))
+
+    def test_no_working_token_alerts_once(self):
+        BM._TOKEN_ALERTED.clear()
+        for b in db.meta_bots():
+            full = db.get_bot(b["id"]); cfg = json.loads(full["config_json"]); cfg["page_token"] = db.seal("DEAD-TOKEN")
+            db.update_bot_config(b["id"], cfg)
+        self._dead_for("DEAD-TOKEN")
+        ch = BM._meta_channel(db.get_bot(self.ig["id"]))
+        self.assertIsNone(asyncio.run(ch.send_text(self.peer, "رد")))
+        asyncio.run(ch.send_text(self.peer, "رد تاني"))
+        n = sum(1 for e in db.list_meta_events(100) if e["kind"] == "token_invalid")
+        self.assertEqual(n, 1, "تنبيه واحد — لا سيل")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
