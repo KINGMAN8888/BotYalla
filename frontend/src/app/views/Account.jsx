@@ -5,6 +5,7 @@ import {
 } from "../kit.jsx";
 import { UsernameField, PasswordField, PhoneField, EntityPicker, splitPhone, entityLabel,
          GoogleG, FacebookF } from "../auth.jsx";
+import VipCall from "../../VipCall.jsx";
 
 /* ------------------------------------------------- تذاكر الدعم (مشتركة مع الأدمن) */
 export const TICKET_KIND = {
@@ -14,7 +15,10 @@ export const TICKET_KIND = {
   other:     ["chat",      "أخرى",      "Other"],
   // يُفتح من «سيبها علينا» في خطوة واتساب وحدها — لا يظهر ضمن أنواع نموذج الدعم
   wa_setup:  ["phone",     "ربط واتساب", "WhatsApp setup"],
+  // يُفتح من «احجز مكالمة» في كارت باقة راحة البال وحده
+  vip_call:  ["crown",     "مكالمة راحة البال", "Peace of Mind call"],
 };
+const FORM_KINDS = new Set(["support", "complaint", "payment", "other"]);   // ما يختاره العميل في نموذج الدعم
 const TICKET_TONE = { open: "warn", answered: "on", closed: "mute" };
 const ticketLabel = (s) => ({ open: bi("مفتوحة", "Open"), answered: bi("اتردّ عليها", "Answered"),
                               closed: bi("مقفولة", "Closed") }[s] || s);
@@ -98,7 +102,7 @@ export function Support() {
       <Card className="mb-6">
         <Form action="">
           <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label={bi("نوع الرسالة", "Message type")}>
-            {Object.entries(TICKET_KIND).filter(([k]) => k !== "wa_setup").map(([k, [ic, ar, en]]) => (
+            {Object.entries(TICKET_KIND).filter(([k]) => FORM_KINDS.has(k)).map(([k, [ic, ar, en]]) => (
               <button key={k} type="button" onClick={() => setKind(k)} aria-pressed={kind === k}
                 className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-[13px] font-bold transition
                   ${kind === k ? "bg-au-cyan/15 text-ink shadow-[inset_0_0_0_1px_rgb(143_233_255/0.45)]"
@@ -707,7 +711,9 @@ export function Billing() {
 
 /* ----------------------------------------------------------------- الباقات */
 export function Pricing() {
-  const { plans = [], sub = {} } = P;
+  const { plans: all = [], sub = {} } = P;
+  const plans = all.filter((p) => !p.by_call);          // «راحة البال» كارت عريض بزرّ مكالمة
+  const vip = all.find((p) => p.by_call);
   // المعرّفات هنا لا بد أن تطابق `plans.ORDER` في الخادم — أي معرّف قديم يترك
   // البطاقة بأيقونة افتراضية والشارة معلّقة بلا أن يكسر شيئاً ظاهراً.
   const icons = { free: "bot", merchant: "store", whatsapp: "phone", agency: "crown" };
@@ -817,6 +823,10 @@ export function Pricing() {
         })}
       </div>
 
+      {vip && (sub.plan === "vip" && sub.status === "active"
+        ? <Card className="mt-6 text-center"><Pill tone="on" dot>{t("current_plan")}: {vip.name_ar && BY.lang === "ar" ? vip.name_ar : vip.name_en}</Pill></Card>
+        : <VipCall plan={vip} BY={BY} Icon={Icon} />)}
+
       <p className="mt-10 flex items-center justify-center gap-2 text-[13px] text-ink-3">
         <Icon name="shield" size={14} />{t("pay_secure_note")}
       </p>
@@ -901,13 +911,14 @@ export function Subscribe() {
         </div>
         <div className="mt-2 text-[12.5px] text-ink-3">
           {t("sub_cycle")}: {t(annual ? "cycle_annual" : "cycle_monthly")} ({days} {BY.lang === "ar" ? "يوم" : "days"}) · {t("pay_secure_note")}
-          {/* السنوي افتراضي في صفحة الأسعار — فالتبديل متاح هنا أيضاً قبل الدفع، لا مفاجأة بالمبلغ */}
-          {" · "}
-          <a href={`${BY.urls.subscribe}${planId}?cycle=${annual ? "monthly" : "annual"}`}
+          {/* السنوي افتراضي في صفحة الأسعار — فالتبديل متاح هنا أيضاً قبل الدفع، لا مفاجأة بالمبلغ.
+              باقة سنوية إلزامياً (راحة البال) بلا رابط: الخادم يفرض السنة مهما طُلب */}
+          {!plan.annual_only && " · "}
+          {!plan.annual_only && <a href={`${BY.urls.subscribe}${planId}?cycle=${annual ? "monthly" : "annual"}`}
              className="font-bold text-au-cyan underline">
             {annual ? bi("ادفع شهرياً بدلاً من ذلك", "Pay monthly instead")
                     : bi("وفّر بالدفع السنوي", "Save with annual billing")}
-          </a>
+          </a>}
         </div>
         {/* نقل الرصيد يُعرض قبل الدفع لا بعده — المشترك يعرف ما سيحدث لأيامه المدفوعة */}
         {carry && carry.credit > 0 && (

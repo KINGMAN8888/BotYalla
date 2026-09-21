@@ -49,6 +49,21 @@ PLANS = {
     "ai": True, "broadcast": True, "whatsapp": True, "white_label": False,
     "wa_msgs": 2000, "media_files": 3000,
  },
+ # «راحة البال» — للمصانع وكبار التجار: فريقنا يبني البوت ويشغّله (done-for-you).
+ # تُحجز بمكالمة لا بدفع مباشر (`by_call`): الفريق يفهم النشاط أولاً ثم يرسل رابط
+ # الدفع (/subscribe/vip) — وهي **سنوية إلزامياً** (`annual_only`): `norm_cycle` تفرضها
+ # فلا يُحصَّل شهر واحد مقابل إعداد كامل. السعر قابل للتعديل من «الأسعار» في لوحة الأدمن.
+ "vip": {
+    "name_ar": "راحة البال", "name_en": "Peace of Mind", "price": 1999, "max_bots": 10,
+    "features_ar": ["كل مميزات باقة واتساب", "فريقنا يبني البوت ويشغّله بالكامل",
+                    "إعداد الردود والكتالوج وربط واتساب نيابةً عنك", "5000 رسالة خدمية شهرياً",
+                    "أولوية الدعم ومراجعة شهرية للأداء", "اشتراك سنوي"],
+    "features_en": ["Everything in WhatsApp", "Our team builds and runs your bot end to end",
+                    "Replies, catalog and WhatsApp connection set up for you", "5,000 service messages/month",
+                    "Priority support and a monthly performance review", "Annual subscription"],
+    "ai": True, "broadcast": True, "whatsapp": True, "white_label": False,
+    "wa_msgs": 5000, "media_files": 10000, "annual_only": True, "by_call": True,
+ },
  "agency": {
     "name_ar": "وكالة", "name_en": "Agency", "price": 2999, "max_bots": 9999,
     "features_ar": ["بوتات عملاء بلا حد", "علامة بيضاء (White-label)",
@@ -89,7 +104,7 @@ PLANS = {
 
 # الباقات المعروضة للبيع. الموروثة خارجها عمداً — `priced_plans` تقرأ من هنا،
 # ومسارا الاشتراك يرفضان أي معرّف ليس فيها.
-ORDER = ["free", "merchant", "whatsapp", "agency"]
+ORDER = ["free", "merchant", "whatsapp", "vip", "agency"]
 
 # ما يراه الأدمن في قائمة تغيير باقة مستخدم (يشمل الموروثة لدعم الحالات القائمة)
 ALL_IDS = ORDER + ["pro", "business"]
@@ -116,9 +131,12 @@ def plan_name(pid, lang="ar"):
 CYCLES = ("monthly", "annual")
 
 
-def norm_cycle(cycle):
+def norm_cycle(cycle, pid=None):
     """يطبّع الدورة — أي قيمة غير معروفة تسقط إلى الشهرية.
-    تُستدعى على كل قيمة قادمة من المستخدم قبل أي حساب أو تخزين."""
+    تُستدعى على كل قيمة قادمة من المستخدم قبل أي حساب أو تخزين.
+    باقة `annual_only` (راحة البال) سنوية دائماً مهما أُرسل — التسعير والتحصيل معاً."""
+    if pid and plan(pid).get("annual_only"):
+        return "annual"
     return cycle if cycle in CYCLES else "monthly"
 
 
@@ -173,6 +191,7 @@ FEATURES = {
     "free":     {"ai_setups": 3,   "ai_replies": 0,     "inbox_reply": False, "asset_mb": 25},
     "merchant": {"ai_setups": 30,  "ai_replies": 500,   "inbox_reply": True,  "asset_mb": 300},
     "whatsapp": {"ai_setups": 60,  "ai_replies": 1500,  "inbox_reply": True,  "asset_mb": 1000},
+    "vip":      {"ai_setups": 120, "ai_replies": 4000,  "inbox_reply": True,  "asset_mb": 2000},
     "agency":   {"ai_setups": 300, "ai_replies": 10000, "inbox_reply": True,  "asset_mb": 5000},
     "pro":      {"ai_setups": 30,  "ai_replies": 500,   "inbox_reply": True,  "asset_mb": 300},
     "business": {"ai_setups": 60,  "ai_replies": 1500,  "inbox_reply": True,  "asset_mb": 1000},

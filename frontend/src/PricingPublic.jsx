@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion } from "motion/react";
 import { BY, t, Icon, Reveal, GlassCard, fill, num } from "./ui.jsx";
+import VipCall from "./VipCall.jsx";
 
 /* ============================================================================
    الأسعار العامة. كل رقم هنا من الخادم (`priced_plans`): تجاوزات المالك وخصم
@@ -9,12 +10,14 @@ import { BY, t, Icon, Reveal, GlassCard, fill, num } from "./ui.jsx";
    ========================================================================== */
 
 export default function PricingPublic() {
-  const plans = BY.plans || [];
+  const all = BY.plans || [];
+  const plans = all.filter((p) => !p.by_call);          // «راحة البال» كارت عريض تحت الشبكة
+  const vip = all.find((p) => p.by_call);
   // السنوي افتراضياً (خطة النمو: تدفق نقدي) — والسعر الشهري المعادل ونسبة التوفير ظاهران
   // تحته، والمبدّل متاح في صفحة الدفع أيضاً: لا مفاجأة بمبلغ أكبر
   const [cycle, setCycle] = useState("annual");
   const annual = cycle === "annual";
-  const top = plans.reduce((m, p) => Math.max(m, p.annual_saving_pct || 0), 0);
+  const top = all.filter((p) => !p.annual_only).reduce((m, p) => Math.max(m, p.annual_saving_pct || 0), 0);
   const authed = !!(BY.auth && BY.auth.in);
 
   const href = (p) => {
@@ -120,6 +123,8 @@ export default function PricingPublic() {
           );
         })}
       </div>
+
+      {vip && <Reveal><VipCall plan={vip} BY={BY} Icon={Icon} /></Reveal>}
 
       {/* ثلاث ضمانات تجيب على «وإيه كمان؟» قبل أن تُسأل */}
       <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">

@@ -47,10 +47,11 @@ class PlanDefinitionTests(unittest.TestCase):
     """الباقات الأربع وحدودها."""
 
     def test_the_four_plans_exist_in_order(self):
-        self.assertEqual(plans.ORDER, ["free", "merchant", "whatsapp", "agency"])
+        # «راحة البال» (vip) أُضيفت بقرار صريح 2026-09-21 — سنوية إلزامياً وتُحجز بمكالمة
+        self.assertEqual(plans.ORDER, ["free", "merchant", "whatsapp", "vip", "agency"])
 
     def test_prices_are_what_the_strategy_specifies(self):
-        self.assertEqual([plans.PLANS[p]["price"] for p in plans.ORDER], [0, 299, 899, 2999])
+        self.assertEqual([plans.PLANS[p]["price"] for p in plans.ORDER], [0, 299, 899, 1999, 2999])
 
     def test_whatsapp_is_closed_below_the_whatsapp_plan(self):
         """Meta تحاسب لكل رسالة — واتساب لا يُفتح على مجاني أو تاجر."""

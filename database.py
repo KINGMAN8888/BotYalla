@@ -492,6 +492,21 @@ def init_db():
             FOREIGN KEY(referred_user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
+        -- عمولات التجديد (بعد أول دفعة) — سطر لكل دفعة معتمدة داخل سقف الـ12 شهراً.
+        -- UNIQUE(payment_id) هو حارس الازدواج: اعتماد نفس الدفعة مرتين (ويب + زرّ تليجرام)
+        -- لا يحتسب عمولتها مرتين.
+        CREATE TABLE IF NOT EXISTS affiliate_commissions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            referral_id INTEGER NOT NULL,
+            affiliate_user_id INTEGER NOT NULL,
+            referred_user_id INTEGER NOT NULL,
+            payment_id INTEGER NOT NULL UNIQUE,
+            amount REAL NOT NULL,
+            commission REAL NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(referral_id) REFERENCES referrals(id) ON DELETE CASCADE
+        );
+
         -- سجل التذكيرات: يمنع تكرار إرسال نفس التذكير لنفس المستخدم في نفس الدورة.
         CREATE TABLE IF NOT EXISTS reminder_log(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2102,16 +2117,28 @@ def attach_referral(referred_user_id, code):
         except sqlite3.IntegrityError:
             return False
 
+# العمولة تُحتسب على كل دفعة اشتراك معتمدة خلال 12 شهراً من **أول** دفعة للمُحال، ثم تتوقف.
+# عمولة أبدية بنسبة 20% = خُمس إيراد المشترك يخرج ما دام مشتركاً (قرار الإدارة 2026-09-21:
+# سقف 12 شهراً). لا أثر رجعي: الاحتساب يقع لحظة الاعتماد فقط، فالدفعات السابقة لا تمرّ هنا.
+RECURRING_MONTHS = 12
+RECURRING_WINDOW = 365 * 86400
+
+
 def credit_referral(referred_user_id, payment_id, amount, conn=None):
-    """يحتسب العمولة عند اعتماد أول دفعة للمُحال. يرجّع (affiliate_user_id, commission)
-    أو None. ذرّي: يُحدّث فقط الصف الذي لم يُحوَّل بعد."""
+    """عمولة دفعة اشتراك معتمدة للمُحال. يرجّع (affiliate_user_id, commission) أو None.
+
+    الأولى: تُحوِّل الإحالة (`referrals.converted_at`) — مسارها كما كان حرفياً.
+    التالية داخل سقف الـ12 شهراً: سطر في `affiliate_commissions` (UNIQUE على الدفعة).
+    ذرّي في الحالتين: التحديث المشروط / القيد الفريد يمنعان الاحتساب المزدوج."""
     with _conn_or(conn) as c:
-        r = c.execute("SELECT r.id, r.affiliate_user_id, a.rate_pct, a.is_active "
+        r = c.execute("SELECT r.id, r.affiliate_user_id, r.payment_id, r.converted_at, "
+                      "a.rate_pct, a.is_active "
                       "FROM referrals r JOIN affiliates a ON a.user_id=r.affiliate_user_id "
-                      "WHERE r.referred_user_id=? AND r.converted_at IS NULL",
-                      (referred_user_id,)).fetchone()
+                      "WHERE r.referred_user_id=?", (referred_user_id,)).fetchone()
         if not r or not r["is_active"]:
             return None
+        if r["converted_at"] is not None:
+            return _credit_renewal(c, r, referred_user_id, payment_id, amount)
         commission = round(float(amount) * float(r["rate_pct"]) / 100.0, 2)
         cur = c.execute("UPDATE referrals SET payment_id=?, commission=?, converted_at=? "
                         "WHERE id=? AND converted_at IS NULL",
@@ -2122,12 +2149,69 @@ def credit_referral(referred_user_id, payment_id, amount, conn=None):
                   (commission, r["affiliate_user_id"]))
         return (r["affiliate_user_id"], commission)
 
+
+def _credit_renewal(c, r, referred_user_id, payment_id, amount):
+    if payment_id == r["payment_id"]:                  # نفس الدفعة الأولى تُعتمد ثانيةً
+        return None
+    now = int(time.time())
+    if now - int(r["converted_at"]) > RECURRING_WINDOW:  # خارج السقف — لا عمولة
+        return None
+    commission = round(float(amount) * float(r["rate_pct"]) / 100.0, 2)
+    if commission <= 0:
+        return None
+    try:
+        c.execute("INSERT INTO affiliate_commissions(referral_id,affiliate_user_id,referred_user_id,"
+                  "payment_id,amount,commission,created_at) VALUES(?,?,?,?,?,?,?)",
+                  (r["id"], r["affiliate_user_id"], referred_user_id, payment_id,
+                   float(amount), commission, now))
+    except sqlite3.IntegrityError:                     # احتُسبت من قبل
+        return None
+    c.execute("UPDATE affiliates SET total_earned=total_earned+? WHERE user_id=?",
+              (commission, r["affiliate_user_id"]))
+    return (r["affiliate_user_id"], commission)
+
+
+def commission_of_payment(payment_id):
+    """عمولة دفعة بعينها (أولى أو تجديد) ← {affiliate_user_id, commission, renewal} أو None."""
+    with get_conn() as c:
+        r = c.execute("SELECT affiliate_user_id, commission FROM referrals WHERE payment_id=?",
+                      (payment_id,)).fetchone()
+        if r and r["commission"]:
+            return {"affiliate_user_id": r["affiliate_user_id"], "commission": r["commission"],
+                    "renewal": False}
+        r = c.execute("SELECT affiliate_user_id, commission FROM affiliate_commissions WHERE payment_id=?",
+                      (payment_id,)).fetchone()
+        return ({"affiliate_user_id": r["affiliate_user_id"], "commission": r["commission"],
+                 "renewal": True} if r else None)
+
+
 def affiliate_summary(user_id):
+    """أرقام لوحة الشريك. `expected_monthly` **تقدير** لا وعد: ما تدرّه الإحالات النشطة
+    داخل السقف شهرياً بسعر باقتها الحالي (السنوية ÷ 12)، ويسقط بالإلغاء أو انتهاء السقف."""
+    import plans
+    now = int(time.time())
     with get_conn() as c:
         r = c.execute("SELECT COUNT(*) signups, "
                       "COALESCE(SUM(CASE WHEN converted_at IS NOT NULL THEN 1 ELSE 0 END),0) conversions "
                       "FROM referrals WHERE affiliate_user_id=?", (user_id,)).fetchone()
-        return {"signups": r["signups"], "conversions": r["conversions"]}
+        renewals = c.execute("SELECT COALESCE(SUM(commission),0) FROM affiliate_commissions "
+                             "WHERE affiliate_user_id=?", (user_id,)).fetchone()[0]
+        rate = c.execute("SELECT rate_pct FROM affiliates WHERE user_id=?", (user_id,)).fetchone()
+        rate = float(rate["rate_pct"]) if rate else 0.0
+        active = c.execute(
+            "SELECT s.plan, s.billing_cycle FROM referrals r "
+            "JOIN subscriptions s ON s.user_id=r.referred_user_id "
+            "WHERE r.affiliate_user_id=? AND r.converted_at IS NOT NULL AND r.converted_at>=? "
+            "AND s.status='active' AND s.plan<>'free' AND (s.expires_at IS NULL OR s.expires_at>?)",
+            (user_id, now - RECURRING_WINDOW, now)).fetchall()
+    monthly = 0.0
+    for a in active:
+        p = plans.plan(a["plan"])["price"]
+        monthly += (plans.annual_price(a["plan"]) / 12.0) if a["billing_cycle"] == "annual" else p
+    return {"signups": r["signups"], "conversions": r["conversions"],
+            "renewals": round(float(renewals), 2), "active": len(active),
+            "expected_monthly": round(monthly * rate / 100.0, 2),
+            "months": RECURRING_MONTHS}
 
 def list_affiliates(limit=200):
     with get_conn() as c:

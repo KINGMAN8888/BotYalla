@@ -279,6 +279,14 @@ export function Affiliate() {
               label={`${t("aff_due")} (${EGP()})`} decimals={2} />
       </Grid>
 
+      {/* العمولة المتكررة (سقف 12 شهراً): «المتوقع» تقدير من الاشتراكات النشطة، لا مبلغ مضمون */}
+      <Grid cols={3} className="mb-6">
+        <Stat icon="refresh" value={summary.renewals || 0} label={`${t("aff_renewals")} (${EGP()})`} decimals={2} />
+        <Stat icon="users"   value={summary.active || 0}   label={t("aff_active_refs")} />
+        <Stat icon="chart"   value={summary.expected_monthly || 0}
+              label={`${t("aff_expected")} (${EGP()})`} decimals={2} />
+      </Grid>
+
       <Card className="mb-6">
         <SectionTitle icon="link"
           extra={<Pill tone="on">{t("aff_rate")}: {aff.rate_pct}%</Pill>}>

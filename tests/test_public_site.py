@@ -75,7 +75,7 @@ class HomeTests(unittest.TestCase):
         with web.app.test_request_context():
             server = {p["id"]: (p["price"], p["annual_price"]) for p in web.priced_plans("ar")}
         by = _by(web.app.test_client().get("/").get_data(as_text=True))
-        self.assertEqual([p["id"] for p in by["plans"]], ["free", "merchant", "whatsapp", "agency"])
+        self.assertEqual([p["id"] for p in by["plans"]], ["free", "merchant", "whatsapp", "vip", "agency"])
         self.assertEqual({p["id"]: (p["price"], p["annual_price"]) for p in by["plans"]}, server)
 
     def test_the_content_is_rendered_server_side_for_crawlers(self):

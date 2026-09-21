@@ -1346,8 +1346,11 @@ T.update({
  "aff_default_rate":{"ar": "النسبة الافتراضية للشركاء الجدد", "en": "Default rate for new partners"},
  "aff_payout":     {"ar": "صرف", "en": "Pay out"},
  "aff_none":       {"ar": "لا يوجد شركاء بعد.", "en": "No partners yet."},
- "aff_how":        {"ar": "العمولة تُحتسب مرة واحدة عند اعتماد أول اشتراك مدفوع للعميل الذي أحلته.",
-                    "en": "Commission is credited once, when the first paid subscription from your referral is approved."},
+ "aff_how":        {"ar": "عمولتك على كل دفعة اشتراك من العميل اللي أحلته — أول اشتراك وكل تجديد — لمدة 12 شهراً من أول دفعة ليه.",
+                    "en": "You earn on every subscription payment from your referral — the first and every renewal — for 12 months from their first payment."},
+ "aff_renewals":   {"ar": "عمولات التجديد", "en": "Renewal commissions"},
+ "aff_expected":   {"ar": "العائد المتوقع شهرياً (تقدير)", "en": "Expected monthly (estimate)"},
+ "aff_active_refs":{"ar": "إحالات نشطة داخل الـ12 شهراً", "en": "Active referrals within 12 months"},
  "aff_active":     {"ar": "مفعّل", "en": "Active"},
  "aff_paused":     {"ar": "موقوف", "en": "Paused"},
 })

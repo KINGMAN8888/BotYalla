@@ -2418,7 +2418,7 @@ def subscribe(plan_id):
     p = plans.plan(plan_id)
     plat = _public_plat()
     # الدورة تأتي من رابط صفحة الأسعار، وتُطبَّع فوراً: `?cycle=anything` تصير شهرية.
-    cyc = plans.norm_cycle(request.args.get("cycle"))
+    cyc = plans.norm_cycle(request.args.get("cycle"), plan_id)
     _pr = _plan_pricing(plan_id, cycle=cyc)
     _mo = _plan_pricing(plan_id, cycle="monthly")
     # معاينة نقل الرصيد قبل الدفع — بنفس ما تستعمله `finalize_payment` عند
@@ -4037,10 +4037,11 @@ def settle_payment(row):
     """إشعار المالك بعمولة الإحالة إن تحققت. التسوية نفسها تمّت داخل
     db.finalize_payment ليشملها مسار تليجرام أيضاً."""
     try:
-        r = db.referral_of(row["user_id"])
-        if r and r.get("payment_id") == row["id"] and r.get("commission"):
+        r = db.commission_of_payment(row["id"])        # الأولى أو تجديد داخل سقف الـ12 شهراً
+        if r:
             aff = db.get_user(r["affiliate_user_id"])
-            notify_admins(f"🤝 عمولة إحالة {r['commission']} EGP لـ "
+            kind = "تجديد" if r["renewal"] else "أول اشتراك"
+            notify_admins(f"🤝 عمولة إحالة ({kind}) {r['commission']} EGP لـ "
                           f"{aff['username'] if aff else r['affiliate_user_id']} (دفعة #{row['id']})")
     except Exception:
         pass
@@ -4063,7 +4064,7 @@ def _plan_pricing(plan_id, overrides=None, cycle="monthly"):
     ov = (overrides if overrides is not None else db.plan_overrides()).get(plan_id) or {}
     price = ov.get("price")
     monthly = float(base["price"]) if price is None else float(price)
-    cyc = plans.norm_cycle(cycle)
+    cyc = plans.norm_cycle(cycle, plan_id)             # راحة البال: سنوية إلزامياً
     price = plans.annual_of(monthly) if cyc == "annual" else monthly
     disc = float(ov.get("discount_pct") or 0)
     final = round(price * (1 - disc / 100.0), 2)
@@ -4164,7 +4165,9 @@ _LANDING_ICONS = ("store","calendar","shield","grid","flow","sparkles","chart","
                   "globe","image","lock","key","download","link","back","clock","play","inbox",
                   # أيقونات العروض الحيّة في البطل والقنوات والقصة
                   "pizza","dress","stethoscope","bag","menu","cart","ruler","camera","ticket",
-                  "folder","chat","truck","return","refresh","user","close","arrow")
+                  "folder","chat","truck","return","refresh","user","close","arrow",
+                  # قطاع الوكالات وكارت «راحة البال» في صفحة الأسعار
+                  "crown")
 
 # ---------------------------------------------------------------------------
 #  طبقة تقديم React: Flask يبقى مسؤولاً عن التوجيه والصلاحيات والنماذج،
@@ -4528,7 +4531,8 @@ def _public_plan(p, lang):
             "annual_has_discount": p["annual_has_discount"],
             "annual_saving_pct": p["annual_saving_pct"],
             "annual_monthly_equiv": p["annual_monthly_equiv"],
-            "whatsapp": bool(p.get("whatsapp")), "hot": p["id"] == "whatsapp"}
+            "whatsapp": bool(p.get("whatsapp")), "hot": p["id"] == "whatsapp",
+            "by_call": bool(p.get("by_call")), "annual_only": bool(p.get("annual_only"))}
 
 
 def _home_jsonld(lang, plist, faq):
@@ -4628,6 +4632,49 @@ def segment_page(code):
     return _render_public(payload, seo)
 
 
+@app.route("/vip/request", methods=["POST"])
+def vip_request():
+    """«احجز مكالمة» لباقة راحة البال — بلا Calendly (سكربت طرف ثالث يفتح CSP ويُخرج بيانات
+    العميل للخارج). المسجَّل: تذكرة vip_call تظهر في «تذاكر الدعم» ويُرد عليها من تليجرام.
+    الزائر: عميل محتمل في البوت الرسمي. الحالتان: تنبيه فوري للمبيعات + موافقة موثّقة."""
+    import platform_kb
+    lang = session.get("lang", i18n.DEFAULT)
+    ar = lang != "en"
+    if _rate_limited(request.remote_addr or "?", limit=5, window=3600, bucket="vip_req"):
+        return jsonify(ok=False, error=("محاولات كتير — جرّب بعد شوية." if ar else
+                                        "Too many attempts — try again later.")), 429
+    d = request.get_json(silent=True) or {}
+    clean = lambda k, n: str(d.get(k) or "").strip()[:n]
+    name, company, notes = clean("name", 80), clean("company", 120), clean("notes", 600)
+    phone = _re.sub(r"[\s\-()]", "", clean("phone", 25))
+    if not (name and company and _PHONE_RE.match(phone)):
+        return jsonify(ok=False, error=("اكتب الاسم والشركة ورقم واتساب صحيح." if ar else
+                                        "Enter your name, company and a valid WhatsApp number.")), 400
+    if d.get("consent") is not True:
+        return jsonify(ok=False, error=("لازم توافق على التواصل معاك عشان نكلمك." if ar else
+                                        "Please agree to be contacted so we can call you.")), 400
+    body = (f"طلب مكالمة — باقة راحة البال\n• الاسم: {name}\n• الشركة: {company}\n"
+            f"• واتساب: +{phone.lstrip('+')}" + (f"\n• ملاحظات: {notes}" if notes else ""))
+    if uid():
+        open_tid = db.open_ticket_of_kind(uid(), "vip_call")
+        if open_tid:
+            return jsonify(ok=True, existing=True, id=open_tid)
+        tid = db.create_ticket(uid(), "vip_call", f"راحة البال — {company}"[:SD.SUBJECT_MAX], body[:SD.BODY_MAX])
+        _alert_ticket(tid, body)
+    else:
+        row = platform_kb.official_bot()
+        if row:
+            try:
+                db.add_lead(row["id"], 0, {"source": "vip_call", "name": name, "company": company,
+                                           "phone": phone, "notes": notes, "consent_at": int(_time.time()),
+                                           "lang": lang})
+            except Exception:
+                log.exception("vip lead: store failed")
+        notify_admins("⭐ " + body)
+    AN.queue(session, "vip_request")
+    return jsonify(ok=True)
+
+
 @app.route("/case-study")
 def case_study():
     """رابط قصير للإعلانات ← نموذج الحالة المرجعية في صفحة المصانع."""
@@ -4686,6 +4733,7 @@ def home():
     lang = session.get("lang", i18n.DEFAULT)
     payload = _public_payload("home", lang)
     payload.update(i18n.landing_payload(lang))
+    payload["csrf"] = _csrf_token()                   # نموذج «احجز مكالمة» لباقة راحة البال
     price = _egp(mkt_price())
     ai_price = FE.ai_reply_price() / 100
     payload["mktPrice"] = price
