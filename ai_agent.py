@@ -971,7 +971,10 @@ def setup_step(turns, *, template, channel="telegram", current_name=None,
 
     if api_key:
         repair = None
-        for _ in range(2):                     # محاولة + إصلاح واحد
+        for attempt in range(2):               # محاولة + إصلاح واحد
+            # الجولة الأولى غالباً أسئلة قصيرة: النموذج السريع (~1-2ث بدل 6-9ث). الإصلاح أو التصميم
+            # بعد الإجابات يعود للنموذج الأقوى — تصميم بوت كامل يستحقه.
+            _speed.fast = rounds == 0 and attempt == 0 and max_rounds > 0
             try:
                 raw = _loads(_call(provider, api_key, SETUP_SYSTEM,
                                    _setup_user_prompt(turns, template, channel, current_name,
@@ -981,6 +984,8 @@ def setup_step(turns, *, template, channel="telegram", current_name=None,
                 if isinstance(e, (urllib.error.URLError, TimeoutError, OSError)):
                     break                      # المزوّد لا يرد — لا فائدة من الإعادة
                 continue
+            finally:
+                _speed.fast = False
             if not isinstance(raw, dict):
                 repair = "not a JSON object"; continue
             brief = raw.get("brief") if isinstance(raw.get("brief"), dict) else {}

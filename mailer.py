@@ -655,6 +655,33 @@ def verify_email(code, link=None, lang="ar", minutes=60):
     return subject, html, text
 
 
+def assist_email(staff_name, lang="ar", link=None, via="user"):
+    """(subject, html, text): فريق المنصة بدأ يعمل داخل حساب العميل بإذنه — شفافية كاملة."""
+    en = lang == "en"
+    if en:
+        subject = "The BotYalla team is setting up your bot"
+        title = "Our team is working on your bot"
+        intro = (f"{staff_name} from the BotYalla team started setting up your bot inside your account"
+                 + (" with the permission you gave." if via == "user" else " with the consent you gave us."))
+        scope = ("They can only work on your bots (settings, replies, flow, media). They can't see your password, "
+                 "payments, wallet or your customers' conversations, and every change is logged for you.")
+        stop = "You can stop this permission any time from your dashboard."
+        label = "Open my dashboard"
+    else:
+        subject = "فريق BotYalla بيجهّز بوتك دلوقتي"
+        title = "فريقنا شغال على بوتك"
+        intro = (f"{staff_name} من فريق BotYalla بدأ يجهّز بوتك جوه حسابك"
+                 + (" بالإذن اللي أنت اديته." if via == "user" else " بموافقتك اللي بلّغتنا بيها."))
+        scope = ("بيشتغل على البوتات بس (الإعدادات والردود والخطوات والصور). مش بيشوف كلمة السر ولا المدفوعات "
+                 "ولا الرصيد ولا محادثات عملائك، وكل تعديل بيتسجّل وتقدر تشوفه.")
+        stop = "تقدر توقف الإذن في أي وقت من لوحة التحكم."
+        label = "افتح لوحة التحكم"
+    body = _p(escape(intro)) + _p(escape(scope), muted=True) + (_button(link, label) if link else "") + \
+        _note(escape(stop), lang, "info")
+    html = _layout(lang, title, body, badge="security", preheader=intro[:90])
+    return subject, html, f"{intro}\n\n{scope}\n\n{stop}" + (f"\n\n{link}" if link else "")
+
+
 def expiry_email(kind, plan_name, date, lang="ar", link=None):
     """(subject, html, text) لتذكير انتهاء الاشتراك: pre3 · pre1 · expired.
     سياسة الخصوصية تعد بتذكير الانتهاء بالبريد — هذا هو (من حلقة التذكيرات في bot_manager)."""

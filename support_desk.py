@@ -13,7 +13,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import database as db
 import mailer
 
-KINDS = ("support", "complaint", "payment", "other", "wa_setup", "vip_call")
+KINDS = ("support", "complaint", "payment", "other", "wa_setup", "vip_call", "done_for_you")
+# done_for_you: «فريقنا يجهّزه لك» — العميل منح الفريق إذناً مؤقتاً بتجهيز بوته (app.assist_request)
 # vip_call: طلب مكالمة لباقة «راحة البال» (/vip/request) — لا يُختار من النموذج العام أيضاً
 # wa_setup لا يُختار من نموذج الدعم العام: يُفتح من «سيبها علينا» في خطوة واتساب وحدها
 # (/whatsapp/assist)، حيث تُفحص باقة العميل — ومنه وحده يربط الفريق بوتاً في حسابه.
@@ -23,7 +24,8 @@ _KIND = {"support":   ("🛠️", "دعم فني", "Support"),
          "payment":   ("💳", "مشكلة دفع", "Payment issue"),
          "other":     ("💬", "أخرى", "Other"),
          "wa_setup":  ("🟢", "ربط واتساب", "WhatsApp setup"),
-         "vip_call":  ("⭐", "مكالمة راحة البال", "Peace of Mind call")}
+         "vip_call":  ("⭐", "مكالمة راحة البال", "Peace of Mind call"),
+         "done_for_you": ("🧰", "جهّزوه لي", "Done for you")}
 TAG_RE = re.compile(r"#T(\d+)\b")
 SUBJECT_MAX, BODY_MIN, BODY_MAX = 120, 10, 3000
 

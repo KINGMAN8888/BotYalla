@@ -268,8 +268,8 @@ def _email_gate():
     """حساب جديد لا يستخدم المنصة قبل تأكيد بريده (قرار المالك: «إجباري قبل أي استخدام»).
     الحسابات القديمة والأدمن والدعم لا يُحجبون (db.email_gate)، والصفحات العامة تبقى متاحة."""
     u = getattr(g, "user", None)
-    if not u or not db.email_gate(u):
-        return None
+    if not u or not db.email_gate(u) or session.get("assist"):
+        return None                          # موظف يجهّز بوت العميل بإذنه — لا يُحجب ببريد العميل
     p = request.path
     if p in _GATE_PUBLIC or p.startswith(_GATE_OPEN):
         return None
@@ -1183,9 +1183,47 @@ def dashboard():
                        "metaConnect": current_role() in ("admin", "support"),
                        "waAssist": {"open": db.open_ticket_of_kind(uid(), "wa_setup") if wa_plan else None},
                        "onboarding": _onboarding(bots),
+                       # رحلة النجاح: من أول بوت لأول ربح — خطوة واحدة واضحة كل مرة
+                       "journey": _journey(bots, plan_id),
+                       # «فريقنا يجهّزه لك»: الإذن الساري وسجل ما فعله الفريق (للعميل وحده)
+                       "doneForYou": {"grant": _grant_view(uid()), "allowed": current_role() == "user"
+                                      and not session.get("assist")},
                        # الإنشاء بضغطة متاح فقط لو بوت المنصة يعمل وفيه «وضع إدارة البوتات»
                        "oneTap": {"available": bool(info.get("username") and info.get("can_manage")),
                                   "platformRunning": manager.platform_running()}})
+
+
+def _journey(bots, plan_id):
+    """الخطوات السبع من التسجيل لأول ربح — تُحسب من بيانات الحساب الحقيقية (دالة خالصة).
+    الخطوة الحالية = أول خطوة لم تتم. البوت المرجعي = أول بوت أنشأه العميل."""
+    b = min(bots, key=lambda x: x.get("id") or 0) if bots else None
+    cfg = {}
+    if b:
+        try:
+            cfg = json.loads(b.get("config_json") or "{}")
+        except (ValueError, TypeError):
+            cfg = {}
+    st = {"subscribers": 0, "orders": 0, "leads": 0, "bookings": 0}
+    for x in bots:
+        for k in st:
+            st[k] += int((x.get("stats") or {}).get(k) or 0)
+    taught = bool(b) and bool(cfg.get("kb") or cfg.get("products") or cfg.get("menu_items") or
+                              (cfg.get("ai_persona") or "").strip() or _greeting_set(b, cfg))
+    done = {
+        "create": bool(bots),
+        "teach": taught,
+        "run": any(x.get("running") for x in bots),
+        "try": st["subscribers"] >= 1,
+        "share": st["subscribers"] >= 3,
+        "sale": (st["orders"] + st["leads"] + st["bookings"]) >= 1,
+        "grow": plan_id != "free",
+    }
+    order = ["create", "teach", "run", "try", "share", "sale", "grow"]
+    current = next((k for k in order if not done[k]), None)
+    return {"steps": [{"k": k, "done": done[k]} for k in order], "current": current,
+            "botId": b["id"] if b else None, "botName": b.get("name") if b else "",
+            "channel": (b.get("channel") or "telegram") if b else "telegram",
+            "botUsername": cfg.get("bot_username") or ""}
 
 
 def _onboarding(bots):
@@ -3067,6 +3105,8 @@ def admin_users():
     return react_page("admin_users", "admin_users_t",
                       {"users": db.list_all_users(),
                        "invites": db.list_invites() if current_role() == "admin" else [],
+                       "grants": {str(k): {"until": v["expires_at"], "via": v["via"], "note": v.get("note") or ""}
+                                  for k, v in db.active_grants().items()},
                        "inviteMaxDays": db.INVITE_MAX_DAYS,
                        "plans": [{"id": k, "name": plans.plan_name(k, session.get("lang", i18n.DEFAULT))}
                                  for k in plans.ORDER]})
@@ -4122,31 +4162,33 @@ def bot_poster(bot_id):
 def bot_create_managed():
     """يولّد رابطاً لمرة واحدة إلى بوت المنصة (زر + QR). الإنشاء نفسه يحدث حين
     يؤكّد المستخدم داخل تليجرام — راجع managed_bots.py."""
-    lang = session.get("lang", i18n.DEFAULT)
     data = request.get_json(silent=True) or {}
-    name = str(data.get("name") or "").strip()[:60]
-    template = str(data.get("template") or "")
+    return jsonify(_managed_start(str(data.get("name") or ""), str(data.get("template") or "")))
+
+
+def _managed_start(name, template):
+    """رابط الإنشاء بضغطة (+QR) — للزر في اللوحة ولوكيل المساعد. يرجّع dict الرد."""
+    lang = session.get("lang", i18n.DEFAULT)
+    name = name.strip()[:60]
     if not name or template not in T.TEMPLATES:
-        return jsonify({"ok": False, "error": i18n.t("mb_err_fields", lang)})
+        return {"ok": False, "error": i18n.t("mb_err_fields", lang)}
     info = manager.platform_info()
     if not (info.get("username") and info.get("can_manage")):
-        return jsonify({"ok": False, "unavailable": True, "error": i18n.t("mb_err_unavailable", lang)})
+        return {"ok": False, "unavailable": True, "error": i18n.t("mb_err_unavailable", lang)}
     # حدّ الباقة قبل إصدار الرابط — ويُفحص ثانيةً لحظة الإنشاء
     if current_role() not in ("admin", "support"):
         maxb = plans.plan(_plan_id())["max_bots"]
         if db.count_user_bots(uid()) >= maxb:
-            return jsonify({"ok": False, "upgrade": True,
-                            "error": i18n.t("mb_err_limit", lang).format(n=maxb)})
+            return {"ok": False, "upgrade": True, "error": i18n.t("mb_err_limit", lang).format(n=maxb)}
     if _rate_limited(f"u{uid()}", limit=10, window=600, bucket="managed"):
-        return jsonify({"ok": False, "error": i18n.t("ai_rate", lang)})
+        return {"ok": False, "error": i18n.t("ai_rate", lang)}
     code = MB.new_code()
     suggested = MB.suggest_username(name)
     rid = db.create_managed_request(uid(), MB.token_hash(code), template, name, suggested)
     link = MB.start_link(info["username"], code)
     # QR داخل الرد لا مسار مستقل: الرابط يحمل الكود السرّي، ولا يُخزَّن إلا تجزئته
     qr = "data:image/svg+xml;base64," + base64.b64encode(_qr_svg(link).encode("utf-8")).decode("ascii")
-    return jsonify({"ok": True, "id": rid, "link": link, "qr": qr, "ttl": db.MANAGED_TTL,
-                    "suggested": suggested})
+    return {"ok": True, "id": rid, "link": link, "qr": qr, "ttl": db.MANAGED_TTL, "suggested": suggested}
 
 
 @app.route("/bot/create/managed/<int:rid>")
@@ -4626,6 +4668,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
     payload = {
         "view": view, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
         "csrf": _csrf_token(), "track": _track_events(), "assistant": _assistant_boot(view, lang),
+        "assist": _assist_banner(),
         "user": {"name": session.get("uname"), "role": role,
                  # لمطالبة لطيفة بإضافة إيميل — بدونه لا استرجاع للحساب
                  "hasEmail": bool((getattr(g, "user", None) or {}).get("email")),
@@ -5026,13 +5069,184 @@ def segment_page(code):
     return _render_public(payload, seo)
 
 
+# ---------- «فريقنا يجهّزه لك»: الموظف يعمل داخل حساب العميل بإذنه ----------
+# الجلسة تصير جلسة العميل (نفس الشاشات والصلاحيات) مع حدود صارمة:
+#  • إذن ساري من العميل (setup_grants) — يلغيه العميل فتنتهي الجلسة فوراً مع أول طلب.
+#  • البوتات وإعدادها فقط: لا حساب/كلمة سر/بريد، لا دفع/رصيد/أرباح، لا محادثات العملاء،
+#    لا إرسال حملات ولا حذف ولا تصدير، ولا ربط بحساب فيسبوك/تليجرام الموظف.
+#  • كل طلب يغيّر شيئاً يُسجَّل (staff_actions) ويراه العميل، ولافتة ظاهرة طول الوقت.
+_ASSIST_BLOCK = ("/account", "/billing", "/subscribe", "/wallet", "/affiliate", "/admin", "/api/admin",
+                 "/support", "/settings", "/whatsapp/", "/verify-email", "/meta/connect", "/auth/",
+                 "/register", "/login", "/request-bot", "/api/promo", "/assist/request", "/assist/revoke",
+                 "/logout")
+_ASSIST_BLOCK_RE = _re.compile(r"^/(?:api/)?bot/\d+/(?:inbox|broadcast|delete|export|payments|pay-settings|"
+                               r"addon|gen-owner-link)(?:/|$)")
+_ASSIST_OPEN = ("/assist/exit", "/static/", "/lang/")
+
+
+def _assist_end(reason_flash=None):
+    """يرجّع جلسة الموظف كما كانت."""
+    a = session.pop("assist", None) or {}
+    if a.get("staff"):
+        try:
+            db.log_staff_action(a["staff"], a.get("user") or 0, "assist_end", reason_flash or "")
+        except Exception:
+            log.exception("assist end log failed")
+        session["uid"], session["uname"] = a["staff"], a.get("staff_uname")
+        session["role"], session["pwv"] = a.get("staff_role"), a.get("staff_pwv")
+    if reason_flash:
+        flash(reason_flash, "error")
+
+
+@app.before_request
+def _assist_guard():
+    a = session.get("assist")
+    if not a:
+        return None
+    p = request.path
+    if p.startswith(_ASSIST_OPEN):
+        return None
+    staff = db.get_user(a.get("staff") or 0)
+    grant = db.active_grant(a.get("user") or 0)
+    ar = session.get("lang", i18n.DEFAULT) != "en"
+    if not staff or staff.get("is_blocked") or staff.get("role") not in ("admin", "support") or \
+            not grant or grant["id"] != a.get("grant") or session.get("uid") != a.get("user"):
+        _assist_end("انتهت جلسة المساعدة (الإذن انتهى أو اتلغى)." if ar else "Assist session ended (permission expired or revoked).")
+        return redirect(url_for("admin_users"))
+    if p.startswith(_ASSIST_BLOCK) or _ASSIST_BLOCK_RE.match(p):
+        msg = ("الجزء ده مقفول أثناء المساعدة — خصوصية العميل وأمان حسابه." if ar else
+               "That part is locked while assisting — the customer's privacy and account safety.")
+        if request.method != "GET" or p.startswith("/api/") or request.is_json:
+            return jsonify(ok=False, error=msg), 403
+        flash(msg, "error")
+        return redirect(url_for("dashboard"))
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        m = _re.match(r"^/(?:api/)?bot/(\d+)", p)
+        try:
+            db.log_staff_action(a["staff"], a["user"], request.method + " " + p[:120],
+                                bot_id=int(m.group(1)) if m else None)
+        except Exception:
+            log.exception("assist action log failed")
+    return None
+
+
+def _assist_banner():
+    a = session.get("assist")
+    if not a:
+        return None
+    g_ = db.active_grant(a.get("user") or 0) or {}
+    return {"user": session.get("uname"), "staff": a.get("staff_uname"), "until": g_.get("expires_at"),
+            "exit": url_for("assist_exit")}
+
+
+@app.route("/assist/request", methods=["POST"])
+@login_required
+def assist_request():
+    """العميل: «فريقنا يجهّزه لك» — إذن 7 أيام + تذكرة تصل الفريق على تليجرام فوراً."""
+    lang = session.get("lang", i18n.DEFAULT)
+    ar = lang != "en"
+    d = request.get_json(silent=True) or {}
+    if d.get("consent") is not True:
+        return jsonify(ok=False, error="لازم توافق على الإذن الأول." if ar else "Please accept the permission first."), 400
+    if _rate_limited(f"u{uid()}", limit=5, window=3600, bucket="assist_req"):
+        return jsonify(ok=False, error=i18n.t("ai_rate", lang)), 429
+    if current_role() != "user":
+        return jsonify(ok=False, error="حسابات الفريق مش محتاجة ده." if ar else "Team accounts don't need this."), 400
+    note = str(d.get("note") or "").strip()[:800]
+    gid = db.grant_create(uid(), "user", note)
+    body = (f"العميل طلب «جهّزوه لي» ومنح الفريق إذن 7 أيام.\n"
+            f"• المطلوب: {note or '—'}\n• ادخل من «إدارة المستخدمين» ← «ادخل وجهّز له».")
+    tid = db.open_ticket_of_kind(uid(), "done_for_you")
+    if tid:
+        db.add_ticket_msg(tid, "user", body, "web")
+    else:
+        tid = db.create_ticket(uid(), "done_for_you", ("جهّزوه لي — " + (note or session.get("uname") or ""))[:SD.SUBJECT_MAX], body)
+    _alert_ticket(tid, body, followup=False)
+    log.info("done-for-you grant #%s by user=%s", gid, uid())
+    return jsonify(ok=True, grant=_grant_view(uid()))
+
+
+@app.route("/assist/revoke", methods=["POST"])
+@login_required
+def assist_revoke():
+    db.revoke_grant(uid())
+    return jsonify(ok=True, grant=None)
+
+
+def _grant_view(user_id):
+    g_ = db.active_grant(user_id)
+    if not g_:
+        return None
+    return {"until": g_["expires_at"], "via": g_["via"], "note": g_.get("note") or "",
+            "actions": [{"at": x["created_at"], "who": x.get("staff_name") or "—", "what": _action_label(x)}
+                        for x in db.staff_actions_for(user_id, 12)]}
+
+
+def _action_label(x):
+    a = x.get("action") or ""
+    if a == "assist_start":
+        return "بدأ يجهّز البوت"
+    if a == "assist_end":
+        return "خلّص جلسة التجهيز"
+    part = a.split(" ", 1)[-1]
+    for k, v in (("/flow", "عدّل خطوات البوت"), ("/config", "عدّل إعدادات البوت"), ("/brain", "ضبط الردود الذكية"),
+                 ("/ai/session", "صمّم البوت بوكيل الإعداد"), ("/start", "شغّل البوت"), ("/stop", "أوقف البوت"),
+                 ("/photo", "غيّر صورة البوت"), ("/templates", "قوالب واتساب"), ("/bot/create", "أنشأ بوت جديد"),
+                 ("/api/assets", "رفع صورة للمكتبة")):
+        if k in part:
+            return v + (f" #{x['bot_id']}" if x.get("bot_id") else "")
+    return "تعديل"
+
+
+@app.route("/admin/users/<int:user_id>/assist", methods=["POST"])
+@require_roles("admin", "support")
+def admin_assist_start(user_id):
+    """الموظف يدخل حساب العميل ليجهّز بوته — بإذن العميل، أو بموافقة أخذها منه مع ملاحظة إلزامية."""
+    lang = session.get("lang", i18n.DEFAULT)
+    ar = lang != "en"
+    if session.get("assist"):
+        abort(400)
+    u = db.get_user(user_id)
+    if not u or u.get("role") != "user" or u.get("is_blocked"):
+        flash("ينفع تساعد حسابات العملاء بس." if ar else "You can only assist customer accounts.", "error")
+        return redirect(url_for("admin_users"))
+    grant = db.active_grant(user_id)
+    if not grant:
+        note = request.form.get("consent_note", "").strip()
+        if len(note) < 8:
+            flash("العميل مامنحش إذن. اكتب إزاي أخدت موافقته (مثلاً: وافق على واتساب النهارده الساعة 3)." if ar else
+                  "No permission from the customer. Write how you got their consent.", "error")
+            return redirect(url_for("admin_users"))
+        db.grant_create(user_id, "staff", note, staff_id=uid())
+        grant = db.active_grant(user_id)
+    me = db.get_user(uid())
+    session["assist"] = {"staff": uid(), "staff_uname": session.get("uname"), "staff_role": current_role(),
+                         "staff_pwv": session.get("pwv"), "user": user_id, "grant": grant["id"]}
+    session["uid"], session["uname"], session["role"] = user_id, u["username"], "user"
+    session["pwv"] = _pw_stamp(u["pw_hash"])
+    db.log_staff_action(me["id"], user_id, "assist_start", grant.get("note") or "")
+    notify_admins(f"🧰 {me['username']} بدأ يجهّز بوت العميل «{u['username']}» (#{user_id}) — إذن {grant['via']}")
+    if u.get("email"):
+        mailer.send_async(u["email"], *mailer.assist_email(me["username"], db.user_lang(user_id),
+                                                         _public_url("dashboard"), grant["via"]))
+    log.info("assist start staff=%s user=%s grant=%s", me["id"], user_id, grant["id"])
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/assist/exit", methods=["POST"])
+def assist_exit():
+    if session.get("assist"):
+        _assist_end()
+    return redirect(url_for("admin_users"))
+
+
 # ---------- «مساعد BotYalla» داخل الموقع (site_assistant.py) ----------
 def _assistant_boot(view, lang):
     """ما تحتاجه الفقاعة عند الفتح: دليل الصفحة وأسئلة البداية — بلا طلب شبكة."""
     import site_assistant as SA
     g_ = SA.page_guide(view, lang)
     return {"view": view, "title": g_["title"], "tips": g_["tips"], "starters": g_["starters"],
-            "api": "/api/assistant", "handoff": "/api/assistant/handoff"}
+            "api": "/api/assistant", "handoff": "/api/assistant/handoff", "act": "/api/assistant/act"}
 
 def _assistant_user():
     import site_assistant as SA
@@ -5068,11 +5282,135 @@ def api_assistant():
     if not text:
         return jsonify(ok=False, error="…"), 400
     view = _re.sub(r"[^a-z_]", "", str(d.get("view") or "home"))[:40] or "home"
-    out = SA.answer(text, SA.clean_history(d.get("history")), view, lang, _assistant_user(),
+    uctx = _assistant_user()
+    out = SA.answer(text, SA.clean_history(d.get("history")), view, lang, uctx,
                     ai.key_chain(db.get_platform))
     AN.queue(session, "assistant_ask", ai=out["ai"])
+    card = None
+    act = out.get("action") if uid() else None
+    if act:
+        names = {b["id"]: b["name"] for b in uctx.get("bot_list") or []}
+        label, warn = SA.action_label(act, lang, names)
+        tok = _secrets.token_urlsafe(12)
+        pend = dict(session.get("assist_act") or {})
+        pend = dict(list(pend.items())[-2:])                 # آخر 3 اقتراحات فقط
+        pend[tok] = dict(act, at=int(_time.time()))
+        session["assist_act"] = pend
+        card = {"token": tok, "type": act["type"], "label": label, "warn": warn}
     return jsonify(ok=True, reply=out["reply"], suggestions=out["suggestions"], handoff=out["handoff"],
-                   links=_assistant_links(out["links"], lang))
+                   links=_assistant_links(out["links"], lang), action=card)
+
+
+@app.route("/api/assistant/act", methods=["POST"])
+@login_required
+def api_assistant_act():
+    """تنفيذ إجراء اقترحه الوكيل — بعد ضغطة المستخدم وحدها، بصلاحياته وحدود باقته."""
+    lang = session.get("lang", i18n.DEFAULT)
+    ar = lang != "en"
+    tok = str((request.get_json(silent=True) or {}).get("token") or "")
+    pend = dict(session.get("assist_act") or {})
+    act = pend.pop(tok, None)
+    session["assist_act"] = pend
+    if not act or int(_time.time()) - act.get("at", 0) > 1800:
+        return jsonify(ok=False, error="الاقتراح ده انتهى — اطلبه تاني." if ar else "That suggestion expired — ask again.")
+    if _rate_limited(f"u{uid()}", limit=20, window=600, bucket="assist_act"):
+        return jsonify(ok=False, error=i18n.t("ai_rate", lang)), 429
+    t, a = act["type"], act["args"]
+    b = db.get_bot(a["bot_id"], uid()) if a.get("bot_id") else None
+    if a.get("bot_id") and not b:
+        abort(404)
+    if t == "create_telegram_bot":
+        res = _managed_start(a["name"], a["template"])
+        if not res.get("ok"):
+            return jsonify(ok=False, error=res.get("error"), upgrade=res.get("upgrade"))
+        return jsonify(ok=True, kind="telegram_link", link=res["link"], qr=res["qr"], request=res["id"],
+                       msg=("جاهز ✅ افتح تليجرام من الزرار (أو امسح الكود من موبايلك) واضغط «أنشئ بوتي» — "
+                            "والبوت هيتعمل ويشتغل لوحده." if ar else
+                            "Ready ✅ Open Telegram with the button (or scan the code) and tap “Create my bot” — "
+                            "it will be created and started automatically."))
+    if t == "design_bot":
+        return jsonify(_agent_design(b, a["description"], lang))
+    if t == "ai_replies":
+        cfg = json.loads(b["config_json"] or "{}")
+        if a["on"]:
+            if not _uses_engine(b):
+                return jsonify(ok=False, error=i18n.t("brain_not_engine", lang))
+            if current_role() not in ("admin", "support") and not plans.ai_replies_limit(_plan_id()):
+                return jsonify(ok=False, upgrade=True, error=i18n.t("brain_locked", lang))
+            cfg.setdefault("ai_consent_at", int(_time.time()))   # الضغطة على بطاقة فيها التنبيه = موافقة
+            cfg["response_mode"] = "ai"
+        else:
+            cfg["response_mode"] = "flow"
+        db.save_config_version(b["id"], json.loads(b["config_json"] or "{}"), "assistant")
+        db.update_bot_config(b["id"], cfg)
+        if manager.is_running(b["id"]):
+            manager.restart_bot(b["id"])
+        return jsonify(ok=True, msg=("✅ الردود الذكية اشتغلت — جرّب ابعت سؤال للبوت من موبايلك." if a["on"] else
+                                     "✅ الردود الذكية اتقفلت — البوت هيرد بالخطوات.") if ar else
+                       ("✅ Smart replies are on — send the bot a question from your phone." if a["on"] else
+                        "✅ Smart replies are off — the bot follows its steps."),
+                       url=url_for("bot_detail", bot_id=b["id"]))
+    if t in ("start_bot", "stop_bot"):
+        ok, msg = (manager.start_bot if t == "start_bot" else manager.stop_bot)(b["id"])
+        if ok and t == "start_bot":
+            db.track("bot_live", uid(), b["id"])
+        return jsonify(ok=ok, msg=msg, error=None if ok else msg, url=url_for("bot_detail", bot_id=b["id"]))
+    if t == "share_bot":
+        links = _bot_links(b)
+        return jsonify(ok=True, kind="share", msg=("ده رابط البوت — انسخه وابعته لعملائك، أو اطبع الملصق وحطه في المحل."
+                                                   if ar else "Here's the bot link — share it, or print the poster."),
+                       share=(links or {}).get("plain") or "", poster=url_for("bot_poster", bot_id=b["id"]),
+                       url=url_for("bot_detail", bot_id=b["id"]))
+    if t == "team_help":
+        if session.get("assist") or current_role() != "user":
+            return jsonify(ok=False, error="مش متاح هنا." if ar else "Not available here.")
+        gid = db.grant_create(uid(), "user", a.get("note") or "")
+        body = f"العميل طلب «جهّزوه لي» من المساعد ومنح الفريق إذن 7 أيام.\n• المطلوب: {a.get('note') or '—'}"
+        tid = db.open_ticket_of_kind(uid(), "done_for_you")
+        if tid:
+            db.add_ticket_msg(tid, "user", body, "web")
+        else:
+            tid = db.create_ticket(uid(), "done_for_you", ("جهّزوه لي — " + (a.get("note") or ""))[:SD.SUBJECT_MAX], body)
+        _alert_ticket(tid, body, followup=False)
+        log.info("done-for-you grant #%s via assistant user=%s", gid, uid())
+        return jsonify(ok=True, msg=("✅ بلّغت الفريق — هيبدأ يجهّز بوتك ويبلّغك. تقدر توقف الإذن في أي وقت من لوحة التحكم."
+                                     if ar else "✅ The team is notified and will set up your bot. You can stop the permission any time."))
+    abort(400)
+
+
+def _agent_design(b, desc, lang):
+    """الوكيل يصمّم البوت كاملاً من وصف النشاط ويطبّقه (مع نسخة للتراجع) — نفس وكيل الإعداد وحصته."""
+    ar = lang != "en"
+    used, limit = _setup_quota()
+    if limit is not None and used >= limit:
+        return {"ok": False, "upgrade": True, "error": i18n.t("ai_quota_out", lang).format(n=limit)}
+    key, provider = _setup_provider()
+    sid = db.create_setup_session(b["id"], uid(), "ai" if key else "offline")
+    cfg = json.loads(b["config_json"] or "{}")
+    res = ai.setup_step([{"role": "owner", "text": desc}], template=b["template"],
+                        channel=b.get("channel") or "telegram", current_name=cfg.get("business_name") or b["name"],
+                        api_key=key, provider=provider, max_rounds=0)
+    prop = res.get("proposal") or {}
+    if not prop:
+        db.close_setup_session(sid, "discarded")
+        return {"ok": False, "error": "مقدرتش أصمّمه دلوقتي — جرّب تاني بعد شوية." if ar else "Couldn't design it now — try again shortly."}
+    db.save_setup_session(sid, "proposed", res.get("brief"), [{"role": "owner", "text": desc}],
+                          {"patch": prop, "summary": res.get("summary"), "notes": res.get("notes")}, 0, res["source"])
+    db.close_setup_session(sid, "applied")
+    db.save_config_version(b["id"], cfg, "ai_apply")
+    cfg.update(prop)
+    db.update_bot_config(b["id"], cfg)
+    if manager.is_running(b["id"]):
+        manager.restart_bot(b["id"])
+    if (b.get("channel") or "telegram") == "telegram":
+        try:
+            sync_bot_telegram(db.get_bot(b["id"], uid()))
+        except Exception:
+            pass
+    return {"ok": True, "url": url_for("bot_detail", bot_id=b["id"]),
+            "msg": (("✅ صمّمت البوت لنشاطك: " + (res.get("summary") or "")).strip()
+                    + ("\nجرّبه من موبايلك، ولو حاجة مش عاجباك قولّي أعدّلها." if ar else "")) if ar else
+                   ("✅ Designed your bot: " + (res.get("summary") or "")).strip()}
 
 @app.route("/api/assistant/handoff", methods=["POST"])
 def api_assistant_handoff():

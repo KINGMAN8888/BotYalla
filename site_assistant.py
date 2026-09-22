@@ -227,15 +227,94 @@ def page_guide(view, lang="ar"):
 
 
 def user_context(u, sub, bots, plan_name):
-    """ما يعرفه المساعد عن الحساب — بلا بيانات تواصل ولا أسرار."""
+    """ما يعرفه المساعد عن الحساب — بلا بيانات تواصل ولا أسرار (لا توكنات ولا إعداد البوت)."""
     if not u:
         return {"signed_in": False}
     chans = sorted({(b.get("channel") or "telegram") for b in bots})
     return {"signed_in": True, "username": u.get("username"), "role": u.get("role", "user"),
             "plan": plan_name, "plan_status": (sub or {}).get("status"),
             "bots": len(bots), "channels": chans, "running_bots": sum(1 for b in bots if b.get("running")),
+            "bot_list": [{"id": b["id"], "name": b.get("name"), "channel": b.get("channel") or "telegram",
+                          "template": b.get("template"), "running": bool(b.get("running"))} for b in bots[:10]],
             "email_verified": bool(u.get("email_verified_at")),
             "must_verify_email": bool(u.get("verify_required") and not u.get("email_verified_at"))}
+
+
+# ------------------------------------------------------------------ الوكيل: ينفّذ بدل المستخدم
+# النموذج يقترح إجراءً واحداً من هذه القائمة، والخادم يتحقق منه ويعرض بطاقة «نفّذ» — لا يُنفَّذ شيء
+# قبل ضغطة المستخدم. التنفيذ نفسه في app.api_assistant_act بصلاحيات المستخدم وحدود باقته.
+TEMPLATES = ("customer_service", "store", "booking", "faq", "flow", "feedback", "support")
+ACTION_SPEC = (
+    'create_telegram_bot {"name": "bot display name", "template": one of ' + "|".join(TEMPLATES) + '}'
+    ' — creates a Telegram bot in one tap (the user confirms once inside Telegram).\n'
+    'design_bot {"bot_id": id from user.bot_list, "description": "the business in the user\'s words: what they sell, '
+    'prices, hours, area, how to order"} — the setup agent writes the whole bot (welcome, menu, answers, flow).\n'
+    'ai_replies {"bot_id": id, "on": true|false} — turn smart AI replies on/off (customer messages go to the AI provider).\n'
+    'start_bot {"bot_id": id} · stop_bot {"bot_id": id}\n'
+    'share_bot {"bot_id": id} — show the bot link, QR and printable poster.\n'
+    'team_help {"note": "what the user needs"} — ask the BotYalla team to build/finish the bot inside the account '
+    '(grants the team 7-day access to bots only).'
+)
+ACTIONS = ("create_telegram_bot", "design_bot", "ai_replies", "start_bot", "stop_bot", "share_bot", "team_help")
+
+
+def clean_action(raw, bot_ids):
+    """اقتراح النموذج ← إجراء صالح أو None. bot_id لازم يكون من بوتات المستخدم نفسه."""
+    if not isinstance(raw, dict) or raw.get("type") not in ACTIONS:
+        return None
+    t, a = raw["type"], raw.get("args") if isinstance(raw.get("args"), dict) else {}
+    out = {"type": t, "args": {}}
+    if t == "create_telegram_bot":
+        name = _clip(a.get("name"), 60)
+        if not name:
+            return None
+        out["args"] = {"name": name, "template": a.get("template") if a.get("template") in TEMPLATES else "customer_service"}
+    elif t == "team_help":
+        out["args"] = {"note": _clip(a.get("note"), 600)}
+    else:
+        try:
+            bid = int(a.get("bot_id"))
+        except (TypeError, ValueError):
+            return None
+        if bid not in bot_ids:
+            return None
+        out["args"]["bot_id"] = bid
+        if t == "design_bot":
+            desc = _clip(a.get("description"), 1500)
+            if len(desc) < 10:
+                return None
+            out["args"]["description"] = desc
+        elif t == "ai_replies":
+            out["args"]["on"] = a.get("on") is not False
+    return out
+
+
+def action_label(act, lang, bot_names):
+    """(ما سيحدث بجملة بسيطة، تنبيه إن وُجد) لبطاقة التأكيد."""
+    en = lang == "en"
+    t, a = act["type"], act["args"]
+    name = bot_names.get(a.get("bot_id"), "")
+    L = {
+        "create_telegram_bot": (f"Create a Telegram bot called “{a.get('name')}”", f"أعمل بوت تليجرام اسمه «{a.get('name')}»"),
+        "design_bot": (f"Design “{name}” for your business (welcome, menu, answers)", f"أصمّم «{name}» لنشاطك (الترحيب والقائمة والردود)"),
+        "ai_replies": ((f"Turn {'on' if a.get('on') else 'off'} smart replies for “{name}”"),
+                       (f"{'أشغّل' if a.get('on') else 'أوقف'} الردود الذكية في «{name}»")),
+        "start_bot": (f"Start “{name}”", f"أشغّل «{name}»"),
+        "stop_bot": (f"Stop “{name}”", f"أوقف «{name}»"),
+        "share_bot": (f"Get the link and poster for “{name}”", f"أجيبلك رابط «{name}» والملصق"),
+        "team_help": ("Ask our team to set up your bot for you", "أطلب من فريقنا يجهّز بوتك بدالك"),
+    }[t]
+    warn = {
+        "design_bot": ("Replaces the bot's current texts — you can undo from the bot page.",
+                       "هيغيّر نصوص البوت الحالية — وتقدر ترجّعها بضغطة من صفحة البوت."),
+        "ai_replies": ("Your customers' messages will be sent to the AI provider to write replies.",
+                       "رسائل عملائك هتتبعت لمزوّد الذكاء الاصطناعي عشان يكتب الرد.") if a.get("on") else None,
+        "team_help": ("The team gets 7 days of access to your bots only — not your password, payments or customer chats. "
+                      "Every change is logged and you can stop it any time.",
+                      "الفريق هياخد إذن 7 أيام على البوتات بس — مش كلمة السر ولا المدفوعات ولا محادثات عملائك. "
+                      "كل تعديل بيتسجّل وتقدر توقفه في أي وقت."),
+    }.get(t)
+    return (L[0] if en else L[1]), ((warn[0] if en else warn[1]) if warn else "")
 
 
 # ------------------------------------------------------------------ الذكاء
@@ -258,7 +337,16 @@ Rules:
 "links": up to 2 keys from this list that help the next step: {links}. Never write URLs yourself.
 "suggestions": up to 3 short follow-up taps (max 24 characters each, in the user's language).
 
-Return JSON only: {{"reply": "...", "links": [], "suggestions": [], "handoff": false}}"""
+You are also an AGENT that can act inside the signed-in user's account. When the user asks you to DO something
+(or clearly wants it done and it matches an action), propose exactly ONE action in "action"; the user sees a
+"Do it" button and nothing happens until they press it. Never say it is already done — say what will happen and
+ask them to press the button. Only for signed-in users; use bot ids from <user>.bot_list only. If the user has
+no bot yet, start with create_telegram_bot. To design a bot you need the business details — ask for them in one
+short question first if missing. People may have weak tech skills: be patient, simple, one step at a time.
+Available actions:
+{actions}
+
+Return JSON only: {{"reply": "...", "links": [], "suggestions": [], "handoff": false, "action": null}}"""
 
 
 def _clip(v, n):
@@ -277,7 +365,7 @@ def clean_history(raw):
     return out
 
 
-def _finish(out, lang):
+def _finish(out, lang, bot_ids=()):
     links = [k for k in (out.get("links") or []) if k in LINK_KEYS][:2]
     sugg = []
     for s in out.get("suggestions") or []:
@@ -285,7 +373,7 @@ def _finish(out, lang):
         if s and len(s) <= 24 and s not in sugg:
             sugg.append(s)
     return {"reply": (out.get("reply") or "").strip()[:1500], "links": links, "suggestions": sugg[:3],
-            "handoff": out.get("handoff") is True}
+            "handoff": out.get("handoff") is True, "action": clean_action(out.get("action"), set(bot_ids))}
 
 
 def offline(text, view="home", lang="ar"):
@@ -300,11 +388,11 @@ def offline(text, view="home", lang="ar"):
         g = GUIDE[best]
         others = [s for s in page_guide(view, lang)["starters"] if _norm(s) != t]
         return {"reply": g["en" if lang == "en" else "ar"], "links": list(g["links"]),
-                "suggestions": others[:3], "handoff": False}
+                "suggestions": others[:3], "handoff": False, "action": None}
     reply, btns = platform_kb.offline_reply(text, lang)
     human = platform_kb._intent(text) == "human"
     return {"reply": reply, "links": ["register"] if platform_kb._intent(text) == "start" else [],
-            "suggestions": [b for b in btns if len(b) <= 24][:3], "handoff": human}
+            "suggestions": [b for b in btns if len(b) <= 24][:3], "handoff": human, "action": None}
 
 
 def answer(text, history, view, lang, user_ctx, key_chain):
@@ -320,11 +408,17 @@ def answer(text, history, view, lang, user_ctx, key_chain):
            "<user>\n" + _json.dumps(user_ctx, ensure_ascii=False) + "\n</user>\n<history>\n" +
            "\n".join(("USER: " if h["me"] else "ASSISTANT: ") + h["text"] for h in history) +
            "\n</history>\n<message>\n" + _clip(text, 1200) + "\n</message>")
+    # النموذج السريع (flash-lite ~1-2ث) ومهلة قصيرة — مساعد يرد في ثوانٍ لا يُنتظر
+    ai_agent._speed.fast, ai_agent._speed.timeout = True, 15
     try:
-        raw = ai_agent._loads(ai_agent._call("auto", key_chain, SYSTEM.format(links=", ".join(LINK_KEYS)), ctx))
-        out = _finish(raw if isinstance(raw, dict) else {}, lang)
+        raw = ai_agent._loads(ai_agent._call("auto", key_chain, SYSTEM.format(
+            links=", ".join(LINK_KEYS), actions=ACTION_SPEC), ctx))
+        bot_ids = [b["id"] for b in (user_ctx.get("bot_list") or [])] if user_ctx.get("signed_in") else []
+        out = _finish(raw if isinstance(raw, dict) else {}, lang, bot_ids)
         if out["reply"]:
             return dict(out, ai=True)
     except Exception:
         pass
+    finally:
+        ai_agent._speed.fast, ai_agent._speed.timeout = False, None
     return dict(offline(text, view, lang), ai=False)

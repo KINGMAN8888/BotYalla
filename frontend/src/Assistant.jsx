@@ -101,7 +101,48 @@ function Chip({ children, onClick, href, tone = "ghost", external }) {
   return <button type="button" onClick={onClick} className={cls}><span className="truncate">{children}</span></button>;
 }
 
-function Bubble({ m, onPick, onHandoff, last }) {
+/* بطاقة إجراء الوكيل: لا يُنفَّذ شيء قبل «نفّذ» */
+function ActionCard({ a, onDo, onSkip, busy }) {
+  return (
+    <div className="mt-2 rounded-2xl bg-[linear-gradient(135deg,rgb(124_108_246/0.2),rgb(34_211_238/0.08))] p-3.5
+                    shadow-[inset_0_0_0_1px_rgb(143_233_255/0.3)]">
+      <div className="mb-1 text-[11px] font-extrabold uppercase tracking-wider text-[#8FE9FF]">{bi("هعملها بدالك", "I'll do it for you")}</div>
+      <div dir="auto" className="text-[14px] font-bold leading-relaxed text-white">{a.label}</div>
+      {a.warn && <div dir="auto" className="mt-1.5 text-[12px] leading-relaxed text-[#aeb9d4]">⚠️ {a.warn}</div>}
+      <div className="mt-3 flex gap-2">
+        <button type="button" disabled={busy} onClick={onDo}
+          className="flex-1 cursor-pointer rounded-xl border-0 bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] px-4 py-2.5
+                     text-[13.5px] font-extrabold text-[#07090F] disabled:opacity-50">{bi("نفّذ ✓", "Do it ✓")}</button>
+        <button type="button" disabled={busy} onClick={onSkip}
+          className="cursor-pointer rounded-xl border-0 bg-white/[0.06] px-4 py-2.5 text-[13px] font-bold text-[#dfe6f7]
+                     shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]">{bi("مش دلوقتي", "Not now")}</button>
+      </div>
+    </div>
+  );
+}
+
+/* نتيجة التنفيذ: رابط تليجرام + QR · رابط المشاركة والملصق · زر فتح الصفحة */
+function ResultExtra({ r }) {
+  if (!r) return null;
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      {r.qr && (
+        <div className="flex items-center gap-3 rounded-2xl bg-white/[0.05] p-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]">
+          <img src={r.qr} alt="" className="size-24 rounded-lg bg-white p-1" />
+          <span className="text-[12px] leading-relaxed text-[#aeb9d4]">{bi("من الموبايل: امسح الكود بالكاميرا", "On your phone: scan with the camera")}</span>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        {r.link && /^https:\/\/t\.me\//.test(r.link) && <Chip href={r.link} tone="go" external>{bi("افتح تليجرام", "Open Telegram")}</Chip>}
+        {r.share && /^https:\/\//.test(r.share) && <Chip href={r.share} tone="go" external>{bi("رابط البوت", "Bot link")}</Chip>}
+        {r.poster && <Chip href={r.poster} external>{bi("الملصق للطباعة", "Printable poster")}</Chip>}
+        {r.url && <Chip href={r.url}>{bi("افتح صفحة البوت", "Open bot page")}</Chip>}
+      </div>
+    </div>
+  );
+}
+
+function Bubble({ m, onPick, onHandoff, last, onAct, onSkip, busy }) {
   if (m.me) {
     return (
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex justify-end">
@@ -119,6 +160,8 @@ function Bubble({ m, onPick, onHandoff, last }) {
                     : "bg-white/[0.06] text-[#e8edf9] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]")}>
           {m.text}
         </div>
+        <ResultExtra r={m.result} />
+        {last && m.action && !m.acted && <ActionCard a={m.action} busy={busy} onDo={() => onAct(m.action)} onSkip={onSkip} />}
         {(m.links?.length > 0 || m.wa) && (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {(m.links || []).map((l) => <Chip key={l.k} href={l.url} tone="go">{l.label}</Chip>)}
@@ -221,12 +264,12 @@ export default function Assistant() {
     if (!body || busy) return;
     setText("");
     const history = msgs.filter((m) => !m.err).map((m) => ({ role: m.me ? "user" : "bot", text: m.text }));
-    setMsgs((l) => [...l, { me: true, text: body }]);
+    setMsgs((l) => [...l.map((m) => (m.action ? { ...m, acted: true } : m)), { me: true, text: body }]);
     setBusy(true);
     const r = await post(BOOT.api, { text: body, history, view: BOOT.view });
     setBusy(false);
     setMsgs((l) => [...l, r.ok
-      ? { text: r.reply, links: r.links, suggestions: r.suggestions, handoff: r.handoff || false }
+      ? { text: r.reply, links: r.links, suggestions: r.suggestions, handoff: r.handoff || false, action: r.action || null }
       : { text: r.error || bi("حصلت مشكلة — جرّب تاني.", "Something went wrong — try again."), err: true }]);
   };
 
@@ -240,6 +283,24 @@ export default function Assistant() {
           links: r.kind === "ticket" ? [{ k: "support", label: bi("افتح التذكرة", "Open the ticket"), url: r.url }] : [] }
       : { text: r.error, err: true }]);
   };
+
+  const act = async (a) => {
+    setBusy(true);
+    setMsgs((l) => l.map((m) => (m.action && m.action.token === a.token ? { ...m, acted: true } : m)));
+    const r = await post(BOOT.act, { token: a.token });
+    setBusy(false);
+    setMsgs((l) => [...l, r.ok
+      ? { text: r.msg || bi("تم ✅", "Done ✅"), result: { link: r.link, qr: r.qr, share: r.share, poster: r.poster, url: r.url } }
+      : { text: r.error || bi("مقدرتش أنفّذها — جرّب تاني.", "Couldn't do it — try again."), err: true,
+          links: r.upgrade ? [{ k: "pricing", label: bi("الباقات", "Plans"), url: (BY.urls && BY.urls.pricing) || "/pricing" }] : [] }]);
+  };
+  const skip = () => setMsgs((l) => l.map((m) => (m.action ? { ...m, acted: true } : m)));
+
+  /* باقي الصفحة (رحلة النجاح في اللوحة) تفتح المساعد بطلب جاهز: window.BYAssistant.open("…") */
+  useEffect(() => {
+    window.BYAssistant = { open: (q) => { setOpen(true); if (q) setTimeout(() => send(q), 350); } };
+    return () => { delete window.BYAssistant; };
+  });
 
   const reset = () => { setMsgs([]); setText(""); };
   const last = msgs.length - 1;
@@ -327,7 +388,8 @@ export default function Assistant() {
               <div ref={scroller} className="relative flex-1 overflow-y-auto overscroll-contain px-4 py-4" aria-live="polite">
                 <div className="flex flex-col gap-3.5">
                   {msgs.length === 0 ? <Welcome onPick={send} /> : msgs.map((m, i) => (
-                    <Bubble key={i} m={m} last={i === last && !busy} onPick={send} onHandoff={handoff} />
+                    <Bubble key={i} m={m} last={i === last && !busy} onPick={send} onHandoff={handoff}
+                            onAct={act} onSkip={skip} busy={busy} />
                   ))}
                   {busy && <Typing />}
                 </div>

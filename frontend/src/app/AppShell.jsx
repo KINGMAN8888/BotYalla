@@ -108,6 +108,27 @@ export function Flashes() {
   );
 }
 
+/* لافتة «أنت داخل حساب عميل بإذنه» — ظاهرة طول جلسة المساعدة ولا تُخفى */
+function AssistBanner() {
+  const a = BY.assist;
+  if (!a) return null;
+  const until = a.until ? new Date(a.until * 1000).toLocaleDateString(BY.lang === "en" ? "en-GB" : "ar-EG") : "";
+  return (
+    <div className="sticky top-0 z-[250] flex flex-wrap items-center justify-center gap-3 bg-[linear-gradient(90deg,#b45309,#d97706)]
+                    px-4 py-2 text-[13px] font-bold text-white shadow-lg">
+      <Icon name="users" size={16} />
+      <span>{bi(`أنت شغال جوه حساب «${a.user}» بإذنه (لحد ${until}) — البوتات بس، وكل تعديل بيتسجّل ويشوفه العميل.`,
+                `You're working inside “${a.user}”'s account with permission (until ${until}) — bots only; every change is logged for the customer.`)}</span>
+      <form method="post" action={a.exit} className="m-0">
+        <input type="hidden" name="csrf_token" value={BY.csrf} />
+        <button type="submit" className="cursor-pointer rounded-full border-0 bg-white px-3.5 py-1 text-[12.5px] font-extrabold text-[#92400e]">
+          {bi("خروج من الحساب", "Exit account")}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export default function AppShell({ view, children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopClosed, setDesktopClosed] = useState(false);
@@ -126,6 +147,7 @@ export default function AppShell({ view, children }) {
       <Backdrop dense={false} />
 
       <Flashes />
+      <AssistBanner />
 
       <div className="flex min-h-screen">
         {/* شريط جانبي — ثابت على سطح المكتب */}

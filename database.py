@@ -515,6 +515,31 @@ def init_db():
             created_at INTEGER NOT NULL
         );
 
+        -- «فريقنا يجهّزه لك»: إذن العميل لفريق المنصة بالعمل داخل حسابه (البوتات فقط) لمدة محدودة.
+        -- via: user (العميل ضغط الموافقة) · staff (موظف سجّل موافقة أخذها من العميل — مع ملاحظة إلزامية).
+        CREATE TABLE IF NOT EXISTS setup_grants(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            via TEXT NOT NULL,
+            note TEXT,
+            staff_id INTEGER,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            revoked_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_grants_user ON setup_grants(user_id, expires_at);
+        -- سجل تدقيق: كل ما فعله موظف داخل حساب عميل — يراه العميل والأدمن
+        CREATE TABLE IF NOT EXISTS staff_actions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            staff_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            bot_id INTEGER,
+            action TEXT NOT NULL,
+            detail TEXT,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_staff_actions_user ON staff_actions(user_id, id);
+
         -- عميل واتساب برقم مخفي (اسم مستخدم): معرّفه الخاص بالنشاط (BSUID) ← رقمه إن ظهر مرة،
         -- فتبقى محادثته واحدة حين يظهر الرقم ثم يختفي (نافذة الـ30 يوماً عند Meta).
         CREATE TABLE IF NOT EXISTS wa_user_ids(
@@ -1094,6 +1119,49 @@ def confirm_email_token(token_hash):
         if not r:
             return None
         return r["user_id"] if _confirm_email(c, r["user_id"], r["email"], now) == "ok" else None
+
+GRANT_DAYS = 7
+
+def grant_create(user_id, via, note="", staff_id=None, days=GRANT_DAYS):
+    """إذن جديد يلغي أي سابق. يرجّع معرّفه."""
+    now = int(time.time())
+    days = max(1, min(30, int(days or GRANT_DAYS)))
+    with get_conn() as c:
+        c.execute("UPDATE setup_grants SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now, user_id))
+        return c.execute("INSERT INTO setup_grants(user_id,via,note,staff_id,created_at,expires_at) "
+                         "VALUES(?,?,?,?,?,?)", (user_id, via, (note or "")[:500], staff_id, now,
+                                                 now + days * 86400)).lastrowid
+
+def active_grant(user_id):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM setup_grants WHERE user_id=? AND revoked_at IS NULL AND expires_at>? "
+                      "ORDER BY id DESC LIMIT 1", (user_id, int(time.time()))).fetchone()
+        return dict(r) if r else None
+
+def revoke_grant(user_id):
+    with get_conn() as c:
+        return c.execute("UPDATE setup_grants SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                         (int(time.time()), user_id)).rowcount > 0
+
+def active_grants():
+    """{user_id: grant} للإذونات السارية — شارة «طالب مساعدة» في إدارة المستخدمين."""
+    with get_conn() as c:
+        rows = c.execute("SELECT * FROM setup_grants WHERE revoked_at IS NULL AND expires_at>?",
+                         (int(time.time()),)).fetchall()
+        return {r["user_id"]: dict(r) for r in rows}
+
+def log_staff_action(staff_id, user_id, action, detail="", bot_id=None):
+    with get_conn() as c:
+        c.execute("INSERT INTO staff_actions(staff_id,user_id,bot_id,action,detail,created_at) VALUES(?,?,?,?,?,?)",
+                  (staff_id, user_id, bot_id, action[:60], (detail or "")[:300], int(time.time())))
+
+def staff_actions_for(user_id, limit=30):
+    with get_conn() as c:
+        rows = c.execute("SELECT a.*, u.username AS staff_name FROM staff_actions a LEFT JOIN users u "
+                         "ON u.id=a.staff_id WHERE a.user_id=? ORDER BY a.id DESC LIMIT ?",
+                         (user_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
 
 def remember_wa_user(bsuid, phone):
     with get_conn() as c:

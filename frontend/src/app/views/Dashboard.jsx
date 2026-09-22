@@ -967,6 +967,232 @@ function MetaConnect() {
   );
 }
 
+/* ============================================================================
+   رحلة النجاح: من أول بوت لأول ربح — سبع خطوات، خطوة واحدة واضحة كل مرة.
+   كل خطوة لها 3 طرق: «اعملها بنفسك» · «خلّي المساعد يعملها» (وكيل ينفّذ بدالك) ·
+   «فريقنا يعملها» (إذن مؤقت للفريق على البوتات فقط). مكتوبة لمن مهاراته التقنية بسيطة.
+   ========================================================================== */
+const J_STEPS = {
+  create: {
+    icon: "rocket", t: ["اعمل بوتك", "Create your bot"],
+    why: ["بضغطة واحدة من تليجرام — من غير برمجة ولا أكواد.", "One tap from Telegram — no coding, no codes."],
+    how: [["اكتب اسم لبوتك في الكارت اللي تحت", "Type a name for your bot in the card below"],
+          ["اضغط «أنشئ بوتي الآن»", "Tap “Create my bot now”"],
+          ["افتح تليجرام واضغط «أنشئ بوتي» — خلاص!", "Open Telegram and tap “Create my bot” — done!"]],
+    ask: ["اعملي بوت تليجرام لنشاطي", "Create a Telegram bot for my business"],
+  },
+  teach: {
+    icon: "sparkles", t: ["عرّف البوت بنشاطك", "Teach the bot your business"],
+    why: ["قوله بتبيع إيه وأسعارك ومواعيدك — وهو يرد على عملائك زيك بالظبط.",
+          "Tell it what you sell, your prices and hours — it answers customers just like you."],
+    how: [["افتح البوت واضغط «وكيل الإعداد»", "Open the bot and tap the setup agent"],
+          ["احكي عن نشاطك بالعامية زي ما بتكلم صاحبك", "Describe your business in your own words"],
+          ["راجع اللي صمّمه واضغط «طبّق»", "Review the design and tap Apply"]],
+    ask: ["صمّملي البوت لنشاطي", "Design my bot for my business"],
+  },
+  run: {
+    icon: "play", t: ["شغّل البوت", "Start the bot"],
+    why: ["البوت المتوقف مش بيرد على حد — شغّله عشان يبدأ يشتغل.", "A stopped bot answers no one — start it."],
+    how: [["افتح البوت", "Open the bot"], ["اضغط الزرار الأخضر «تشغيل»", "Tap the green “Start” button"]],
+    ask: ["شغّلي البوت", "Start my bot"],
+  },
+  try: {
+    icon: "chat", t: ["جرّبه بنفسك", "Try it yourself"],
+    why: ["ابعتله «مرحبا» من موبايلك وشوف بيرد إزاي — ده بالظبط اللي عميلك هيشوفه.",
+          "Send it “hi” from your phone — exactly what your customer will see."],
+    how: [["اضغط «افتح البوت» تحت", "Tap “Open the bot” below"], ["ابعت «مرحبا»", "Send “hi”"],
+          ["جرّب تسأله عن سعر أو ميعاد", "Ask it about a price or opening hours"]],
+    ask: ["إزاي أجرّب البوت بتاعي؟", "How do I test my bot?"],
+  },
+  share: {
+    icon: "megaphone", t: ["وصّله لعملائك", "Get it to your customers"],
+    why: ["العملاء لازم يعرفوا البوت: حط رابطه في صفحتك وابعته لعملائك واطبع الملصق في المحل.",
+          "Customers need to find it: share the link and print the poster for your shop."],
+    how: [["انسخ رابط البوت وحطه في بايو فيسبوك وإنستجرام", "Put the bot link in your Facebook/Instagram bio"],
+          ["ابعته في جروبات وحالة الواتساب", "Share it in WhatsApp groups and status"],
+          ["اطبع الملصق وعلّقه عند الكاشير", "Print the poster for your counter"]],
+    ask: ["هاتلي رابط البوت والملصق", "Get me the bot link and poster"],
+  },
+  sale: {
+    icon: "store", t: ["أول طلب أو عميل مهتم", "Your first order or lead"],
+    why: ["لما عميل يطلب أو يسيب رقمه هيوصلك تنبيه على طول — ومن هنا بيبدأ الربح.",
+          "When a customer orders or leaves their number you're alerted instantly — that's where profit starts."],
+    how: [["فعّل الردود الذكية عشان يرد على أي سؤال", "Turn on smart replies to answer any question"],
+          ["اعرض منتجاتك بصورها وأسعارها", "Show your products with photos and prices"],
+          ["رد بسرعة من صندوق الوارد لما حد يحتاجك", "Reply fast from the inbox when someone needs you"]],
+    ask: ["إزاي أجيب أول طلب من البوت؟", "How do I get my first order from the bot?"],
+  },
+  grow: {
+    icon: "crown", t: ["كبّر أرباحك", "Grow your profit"],
+    why: ["الباقات المدفوعة: بوتات أكتر، حملات لكل عملائك، ردود ذكية أكتر، وواتساب الرسمي.",
+          "Paid plans: more bots, campaigns to all customers, more smart replies and official WhatsApp."],
+    how: [["اختار الباقة المناسبة (السنوي أوفر 30%)", "Pick a plan (yearly saves 30%)"],
+          ["ابعت حملة عروض لكل اللي كلّموا البوت", "Send an offer campaign to everyone who chatted"],
+          ["واكسب عمولة لما تعرّف غيرك على المنصة", "And earn commission by referring others"]],
+    ask: ["أنهي باقة تناسبني عشان أكبّر أرباحي؟", "Which plan helps me grow?"],
+  },
+};
+
+function DoneForYouModal({ onClose, onDone }) {
+  const [note, setNote] = useState("");
+  const [ok, setOk] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const submit = async () => {
+    setBusy(true); setErr("");
+    const r = await postJSON("/assist/request", { note, consent: true });
+    setBusy(false);
+    if (!r.ok) { setErr(r.error || ""); return; }
+    onDone(r.grant);
+  };
+  return (
+    <div className="fixed inset-0 z-[360] grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
+      <Card className="w-full max-w-[520px] !p-6" onClick={(e) => e.stopPropagation()}>
+        <h3 className="m-0 flex items-center gap-2 text-[18px] font-extrabold text-ink">
+          <Icon name="users" size={19} className="text-au-cyan" />{bi("خلّي فريقنا يجهّز بوتك", "Let our team set up your bot")}
+        </h3>
+        <p className="mb-4 mt-2 text-[13.5px] leading-relaxed text-ink-3">
+          {bi("اكتب نشاطك واللي عايز البوت يعمله، وفريقنا يعمله ويجهّزه بالكامل جوه حسابك ويبلّغك لما يخلص.",
+              "Describe your business and what you want; our team builds it inside your account and tells you when it's ready.")}
+        </p>
+        <Field label={bi("نشاطك واللي محتاجه", "Your business and what you need")}>
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={800}
+            placeholder={bi("مثلاً: محل ملابس أطفال في المنصورة، عايز البوت يعرض الموديلات والأسعار وياخد الطلبات…",
+                            "e.g. kids' clothing shop, show models and prices and take orders…")}
+            className="w-full resize-none rounded-xl bg-black/25 px-3.5 py-2.5 text-[14px] text-ink outline-none
+                       shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] focus:shadow-[inset_0_0_0_1px_rgb(124_108_246/0.8)]" />
+        </Field>
+        <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-xl bg-white/[0.04] p-3 text-[12.5px] leading-relaxed text-ink-2">
+          <input type="checkbox" checked={ok} onChange={(e) => setOk(e.target.checked)} className="mt-1 size-4 accent-[#7c6cf6]" />
+          <span>{bi("أوافق إن فريق BotYalla يدخل حسابي 7 أيام عشان يجهّز البوتات بس. مش هيشوف كلمة السر ولا المدفوعات ولا الرصيد ولا محادثات عملائي، وكل تعديل هيتسجّل، وأقدر أوقف الإذن في أي وقت.",
+                    "I allow the BotYalla team into my account for 7 days to set up my bots only. They won't see my password, payments, wallet or customer chats; every change is logged and I can stop it any time.")}</span>
+        </label>
+        {err && <p className="mb-0 mt-3 text-[12.5px] font-bold text-red-300">{err}</p>}
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <Btn variant="ghost" type="button" onClick={onClose}>{bi("إلغاء", "Cancel")}</Btn>
+          <Btn icon="check" type="button" onClick={submit} disabled={!ok || busy || note.trim().length < 5}>
+            {bi("ابعت للفريق", "Send to the team")}
+          </Btn>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function TeamAtWork({ grant, onRevoke, canRevoke }) {
+  const until = grant.until ? new Date(grant.until * 1000).toLocaleDateString(BY.lang === "en" ? "en-GB" : "ar-EG") : "";
+  return (
+    <div className="mt-5 rounded-2xl bg-au-teal/10 p-4 shadow-[inset_0_0_0_1px_rgb(45_212_191/0.3)]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="flex items-center gap-2 text-[14px] font-extrabold text-au-teal">
+          <Icon name="users" size={17} />{bi("فريقنا شغال على بوتك", "Our team is working on your bot")}
+        </span>
+        {canRevoke && <Btn sm variant="ghost" type="button" onClick={onRevoke}>{bi("وقف الإذن", "Stop access")}</Btn>}
+      </div>
+      <p className="mb-0 mt-1.5 text-[12.5px] text-ink-3">
+        {bi(`الإذن ساري لحد ${until} — على البوتات بس.`, `Access valid until ${until} — bots only.`)}
+      </p>
+      {grant.actions?.length > 0 && (
+        <ul className="m-0 mt-3 flex list-none flex-col gap-1.5 p-0">
+          {grant.actions.slice(0, 6).map((a, i) => (
+            <li key={i} className="flex items-center gap-2 text-[12.5px] text-ink-2">
+              <span className="block size-1.5 rounded-full bg-au-teal" />
+              <span className="flex-1">{a.what}</span>
+              <span className="text-ink-4">{a.who} · {new Date(a.at * 1000).toLocaleString(BY.lang === "en" ? "en-GB" : "ar-EG",
+                { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function Journey() {
+  const j = P.journey || {};
+  const dfy = P.doneForYou || {};
+  const [grant, setGrant] = useState(dfy.grant || null);
+  const [modal, setModal] = useState(false);
+  const [open, setOpen] = useState(j.current || null);
+  if (!j.current && !grant) return null;
+  const steps = j.steps || [];
+  const doneN = steps.filter((s) => s.done).length;
+  const cur = open && J_STEPS[open] ? open : j.current;
+  const S = cur ? J_STEPS[cur] : null;
+  const botUrl = j.botId ? `/bot/${j.botId}` : BY.urls.dashboard;
+  const tryUrl = j.channel === "whatsapp" && j.botUsername ? `https://wa.me/${String(j.botUsername).replace(/\D/g, "")}?text=${encodeURIComponent("مرحبا")}`
+    : j.channel === "telegram" && j.botUsername ? `https://t.me/${String(j.botUsername).replace(/^@/, "")}` : botUrl;
+  const primary = {
+    create: [bi("اعمله دلوقتي", "Create it now"), P.oneTap?.available ? "#onetap" : "#create"],
+    teach: [bi("افتح وكيل الإعداد", "Open the setup agent"), botUrl + "#ai"],
+    run: [bi("افتح البوت وشغّله", "Open and start it"), botUrl],
+    try: [bi("افتح البوت", "Open the bot"), tryUrl],
+    share: [bi("الملصق والرابط", "Poster & link"), j.botId ? `/bot/${j.botId}/poster` : botUrl],
+    sale: [bi("افتح صندوق الوارد", "Open the inbox"), j.botId ? `/bot/${j.botId}/inbox` : botUrl],
+    grow: [bi("شوف الباقات", "See plans"), BY.urls.pricing],
+  }[cur] || [];
+  const askAgent = () => window.BYAssistant && window.BYAssistant.open(bi(...S.ask));
+  const revoke = async () => {
+    if (!window.confirm(bi("توقف إذن الفريق؟", "Stop the team's access?"))) return;
+    await postJSON("/assist/revoke", {});
+    setGrant(null);
+  };
+  return (
+    <Card className="mb-6 overflow-hidden !p-0">
+      <div className="bg-[linear-gradient(120deg,rgb(124_108_246/0.22),rgb(34_211_238/0.08))] px-5 pb-4 pt-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="m-0 flex items-center gap-2 text-[18px] font-extrabold text-ink">
+            <Icon name="bolt" size={19} className="text-au-cyan" />{bi("رحلتك لأول ربح من البوت", "Your path to the first profit")}
+          </h2>
+          <span className="text-[12.5px] font-bold text-ink-2">{doneN} / {steps.length}</span>
+        </div>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-valuenow={doneN} aria-valuemax={steps.length}>
+          <motion.div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)]"
+            initial={{ width: 0 }} animate={{ width: `${(doneN / Math.max(1, steps.length)) * 100}%` }} transition={{ duration: 0.8 }} />
+        </div>
+        <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1">
+          {steps.map((s, i) => (
+            <button key={s.k} type="button" onClick={() => setOpen(s.k)}
+              className={"flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border-0 px-3 py-1.5 text-[12px] font-bold " +
+                (s.k === cur ? "bg-white text-[#07090F]" : s.done ? "bg-au-teal/15 text-au-teal" : "bg-white/[0.06] text-ink-3")}>
+              {s.done ? "✓" : i + 1}<span>{bi(...J_STEPS[s.k].t)}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      {S && (
+        <div className="grid gap-5 px-5 py-5 md:grid-cols-[1fr_auto] md:items-start">
+          <div>
+            <div className="flex items-center gap-2.5">
+              <span className="grid size-10 place-items-center rounded-xl bg-au-cyan/15 text-au-cyan"><Icon name={S.icon} size={19} /></span>
+              <h3 className="m-0 text-[17px] font-extrabold text-ink">{bi(...S.t)}</h3>
+              {steps.find((s) => s.k === cur)?.done && <Pill tone="on">{bi("تم ✓", "Done ✓")}</Pill>}
+            </div>
+            <p className="mb-3 mt-2.5 text-[14px] leading-relaxed text-ink-2">{bi(...S.why)}</p>
+            <ol className="m-0 flex list-none flex-col gap-2 p-0">
+              {S.how.map((h, i) => (
+                <li key={i} className="flex items-start gap-2.5 text-[13.5px] leading-relaxed text-ink-2">
+                  <span className="grid size-6 shrink-0 place-items-center rounded-full bg-white/[0.08] text-[12px] font-extrabold text-ink">{i + 1}</span>
+                  {bi(...h)}
+                </li>
+              ))}
+            </ol>
+          </div>
+          <div className="flex flex-col gap-2 md:w-[230px]">
+            {primary[1] && <Btn icon="arrow" href={primary[1]} {...(/^https:/.test(primary[1]) ? { target: "_blank", rel: "noopener" } : {})}>{primary[0]}</Btn>}
+            <Btn variant="ghost" icon="sparkles" type="button" onClick={askAgent}>{bi("خلّي المساعد يعملها", "Let the assistant do it")}</Btn>
+            {dfy.allowed && !grant && (
+              <Btn variant="ghost" icon="users" type="button" onClick={() => setModal(true)}>{bi("فريقنا يعملها لك", "Our team does it")}</Btn>
+            )}
+          </div>
+        </div>
+      )}
+      {grant && <div className="px-5 pb-5"><TeamAtWork grant={grant} onRevoke={revoke} canRevoke={dfy.allowed} /></div>}
+      {modal && <DoneForYouModal onClose={() => setModal(false)} onDone={(g) => { setGrant(g); setModal(false); }} />}
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   const { bots = [], total = {}, onboarding = {}, oneTap = {} } = P;
   const stage = onboarding.stage;
@@ -979,6 +1205,8 @@ export default function Dashboard() {
         sub={t("dash_sub")}
         actions={<Btn icon="plus" href={quick ? "#onetap" : "#create"}>{t("create_bot")}</Btn>}
       />
+
+      <Journey />
 
       {/* الإنشاء بضغطة أولاً — أسهل طريق لغير التقنيين. واتساب في الأول: مفتوح لباقات واتساب،
           ومقفول بتمويه لغيرها كدعوة للترقية */}

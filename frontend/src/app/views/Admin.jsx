@@ -87,6 +87,27 @@ export function AdminOverview() {
 }
 
 /* ------------------------------------------------------------- المستخدمون */
+/* «ادخل وجهّز له»: بإذن العميل (من لوحته) أو بموافقة أخذها الموظف منه — ملاحظة إلزامية تُسجَّل ويُبلَّغ بها العميل */
+function AssistButton({ u, grant }) {
+  const ref = useRef(null);
+  const onSubmit = (e) => {
+    if (grant) return;
+    const note = window.prompt(bi(
+      `العميل «${u.username}» مامنحش إذن من لوحته.\nاكتب إزاي أخدت موافقته (مثلاً: وافق على واتساب النهارده الساعة 3):`,
+      `“${u.username}” hasn't granted access from their dashboard.\nWrite how you got their consent:`));
+    if (!note || note.trim().length < 8) { e.preventDefault(); return; }
+    ref.current.value = note.trim();
+  };
+  return (
+    <Form action={`/admin/users/${u.id}/assist`} onSubmit={onSubmit} className="mb-2">
+      <input type="hidden" name="consent_note" ref={ref} />
+      <Btn sm type="submit" variant={grant ? "primary" : "ghost"} icon="users">
+        {grant ? bi("ادخل وجهّز له", "Enter & set up") : bi("جهّز له (بموافقته)", "Set up (with consent)")}
+      </Btn>
+    </Form>
+  );
+}
+
 /* حساب جديد محجوب حتى يؤكد بريده (نفس شرط db.email_gate) */
 const waitingEmail = (u) => u.role === "user" && u.verify_required && !u.email_verified_at;
 
@@ -238,6 +259,15 @@ export function AdminUsers() {
                   </div>
                 )}
                 {u.entity_type && <div className="text-ink-3">{entityLabel(u.entity_type)}{u.age ? ` · ${u.age}` : ""}</div>}
+                {(P.grants || {})[String(u.id)] && (
+                  <div className="mt-1.5"><Pill tone="on" dot>{bi("طالب «جهّزوه لي»", "Asked: done for you")}</Pill>
+                    {(P.grants || {})[String(u.id)].note && (
+                      <div className="mt-1 max-w-[230px] text-[11.5px] leading-relaxed text-ink-3" dir="auto">
+                        {(P.grants || {})[String(u.id)].note}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {waitingEmail(u) && (
                   <div className="mt-1.5 flex flex-wrap items-center gap-2">
                     <Pill tone="warn">{bi("واقف عند كود الإيميل", "Stuck at email code")}</Pill>
@@ -279,6 +309,7 @@ export function AdminUsers() {
               <Td>{u.sub_status === "active" && u.plan !== "free"
                 ? <Pill tone="on">{t("status_active")}</Pill> : <span className="text-ink-3">—</span>}</Td>
               <Td>
+                {u.role === "user" && !u.is_blocked && <AssistButton u={u} grant={(P.grants || {})[String(u.id)]} />}
                 {isAdmin && u.id !== 1 && (
                   <div className="flex flex-wrap items-center gap-2">
                     <Form action={`/admin/users/${u.id}/plan`} className="inline">
