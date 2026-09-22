@@ -551,7 +551,11 @@ class DiagnoseTests(_PageBase):
         self.assertTrue(d["ok"], d)
         objs = [(p["object"], p["fields"]) for p in FakeGraph.app_posts]
         self.assertEqual(objs[0][0], "page")
-        self.assertEqual(objs[-1], ("instagram", "messages,messaging_postbacks"))   # بعد رفض comments
+        last = objs[-1][1].split(",")
+        self.assertEqual(objs[-1][0], "instagram")
+        self.assertNotIn("comments", last)                          # الحقل المرفوض وحده يسقط
+        self.assertIn("messaging_referral", last, "بدونه رسائل الإعلانات مش بتوصل")
+        self.assertIn("mentions", last)
         self.assertTrue(all(p["callback_url"] == "https://botyalla.com/wh/meta" and p["verify_token"] == "vt"
                             for p in FakeGraph.app_posts))
         self.assertTrue(all(p["access_token"].startswith("1337778974883863|") for p in FakeGraph.app_posts))
@@ -724,6 +728,34 @@ class TokenHealTests(_EchoBase):
         asyncio.run(ch.send_text(self.peer, "رد تاني"))
         n = sum(1 for e in db.list_meta_events(100) if e["kind"] == "token_invalid")
         self.assertEqual(n, 1, "تنبيه واحد — لا سيل")
+
+
+class AdReplyTests(unittest.TestCase):
+    """عميل ردّ على إعلان إنستجرام («replied to an ad») — لازم يوصل للبوت ويبدأ المحادثة."""
+    ch = CM.MessengerChannel("ig", IG, "t")
+
+    def ev(self, message):
+        return {"object": "instagram", "entry": [{"id": IG, "messaging": [
+            {"sender": {"id": IGSID}, "recipient": {"id": IG}, "timestamp": 1, "message": message}]}]}
+
+    def test_ad_tap_without_text_starts_the_chat(self):
+        m = self.ch.normalize(self.ev({"mid": "ad1", "referral": {"source": "ADS", "type": "OPEN_THREAD",
+                                                                   "ad_id": "123"}}))
+        self.assertIsNotNone(m, "كانت تُهمل فلا يرحّب البوت")
+        self.assertEqual((m["kind"], m.get("start_arg")), ("start", "src-ads"))
+
+    def test_prefilled_ad_text_with_tag_is_a_start(self):
+        m = self.ch.normalize(self.ev({"mid": "ad2", "text": "مرحبا #brand",
+                                       "referral": {"source": "ADS", "ad_id": "123"}}))
+        self.assertEqual((m["kind"], m["start_arg"], m["text"]), ("start", "seg-brand", "مرحبا #brand"))
+        m = self.ch.normalize(self.ev({"mid": "ad5", "text": "مرحبا #summer", "referral": {"source": "ADS"}}))
+        self.assertEqual(m["start_arg"], "src-ads", "وسم مش شريحة ← المصدر إعلانات")
+        m = self.ch.normalize(self.ev({"mid": "ad4", "text": "مرحبا #market", "referral": {"source": "ADS"}}))
+        self.assertEqual(m["start_arg"], "seg-market")
+
+    def test_plain_question_after_ad_stays_text(self):
+        m = self.ch.normalize(self.ev({"mid": "ad3", "text": "بكام الباقة؟"}))
+        self.assertEqual(m["kind"], "text")
 
 
 if __name__ == "__main__":

@@ -216,6 +216,8 @@ PAGE_APP_FIELDS = ("messages,messaging_postbacks,messaging_referrals,message_ech
 IG_APP_FIELDS = ("messages,messaging_postbacks,messaging_seen,messaging_referral,message_reactions,"
                  "messaging_handover,standby,comments,mentions")
 MIN_FIELDS = "messages,messaging_postbacks"
+# رسائل الإعلانات (Click-to-Direct/Messenger) لا تصل إلا مع حقل الإحالة — اسمه يختلف بين الكائنين
+REFERRAL_FIELD = {"page": "messaging_referrals", "instagram": "messaging_referral"}
 NEEDED_SCOPES = ("pages_messaging", "pages_manage_metadata", "instagram_basic", "instagram_manage_messages")
 
 
@@ -240,17 +242,33 @@ def ensure_app_webhooks(app_id, secret, callback, verify_token):
     باستدعاء GET على العنوان بالـverify token — الخادم يرد من خيط آخر (gunicorn threads)."""
     out = {}
     with httpx.Client(timeout=TIMEOUT + 10) as c:
+        def sub(obj, flds):
+            r = c.post(f"{GRAPH}/{app_id}/subscriptions", params={
+                "object": obj, "callback_url": callback, "fields": ",".join(flds), "verify_token": verify_token,
+                "include_values": "true", "access_token": f"{app_id}|{secret}"})
+            return (r.status_code == 200 and bool((r.json() or {}).get("success"))), r
+
         for obj, fields in (("page", PAGE_APP_FIELDS), ("instagram", IG_APP_FIELDS)):
-            err = ""
-            for flds in (fields, MIN_FIELDS):             # حقل غير مدعوم يُفشل الطلب كله
-                r = c.post(f"{GRAPH}/{app_id}/subscriptions", params={
-                    "object": obj, "callback_url": callback, "fields": flds, "verify_token": verify_token,
-                    "include_values": "true", "access_token": f"{app_id}|{secret}"})
-                if r.status_code == 200 and (r.json() or {}).get("success"):
-                    err = ""
-                    break
-                err = _err(r)
-            out[obj] = err
+            want = fields.split(",")
+            ok, r = sub(obj, want)
+            if ok:
+                out[obj] = ""
+                continue
+            # حقل واحد مرفوض (إذن ناقص) كان يُسقطنا للحد الأدنى — بلا حقل الإحالة فتضيع رسائل
+            # الإعلانات بصمت. نبني المجموعة حقلاً حقلاً ونحتفظ بكل ما يقبله Meta.
+            keep = MIN_FIELDS.split(",")
+            ok, r = sub(obj, keep)
+            if not ok:
+                out[obj] = _err(r)
+                continue
+            skipped = []
+            for f in want:
+                if f in keep:
+                    continue
+                ok, _ = sub(obj, keep + [f])
+                (keep.append(f) if ok else skipped.append(f))
+            sub(obj, keep)                                    # آخر حالة = كل المقبول
+            out[obj] = ("حقول لم تُقبل: " + ", ".join(skipped)) if REFERRAL_FIELD[obj] in skipped else ""
     return out
 
 
@@ -274,6 +292,10 @@ def diagnose(app_id, secret, page_id, page_token, callback):
                 add(same and has and s["active"], label,
                     ("العنوان: " + s["callback"] + ("" if same else " (مختلف عن عنواننا)")) +
                     ("" if has else " · حقل messages غير مفعّل"))
+                ref = REFERRAL_FIELD[obj]
+                add(ref in s["fields"], label.replace("ويبهوك", "رسائل الإعلانات —"),
+                    ref if ref in s["fields"] else f"حقل {ref} ناقص: رسائل العملاء الجايين من إعلان مش هتوصل "
+                                                   "— اضغط «اضبط ويبهوك التطبيق تلقائياً»")
     if page_id and page_token:
         with httpx.Client(timeout=TIMEOUT) as c:
             r = c.get(f"{GRAPH}/{page_id}/subscribed_apps", params={"access_token": page_token})

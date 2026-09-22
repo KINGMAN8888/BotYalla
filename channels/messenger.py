@@ -395,6 +395,15 @@ class MessengerChannel(Channel):
             return None
         mid = m.get("mid") or ""
         self._peer_of_mid[mid] = peer
+        # ردّ على إعلان (Click-to-Direct/Messenger): الإحالة داخل message، وقد تصل بلا نص (ضغطة الإعلان
+        # وحدها) — تُعامل بداية محادثة مصدرها الإعلان فيرحّب البوت بدل أن تُهمل
+        ad = m.get("referral") or {}
+        ad_src = "src-ads" if str(ad.get("source") or "").upper() == "ADS" else ""
+        if ad and not (m.get("text") or m.get("attachments") or m.get("quick_reply")):
+            out = {"id": mid, "peer": peer, "text": "", "name": "", "kind": "start"}
+            if ad_src:
+                out["start_arg"] = ad_src
+            return out
         qr = (m.get("quick_reply") or {}).get("payload")
         text = str(qr or m.get("text") or "").strip()
         if text and not qr:
@@ -408,4 +417,14 @@ class MessengerChannel(Channel):
             return None
         low = text.lower()
         kind = "start" if low in self.START_WORDS else "cancel" if low in self.CANCEL_WORDS else "text"
-        return {"id": mid, "peer": peer, "text": text, "name": "", "kind": kind}
+        out = {"id": mid, "peer": peer, "text": text, "name": "", "kind": kind}
+        # نص الإعلان الجاهز «مرحبا #brand» (كواتساب): بداية + مصدرها
+        tagged = re.fullmatch(r"(.+?)\s*#([a-z]{2,15})", low)
+        if tagged and tagged.group(1).strip() in self.START_WORDS:
+            import segments
+            tag = tagged.group(2)
+            # وسم ليس شريحة معروفة (#brand) من إعلان ← المصدر «إعلانات» لا يضيع في التحليلات
+            out.update(kind="start", start_arg=f"seg-{tag}" if segments.get(tag) or not ad_src else ad_src)
+        elif ad_src and kind == "start":
+            out["start_arg"] = ad_src
+        return out
