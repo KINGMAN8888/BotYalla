@@ -1428,7 +1428,7 @@ def bot_detail(bot_id):
     replies_limit = None if staff else plans.ai_replies_limit(plan_id)
     return react_page("bot_detail", "nav_bots",
                       {"bot": _public_bot(b), "leads": leads, "orders": orders, "bookings": bookings,
-                       "pay": _pay_state(b),
+                       "pay": _pay_state(b), "catalog": _catalog_state(b),
                        "plan": p, "usage": usage,
                        "links": _bot_links(b),
                        "meta": _meta_panel(b),
@@ -1449,6 +1449,22 @@ def bot_detail(bot_id):
                            "engine": _uses_engine(b)}},
                       title=b["name"])
 
+def _shipping_form():
+    """الشحن من الفورم، مطبَّعاً بـ `T.ship_conf` نفسها التي يقرأ بها البوت — فلا يختلف
+    ما يُحفظ عمّا يُحسب. «مناطق» بلا مناطق تسقط إلى «بلا شحن» داخل التطبيع لا هنا."""
+    zones, costs = [], request.form.getlist("z_cost")
+    for i, name in enumerate(request.form.getlist("z_name")):
+        name = name.strip()
+        if name:
+            zones.append({"name": name, "cost": costs[i] if i < len(costs) else 0})
+    return T.ship_conf({"shipping": {
+        "mode": request.form.get("ship_mode", "none"),
+        "cost": request.form.get("ship_cost", 0),
+        "free_over": request.form.get("ship_free_over", 0),
+        "note": request.form.get("ship_note", ""),
+        "zones": zones}})
+
+
 @app.route("/bot/<int:bot_id>/config", methods=["POST"])
 @login_required
 def bot_config(bot_id):
@@ -1468,6 +1484,7 @@ def bot_config(bot_id):
         prods = []
         imgs = request.form.getlist("p_image")
         assets = request.form.getlist("p_asset")
+        descs = request.form.getlist("p_desc")
         for i, (n, p) in enumerate(zip(request.form.getlist("p_name"), request.form.getlist("p_price"))):
             n = n.strip()
             if not n: continue
@@ -1478,8 +1495,11 @@ def bot_config(bot_id):
             if img.startswith("http"): item["image"] = img
             aid = _own_asset_id(assets[i] if i < len(assets) else "")
             if aid: item["asset"] = aid
+            d = (descs[i].strip() if i < len(descs) else "")[:400]
+            if d: item["desc"] = d
             prods.append(item)
         cfg["products"] = prods
+        cfg["shipping"] = _shipping_form()
     if b["template"] == "booking":
         for k, cast in (("days_ahead", int), ("open_hour", int),
                         ("close_hour", int), ("slot_minutes", int)):
@@ -2047,19 +2067,39 @@ def wa_delete_template(bot_id):
 # عميل البوت يحوّل على حسابات **صاحب البوت** ويرسل الإيصال للبوت، فيُفحص بمحرك إيصالات المنصة
 # نفسه ويعتمده صاحب البوت (زرّ في تليجرام أو من اللوحة). v1: بوتات المتجر على تليجرام.
 ADDON_PAY_PRICE_FALLBACK = 99          # جنيه شهرياً لكل بوت — يُعدَّل من «إعدادات المنصة»
+ADDON_PRICE_FALLBACK = {"pay": 99, "catalog": 99}
+ADDON_PRICE_KEY = {"pay": "addon_pay_price", "catalog": "addon_catalog_price"}
 _PAY_FIELDS = (("vodafone", 20), ("instapay", 60), ("instapay_link", 200), ("bank_name", 60),
                ("bank_account", 40), ("bank_iban", 40), ("bank_holder", 80))
 
-def addon_pay_price():
+def addon_price(addon="pay"):
     """سعر الإضافة بالجنيه. قيمة فاسدة أو صفر تسقط للاحتياطي — لا إضافة مجانية بالخطأ."""
+    key = ADDON_PRICE_KEY.get(addon)
+    if not key:
+        abort(404)
     try:
-        v = int(float(str(db.get_platform("addon_pay_price", "") or "0").strip()))
+        v = int(float(str(db.get_platform(key, "") or "0").strip()))
     except (TypeError, ValueError, OverflowError):
         v = 0
-    return v if 0 < v <= 100000 else ADDON_PAY_PRICE_FALLBACK
+    return v if 0 < v <= 100000 else ADDON_PRICE_FALLBACK[addon]
+
+def addon_pay_price():
+    return addon_price("pay")
 
 def _pay_eligible(b):
     return b.get("template") == "store" and (b.get("channel") or "telegram") == "telegram"
+
+def _catalog_state(b):
+    """حالة إضافة «منتجاتي من تليجرام» لصفحة البوت — نفس شروط إضافة التحصيل:
+    متجر على تليجرام (القالب وحده هو من يركّب الكونسول)."""
+    if not _pay_eligible(b):
+        return {"eligible": False}
+    staff = db.bot_owner_is_staff(b["id"])
+    cfg = json.loads(b.get("config_json") or "{}")
+    return {"eligible": True, "active": db.addon_active(b["id"], "catalog"), "staff": staff,
+            "expires": None if staff else db.addon_expires(b["id"], "catalog"),
+            "price": addon_price("catalog"), "owner": bool(str(cfg.get("owner_chat_id") or "").strip()),
+            "products": len(cfg.get("products") or [])}
 
 def _pay_state(b):
     """حالة الإضافة لصفحة البوت."""
@@ -2072,13 +2112,45 @@ def _pay_state(b):
             "price": addon_pay_price(), "methods": cfg.get("pay") or {},
             "payments": db.list_bot_payments(b["id"])}
 
-@app.route("/bot/<int:bot_id>/addon/pay", methods=["GET", "POST"])
-@login_required
-def addon_pay(bot_id):
-    """شراء/تجديد الإضافة 30 يوماً — بمسار إيصالات المنصة نفسه: فحص آلي قبل الحفظ ثم موافقة
-    الأدمن. المبلغ من الخادم (`addon_pay_price`) لا من الفورم (§3.3)."""
-    b = _owned(bot_id)
+ADDON_INFO = {
+    "pay":     {"title_key": "addon_pay_title",     "anchor": "pay"},
+    "catalog": {"title_key": "addon_catalog_title", "anchor": "catalog"},
+}
+
+
+def addon_promo(code, addon, user_id):
+    """كود يجعل الشهر الأول مجاناً لإضافة بعينها. يرجّع (الصف، سبب الرفض).
+
+    شرطان يحميان المنصة: الكود **مخصَّص للإضافة** (`plan='addon_<kind>'`) فلا يتسرّب
+    إليها كود باقات، و**مرة واحدة لكل مستخدم** مهما كان إعداد `per_user_once` —
+    وإلا لصار الكود اشتراكاً مجانياً بلا نهاية."""
+    pr = db.get_promo_by_code(code)
+    if not pr or not pr["is_active"]:
+        return None, "promo_bad"
+    if pr["expires_at"] and pr["expires_at"] < int(_time.time()):
+        return None, "promo_expired"
+    if pr["max_uses"] is not None and pr["used"] >= pr["max_uses"]:
+        return None, "promo_exhausted"
+    if pr["plan"] != f"addon_{addon}":
+        return None, "promo_wrong_plan"
+    if db.promo_used_by(pr["id"], user_id):
+        return None, "promo_used"
+    return pr, None
+
+
+def _promo_covers(pr, price):
+    """هل يغطّي الكود ثمن الإضافة كاملاً؟ الإضافة تُدفع أو تُمنح — لا نصف إيصال."""
+    cut = (price * float(pr["value"]) / 100.0) if pr["kind"] == "percent" else float(pr["value"])
+    return cut + 0.001 >= price
+
+
+def _addon_checkout(b, addon):
+    """شراء/تجديد إضافة 30 يوماً — بمسار إيصالات المنصة نفسه: فحص آلي قبل الحفظ ثم موافقة
+    الأدمن. المبلغ من الخادم (`addon_price`) لا من الفورم (§3.3). وكود مجاني — إن وُجد —
+    يفعّلها فوراً بلا دفعة."""
+    bot_id = b["id"]
     ar = session.get("lang") != "en"
+    lang = session.get("lang", i18n.DEFAULT)
     if not _pay_eligible(b):
         flash("الإضافة متاحة لبوتات المتجر على تليجرام." if ar else
               "The add-on is available for Telegram store bots.", "error")
@@ -2087,12 +2159,37 @@ def addon_pay(bot_id):
         # لا دفعة ولا إيصال لحساب الإدارة — الإضافة مفتوحة له أصلاً (db.addon_active)
         flash("الإضافة مفتوحة لحساب الإدارة بلا اشتراك ✅" if ar else
               "The add-on is included for the admin account ✅", "ok")
-        return redirect(url_for("bot_detail", bot_id=bot_id) + "#pay")
-    price = addon_pay_price()
+        return redirect(url_for("bot_detail", bot_id=bot_id) + "#" + ADDON_INFO[addon]["anchor"])
+    price = addon_price(addon)
+    endpoint = "addon_pay" if addon == "pay" else "addon_catalog"
     if request.method == "POST":
-        back = redirect(url_for("addon_pay", bot_id=bot_id))
+        back = redirect(url_for(endpoint, bot_id=bot_id))
+        code = (request.form.get("promo") or "").strip()[:40]
+        if code:
+            if _rate_limited(f"u{uid()}", limit=10, window=3600, bucket="addon_promo"):
+                flash(i18n.t("ai_rate", lang), "error")
+                return back
+            pr, why = addon_promo(code, addon, uid())
+            if not pr:
+                flash(i18n.t(why, lang), "error")
+                return back
+            if not _promo_covers(pr, price):
+                flash("الكود ده بيخصم جزءاً من الثمن بس — الإضافة تُدفع كاملة أو تُمنح بكود مجاني."
+                      if ar else "This code only covers part of the price — the add-on is paid in full "
+                                 "or granted by a free code.", "error")
+                return back
+            db.consume_promo(pr["id"], uid(), None)
+            exp = db.extend_addon(bot_id, addon, days=30)
+            db.log_event(bot_id, f"addon_{addon}_promo")
+            log.info("add-on %s granted by promo %s user=%s bot=%s until=%s",
+                     addon, pr["code"], uid(), bot_id, exp)
+            notify_admins(f"🎁 كود {pr['code']} فعّل إضافة «{addon}» مجاناً 30 يوماً — "
+                          f"{session.get('uname')} — بوت #{bot_id}")
+            flash("🎉 اتفعّلت الإضافة مجاناً 30 يوم بالكود." if ar else
+                  "🎉 The add-on is active free for 30 days with your code.", "ok")
+            return redirect(url_for("bot_detail", bot_id=bot_id) + "#" + ADDON_INFO[addon]["anchor"])
         if _rate_limited(f"u{uid()}", limit=8, window=3600, bucket="receipt"):
-            flash(i18n.t("ai_rate", session.get("lang", i18n.DEFAULT)), "error")
+            flash(i18n.t("ai_rate", lang), "error")
             return back
         file = request.files.get("screenshot")
         ext = os.path.splitext(file.filename)[1].lower() if file and file.filename else ""
@@ -2112,11 +2209,11 @@ def addon_pay(bot_id):
         fpath = os.path.join(UPLOAD_DIR, secure_filename(fname))
         with open(fpath, "wb") as _f:
             _f.write(data)
-        pid = db.create_payment(uid(), db.addon_plan(bot_id), request.form.get("method", ""),
+        pid = db.create_payment(uid(), db.addon_plan(bot_id, addon), request.form.get("method", ""),
                                 float(price), request.form.get("ref", "").strip(), fname, img_hash,
                                 json.dumps(ac, ensure_ascii=False))
-        log.info("add-on payment #%s requested user=%s bot=%s verdict=%s", pid, uid(), bot_id,
-                 ac.get("verdict"))
+        log.info("add-on payment #%s requested user=%s bot=%s addon=%s verdict=%s", pid, uid(), bot_id,
+                 addon, ac.get("verdict"))
         admin_id = db.get_platform("admin_chat_id", "")
         payment = db.get_payment(pid)
         caption = PB.build_caption(payment, session.get("uname", ""), _verdict_detail(ac))
@@ -2125,15 +2222,32 @@ def addon_pay(bot_id):
         if msg_id:
             db.set_payment_msg(pid, msg_id)
         else:
-            notify_admins(f"🧩 طلب إضافة تحصيل المدفوعات #{pid} — {session.get('uname')} — "
+            notify_admins(f"🧩 طلب إضافة ({addon}) #{pid} — {session.get('uname')} — "
                           f"بوت #{bot_id} — {price} EGP. راجعه من لوحة الأدمن.")
         flash(("✅ وصل إثبات الدفع (#{}). تتفعّل الإضافة بعد المراجعة والموافقة." if ar else
                "✅ Payment proof received (#{}). The add-on activates after review.").format(pid), "ok")
-        return redirect(url_for("bot_detail", bot_id=bot_id) + "#pay")
-    return react_page("addon_pay", "addon_pay_title",
-                      {"bot": _public_bot(b), "price": price, "expires": db.addon_expires(bot_id),
+        return redirect(url_for("bot_detail", bot_id=bot_id) + "#" + ADDON_INFO[addon]["anchor"])
+    return react_page("addon_pay", ADDON_INFO[addon]["title_key"],
+                      {"bot": _public_bot(b), "price": price, "addon": addon,
+                       "expires": db.addon_expires(bot_id, addon),
                        "plat": _public_plat(), "qr": url_for("static", filename="instapay_qr.jpg"),
-                       "action": url_for("addon_pay", bot_id=bot_id)})
+                       "action": url_for(endpoint, bot_id=bot_id)})
+
+
+@app.route("/bot/<int:bot_id>/addon/catalog", methods=["GET", "POST"])
+@login_required
+def addon_catalog(bot_id):
+    """«منتجاتي من تليجرام»: صاحب المتجر يضيف ويعدّل منتجاته من داخل البوت."""
+    return _addon_checkout(_owned(bot_id), "catalog")
+
+
+@app.route("/bot/<int:bot_id>/addon/pay", methods=["GET", "POST"])
+@login_required
+def addon_pay(bot_id):
+    """شراء/تجديد الإضافة 30 يوماً — بمسار إيصالات المنصة نفسه: فحص آلي قبل الحفظ ثم موافقة
+    الأدمن. المبلغ من الخادم (`addon_pay_price`) لا من الفورم (§3.3)."""
+    return _addon_checkout(_owned(bot_id), "pay")
+
 
 @app.route("/bot/<int:bot_id>/pay-settings", methods=["POST"])
 @login_required
@@ -2202,10 +2316,12 @@ def export_csv(bot_id, kind):
     put = lambda cells: w.writerow([_csv_cell(x) for x in cells])
     # limit=None: «صدّر كل الطلبات» يعني الكل — اللوحة وحدها تكتفي بآخر 300
     if kind == "orders":
-        put(["العميل", "التليفون", "العنوان", "المنتجات", "الإجمالي", "الوقت"])
+        put(["العميل", "التليفون", "العنوان", "المنتجات", "منطقة التوصيل", "الشحن",
+             "الإجمالي", "الوقت"])
         for o in db.list_orders(bot_id, limit=None):
             items = "; ".join(f"{i['name']}x{i['qty']}" for i in o["items"])
-            put([o["customer"], o["phone"], o["address"], items, o["total"], o["created_at"]])
+            put([o["customer"], o["phone"], o["address"], items, o.get("ship_zone") or "",
+                 o.get("shipping") or 0, o["total"], o["created_at"]])
     elif kind == "bookings":
         put(["العميل", "التليفون", "الخدمة", "الموعد", "الحالة"])
         for x in db.list_bookings(bot_id, limit=None):
@@ -2620,7 +2736,8 @@ def admin_platform():
                   "bank_holder","bank_name","bank_account","bank_iban",
                   "platform_bot_token","admin_chat_id",
                   "support_email","support_whatsapp","support_telegram",
-                  "wa_verify_token","wa_app_secret","wa_es_app_secret","addon_pay_price"):
+                  "wa_verify_token","wa_app_secret","wa_es_app_secret","addon_pay_price",
+                  "addon_catalog_price"):
             db.set_platform(k, request.form.get(k, "").strip())
         for bad in _save_ops_settings(request.form):
             flash(bad, "error")
@@ -5685,6 +5802,21 @@ def favicon():
                                mimetype="image/png", max_age=86400)
 
 
+# كود «أول شهر مجاناً» لإضافة «منتجاتي من تليجرام» — يُزرع مرة واحدة عند أول إقلاع
+# بعد النشر، ويُدار بعدها من «العروض» في لوحة الأدمن (تعديل · إيقاف · حذف). العلامة في
+# `platform` تمنع عودته بعد حذف المالك له.
+CATALOG_PROMO = "CATALOG1"
+CATALOG_PROMO_USES = 50
+
+
+def seed_catalog_promo():
+    if db.get_platform("promo_catalog_seeded"):
+        return
+    db.ensure_promo(CATALOG_PROMO, "fixed", 999, plan="addon_catalog",
+                    max_uses=CATALOG_PROMO_USES, per_user_once=1)
+    db.set_platform("promo_catalog_seeded", "1")
+
+
 def seed_platform_defaults():
     if db.get_platform("seeded"): return
     db.set_platform("vodafone_number", "01097585951")
@@ -5713,9 +5845,11 @@ def _plan_names(lang=None):
     lang = lang or session.get("lang", i18n.DEFAULT)
     out = {k: plans.plan_name(k, lang) for k in plans.PLANS}
     out[db.WALLET_PLAN] = i18n.t("wallet_topup_label", lang)
-    # إضافة «تحصيل المدفوعات» تُشترى لكل بوت: plan = __addon_pay__:<bot_id>
+    # إضافات البوت تُشترى لكل بوت: plan = __addon_<kind>__:<bot_id>
     for code in db.addon_plans_in_payments():
-        out[code] = i18n.t("addon_pay_label", lang).format(id=db.addon_bot_id(code))
+        kind, bid = db.parse_addon_plan(code)
+        out[code] = i18n.t("addon_catalog_label" if kind == "catalog" else "addon_pay_label",
+                           lang).format(id=bid)
     return out
 
 
@@ -6008,6 +6142,7 @@ def _migrate_ai_key():
 def bootstrap():
     setup_logging()
     db.init_db(); seed_platform_defaults(); contact_defaults(); seed_default_admin(); _migrate_ai_key()
+    seed_catalog_promo()
     manager.start(); manager.resume_active_bots()
     EC.resume_pending()          # حملة بريد قُطعت بإعادة التشغيل تكمل من حيث توقفت
     tok = db.get_platform("platform_bot_token", "")

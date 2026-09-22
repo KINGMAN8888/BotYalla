@@ -32,6 +32,14 @@
         "C:/Users/youse/AppData/Local/Temp/claude/E--Github-BotYalla/18e662fb-5eba-4fe2-b466-db72056bfc2f/scratchpad/preview_inbox.py"
       ],
       "port": 5056
+    },
+    {
+      "name": "store-preview",
+      "runtimeExecutable": "E:/Github/BotYalla/.venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "C:/Users/youse/AppData/Local/Temp/claude/E--Github-BotYalla/18e662fb-5eba-4fe2-b466-db72056bfc2f/scratchpad/preview_store.py"
+      ],
+      "port": 5057
     }
   ]
 }

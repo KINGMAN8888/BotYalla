@@ -265,8 +265,9 @@ class ExportTests(unittest.TestCase):
         evil = rows[1]                                     # الأحدث أولاً
         self.assertTrue(evil[0].startswith("'="), evil[0])
         self.assertEqual(evil[1], "'+201001")
-        self.assertFalse(rows[2][4].startswith("'"), "الأرقام تبقى أرقاماً")
-        self.assertEqual(float(rows[2][4]), 10)
+        tot = rows[0].index("الإجمالي")            # موضع العمود من الترويسة لا برقم ثابت
+        self.assertFalse(rows[2][tot].startswith("'"), "الأرقام تبقى أرقاماً")
+        self.assertEqual(float(rows[2][tot]), 10)
         self.assertEqual(len(db.list_orders(self.bid)), 300, "اللوحة ما زالت تكتفي بـ 300")
 
 

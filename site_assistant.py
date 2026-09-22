@@ -127,6 +127,34 @@ GUIDE = {
         "en": "Open the bot from “My bots” — you'll find its link, a QR code and a print-ready poster. Copy the link to your page or print the poster for your shop.",
         "links": ["dashboard"],
     },
+    "shipping": {
+        "words": ("شحن", "الشحن", "توصيل", "التوصيل", "مصاريف", "محافظات", "منطقه", "منطقة",
+                  "shipping", "delivery", "zone"),
+        "ar": "الشحن إعداد مستقل مش منتج:\n1. افتح البوت من «بوتاتي» ← الإعدادات ← «الشحن والتوصيل».\n"
+              "2. اختار: من غير شحن · سعر موحّد · سعر لكل منطقة.\n"
+              "3. لو مناطق، اكتب كل منطقة وسعرها (القاهرة 60، الصعيد 90…).\n"
+              "4. تقدر تخلي التوصيل مجاني فوق مبلغ معيّن.\n"
+              "البوت هيسأل العميل عن منطقته مرة واحدة، ويضيف الشحن على الإجمالي، والطلب بيتسجّل بالشحن ومنطقته.",
+        "en": "Shipping is its own setting, not a product:\n1. Open the bot from “My bots” → Settings → “Shipping & delivery”.\n"
+              "2. Choose: no shipping · flat fee · fee per zone.\n3. For zones, add each zone and its fee.\n"
+              "4. You can make delivery free above a certain order value.\n"
+              "The bot asks the customer for their zone once, adds the fee to the total and stores both with the order.",
+        "links": ["dashboard"],
+    },
+    "product_photos": {
+        "words": ("صور المنتجات", "صورة المنتج", "المنتجات", "كتالوج", "اضافة منتج", "منتجاتي",
+                  "اضيف منتج", "ضيف منتج", "اعدل السعر", "امسح منتج",
+                  "products", "catalog", "product photo"),
+        "ar": "المنتجات وصورها:\n1. من الإعدادات ← «المنتجات»: الاسم والسعر ووصف قصير، والصورة من «صورة المنتج» (مكتبة الوسائط).\n"
+              "2. البوت بيبعت للعميل بطاقة فيها الصورة والاسم والسعر والوصف.\n"
+              "3. عايز تضيف منتجاتك من تليجرام نفسه؟ فعّل إضافة «منتجاتي من تليجرام» (99ج شهرياً لكل بوت) "
+              "من صفحة البوت، وبعدها ابعت /products لبوتك وابعت صورة المنتج ومكتوب تحتها «فستان صيفي 250».",
+        "en": "Products and their photos:\n1. Settings → “Products”: name, price, a short description, and the photo via “Product photo” (media library).\n"
+              "2. The bot sends the customer one card with the photo, name, price and description.\n"
+              "3. Want to add products from Telegram itself? Activate the “Products from Telegram” add-on (99 EGP/month per bot) "
+              "from the bot page, then send /products to your bot and send the product photo captioned “Summer dress 250”.",
+        "links": ["dashboard", "media"],
+    },
     "pay": {
         "words": ("ادفع", "دفع", "اشترك", "ترقيه", "فودافون", "انستاباي", "ايصال", "pay", "upgrade", "subscribe", "receipt"),
         "ar": "1. من «الباقات» اختار الباقة (السنوي أوفر 30%).\n2. في صفحة الدفع هتلاقي بيانات التحويل (فودافون كاش / انستاباي / بنك).\n"

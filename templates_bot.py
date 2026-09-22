@@ -9,6 +9,7 @@ import database as db
 import payments as pay
 from flow_engine import build_flow, _cfg, _bid, notify_owner, track_start, send_intro, inbox_out
 import tg_helpers as tg
+import catalog_bot
 
 # ---------- صندوق الوارد ----------
 # المتجر والحجز والقائمة لا تمرّ بمحرك الفلو (LoggedChannel)، فكانت ردودها الجاهزة لا تظهر في
@@ -175,14 +176,160 @@ async def on_pay_decision(update, ctx):
         pass
 
 # ---------- متجر ----------
+# ثلاث قواعد تحكم هذا القالب:
+# · **الشحن إعداد لا منتج.** كان التاجر يضيف «الشحن 70ج» صفاً في الكتالوج ليظهر سعره،
+#   فيختاره العميل بعددٍ ويُحسب مرة لكل قطعة — ويبقى قابلاً للتخطّي. هنا خطوة ثابتة
+#   في المسار: سعر موحّد أو مناطق لكل منها سعرها، ومجاني فوق مبلغ إن أراد.
+# · **صورة المنتج من مكتبة الوسائط أولاً.** القالب كان يقرأ `image` (رابط) وحده ويتجاهل
+#   `asset`، فصور المنتجات التي يرفعها صاحب المتجر من اللوحة لا تظهر للعميل إطلاقاً.
+# · **بطاقة منتج كاملة**: صورة + اسم + سعر + وصف قصير — لا صورة صامتة بلا سعر.
 ST_MENU, ST_QTY, ST_NAME, ST_PHONE, ST_ADDR, ST_CONFIRM = range(10, 16)
 ST_PAY = 16                                  # ينتظر صورة إيصال التحويل (إضافة التحصيل)
+ST_SHIP = 17                                 # منطقة التوصيل — قبل الملخص مباشرة
+
+MAX_ZONES = 12                               # مناطق التوصيل المعروضة (لوحة تليجرام)
+GALLERY_MAX = 10                             # بطاقات «صور المنتجات» في المرة الواحدة
+BTN_GALLERY, BTN_DONE, BTN_CANCEL = "🖼️ صور المنتجات", "🛒 إنهاء الطلب", "❌ إلغاء"
+
+
+def _money(v):
+    """رقم مال موجب — وأي قيمة فاسدة تصير صفراً. لا سعر يُخترع من نص غير رقمي."""
+    try:
+        return max(0.0, round(float(v), 2))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def ship_conf(cfg):
+    """إعداد الشحن مطبَّعاً: {mode, cost, free_over, note, zones}. `mode` واحد من
+    none (بلا شحن) · flat (سعر موحّد) · zones (لكل منطقة سعرها). أي إعداد فاسد
+    — أو «مناطق» بلا مناطق — يسقط إلى none: بلا شحن أهون من شحن مخترَع."""
+    s = cfg.get("shipping") if isinstance(cfg, dict) else None
+    if not isinstance(s, dict):
+        s = {}
+    zones = []
+    for z in (s.get("zones") or [])[:MAX_ZONES]:
+        name = str((z or {}).get("name", "")).strip()[:40] if isinstance(z, dict) else ""
+        if name and name not in [x["name"] for x in zones]:
+            zones.append({"name": name, "cost": _money(z.get("cost"))})
+    mode = s.get("mode") if s.get("mode") in ("none", "flat", "zones") else "none"
+    if mode == "zones" and not zones:
+        mode = "none"
+    return {"mode": mode, "cost": _money(s.get("cost")), "free_over": _money(s.get("free_over")),
+            "note": str(s.get("note") or "").strip()[:200], "zones": zones}
+
+
+def ship_cost(sh, zone=None, subtotal=0.0):
+    """تكلفة الشحن لطلب بعينه. المجاني فوق الحد يسبق كل شيء، ومنطقة غير معروفة
+    تأخذ سعر أول منطقة — لا صفراً يأكل شحن التاجر."""
+    if sh["mode"] == "none":
+        return 0.0
+    if sh["free_over"] and _money(subtotal) >= sh["free_over"]:
+        return 0.0
+    if sh["mode"] == "zones":
+        for z in sh["zones"]:
+            if z["name"] == zone:
+                return z["cost"]
+        return sh["zones"][0]["cost"] if sh["zones"] else 0.0
+    return sh["cost"]
+
+
+def ship_label(sh, z):
+    return f"{z['name']} — {z['cost']:g} ج" if z["cost"] else f"{z['name']} — توصيل مجاني"
+
+
+def match_zone(sh, text):
+    """اسم المنطقة من ضغطة زر أو من عنوان مكتوب. بلا تطابق: None."""
+    t = str(text or "").strip()
+    if not t:
+        return None
+    for z in sh["zones"]:
+        if t in (z["name"], ship_label(sh, z)):
+            return z["name"]
+    for z in sh["zones"]:
+        if z["name"] in t:
+            return z["name"]
+    return None
+
+
+def cart_total(cart):
+    return round(sum(_money(i.get("price")) * int(i.get("qty") or 1) for i in (cart or [])), 2)
+
+
+def ship_hint(sh):
+    """سطر الشحن الذي يراه العميل قبل الطلب — الشفافية تقلّل الطلبات الملغاة."""
+    if sh["mode"] == "none":
+        return sh["note"]
+    if sh["mode"] == "flat":
+        line = f"🚚 الشحن: {sh['cost']:g} ج" if sh["cost"] else "🚚 الشحن مجاني"
+    else:
+        line = "🚚 الشحن حسب المنطقة: " + " · ".join(ship_label(sh, z) for z in sh["zones"][:6])
+    if sh["free_over"]:
+        line += f"\n🎁 التوصيل مجاني للطلبات فوق {sh['free_over']:g} ج"
+    return line + (f"\nℹ️ {sh['note']}" if sh["note"] else "")
+
+
+def order_summary(cart, sh, zone=None):
+    """ملخص الطلب ونتائجه: (النص، المنتجات، الشحن، الإجمالي). مصدر واحد يقرأ منه
+    العميل وصاحب المتجر وسجلّ الطلب — فلا يختلف رقم عن رقم."""
+    sub = cart_total(cart)
+    cost = ship_cost(sh, zone, sub)
+    lines = [f"• {i['name']} × {i['qty']} = {_money(i['price']) * int(i['qty'] or 1):g} ج"
+             for i in (cart or [])]
+    text = "\n".join(lines) + f"\n\n🧾 المنتجات: {sub:g} ج"
+    if sh["mode"] != "none":
+        where = f" ({zone})" if zone else ""
+        text += f"\n🚚 الشحن{where}: " + ("مجاني 🎉" if not cost else f"{cost:g} ج")
+    return text + f"\n💰 الإجمالي: {sub + cost:g} ج", sub, cost, round(sub + cost, 2)
+
+
+def product_caption(p):
+    """بطاقة المنتج: اسم وسعر ووصف — لا صورة صامتة يسأل بعدها العميل «بكام؟»."""
+    out = [f"🛍️ {str(p.get('name', '')).strip()}", f"💵 {_money(p.get('price')):g} ج"]
+    desc = str(p.get("desc") or "").strip()
+    if desc:
+        out.append(desc[:400])
+    return "\n".join(out)
+
+
+def product_asset(p, bot_row):
+    """صورة المنتج من مكتبة الوسائط — الملكية شرط في الاستعلام نفسه."""
+    if not (p.get("asset") and bot_row):
+        return None
+    try:
+        return db.get_asset(int(p["asset"]), owner_id=bot_row["owner_id"])
+    except (TypeError, ValueError):
+        return None
+
+
+async def _product_card(update, ctx, p, markup=None, caption=None):
+    """يرسل صورة المنتج مع سعره. يرجّع True لو وصلت صورة."""
+    caption = caption if caption is not None else product_caption(p)
+    bot_id = _bid(ctx)
+    asset = product_asset(p, db.get_bot(bot_id))
+    try:
+        if asset:
+            from channels.telegram import TelegramChannel
+            await TelegramChannel(ctx.bot).send_media(
+                f"tg:{update.effective_chat.id}", asset, bot_id, caption=caption, markup=markup)
+            inbox_out(update, ctx, caption, markup, "media")
+            return True
+        if p.get("image"):
+            await _photo(update, ctx, p["image"], caption=caption, reply_markup=markup)
+            return True
+    except Exception:
+        log.exception("product photo failed for bot #%s", bot_id)
+    return False
+
 
 def build_store(app: Application):
     def prods(ctx): return _cfg(ctx).get("products", [])
+    def ship(ctx): return ship_conf(_cfg(ctx))
     def menu_kb(ctx):
         rows = [[f"{i+1}. {p['name']} - {p['price']} ج"] for i, p in enumerate(prods(ctx))]
-        rows.append(["🛒 إنهاء الطلب", "❌ إلغاء"])
+        if any(p.get("asset") or p.get("image") for p in prods(ctx)):
+            rows.append([BTN_GALLERY])
+        rows.append([BTN_DONE, BTN_CANCEL])
         return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
     async def start(update, ctx):
@@ -193,14 +340,28 @@ def build_store(app: Application):
         if not prods(ctx):
             await _say(update, ctx, "⚠️ لا توجد منتجات بعد.")
             return ConversationHandler.END
-        await send_intro(update, ctx,
-            _cfg(ctx).get("welcome") or f"🛍️ أهلاً بك في «{_cfg(ctx).get('business_name','متجرنا')}»! اختر منتجاً:",
-            menu_kb(ctx))
+        hello = _cfg(ctx).get("welcome") or \
+            f"🛍️ أهلاً بك في «{_cfg(ctx).get('business_name','متجرنا')}»! اختر منتجاً:"
+        hint = ship_hint(ship(ctx))
+        await send_intro(update, ctx, hello + (f"\n\n{hint}" if hint else ""), menu_kb(ctx))
+        return ST_MENU
+
+    async def gallery(update, ctx):
+        """كل المنتجات بصورها — العميل يشوف قبل ما يختار رقماً."""
+        shown = 0
+        for p in prods(ctx):
+            if shown >= GALLERY_MAX:
+                break
+            if await _product_card(update, ctx, p):
+                shown += 1
+        await _say(update, ctx, "اختر رقم المنتج من القائمة تحت 👇" if shown else
+                   "لسه مفيش صور للمنتجات.", reply_markup=menu_kb(ctx))
         return ST_MENU
 
     async def choose(update, ctx):
         t = update.message.text.strip()
-        if t == "❌ إلغاء": return await cancel(update, ctx)
+        if t == BTN_CANCEL: return await cancel(update, ctx)
+        if t == BTN_GALLERY: return await gallery(update, ctx)
         if t.startswith("🛒"):
             if not ctx.user_data.get("cart"):
                 await _say(update, ctx, "سلتك فارغة."); return ST_MENU
@@ -211,9 +372,7 @@ def build_store(app: Application):
         if not (0 <= idx < len(ps)):
             await _say(update, ctx, "اختر منتجاً من القائمة."); return ST_MENU
         ctx.user_data["pending"] = ps[idx]
-        if ps[idx].get("image"):
-            try: await _photo(update, ctx, ps[idx]["image"])
-            except Exception: pass
+        await _product_card(update, ctx, ps[idx])
         await _say(update, ctx, f"كم عدد «{ps[idx]['name']}»؟", reply_markup=ReplyKeyboardRemove())
         return ST_QTY
 
@@ -223,9 +382,13 @@ def build_store(app: Application):
         except Exception:
             await _say(update, ctx, "اكتب رقماً صحيحاً:"); return ST_QTY
         p = ctx.user_data.pop("pending")
-        ctx.user_data["cart"].append({"name": p["name"], "price": p["price"], "qty": n})
-        tot = sum(i["price"]*i["qty"] for i in ctx.user_data["cart"])
-        await _say(update, ctx, f"✅ أضيف. إجمالي السلة: {tot} ج", reply_markup=menu_kb(ctx))
+        ctx.user_data["cart"].append({"name": p["name"], "price": _money(p.get("price")), "qty": n})
+        sh = ship(ctx)
+        tot = cart_total(ctx.user_data["cart"])
+        msg = f"✅ أضيف. إجمالي السلة: {tot:g} ج"
+        if sh["free_over"] and tot < sh["free_over"]:
+            msg += f"\n🎁 ناقصك {sh['free_over'] - tot:g} ج والتوصيل يبقى مجاني."
+        await _say(update, ctx, msg, reply_markup=menu_kb(ctx))
         return ST_MENU
 
     async def name(update, ctx):
@@ -234,23 +397,50 @@ def build_store(app: Application):
     async def phone(update, ctx):
         ctx.user_data["c_phone"] = update.message.text.strip()
         await _say(update, ctx, "📍 العنوان بالتفصيل:"); return ST_ADDR
+
     async def addr(update, ctx):
         ctx.user_data["c_addr"] = update.message.text.strip()
-        cart = ctx.user_data["cart"]; tot = sum(i["price"]*i["qty"] for i in cart)
-        lines = "\n".join(f"• {i['name']} × {i['qty']} = {i['price']*i['qty']} ج" for i in cart)
-        await _say(update, ctx, 
-            f"📋 تأكيد الطلب:\n{lines}\n\n💰 الإجمالي: {tot} ج\n\nاكتب «تأكيد» أو «إلغاء».",
-            reply_markup=ReplyKeyboardMarkup([["تأكيد", "إلغاء"]], resize_keyboard=True))
+        sh = ship(ctx)
+        if sh["mode"] == "zones" and ship_cost(sh, None, cart_total(ctx.user_data["cart"])):
+            # المناطق تُسأل مرة واحدة هنا — لا «منتج شحن» يختاره العميل بالعدد
+            zone = match_zone(sh, ctx.user_data["c_addr"])
+            if zone:
+                return await ask_confirm(update, ctx, zone)
+            await _say(update, ctx, "🚚 اختر منطقة التوصيل:",
+                       reply_markup=ReplyKeyboardMarkup(
+                           [[ship_label(sh, z)] for z in sh["zones"]] + [[BTN_CANCEL]],
+                           resize_keyboard=True))
+            return ST_SHIP
+        return await ask_confirm(update, ctx, None)
+
+    async def zone(update, ctx):
+        t = update.message.text.strip()
+        if t == BTN_CANCEL: return await cancel(update, ctx)
+        sh = ship(ctx)
+        z = match_zone(sh, t)
+        if not z:
+            await _say(update, ctx, "اختر منطقة من الأزرار تحت 👇"); return ST_SHIP
+        return await ask_confirm(update, ctx, z)
+
+    async def ask_confirm(update, ctx, zone):
+        ctx.user_data["zone"] = zone
+        text, _sub, _cost, _tot = order_summary(ctx.user_data["cart"], ship(ctx), zone)
+        await _say(update, ctx, f"📋 تأكيد الطلب:\n{text}\n\nاكتب «تأكيد» أو «إلغاء».",
+                   reply_markup=ReplyKeyboardMarkup([["تأكيد", "إلغاء"]], resize_keyboard=True))
         return ST_CONFIRM
 
     async def confirm(update, ctx):
         if update.message.text.strip() != "تأكيد": return await cancel(update, ctx)
-        cart = ctx.user_data["cart"]; tot = sum(i["price"]*i["qty"] for i in cart)
+        cart = ctx.user_data["cart"]
+        sh = ship(ctx)
+        zone = ctx.user_data.get("zone")
+        summary, _sub, cost, tot = order_summary(cart, sh, zone)
         u = update.effective_user
         pay_on = pay_enabled(ctx)                # إضافة التحصيل سارية ولصاحبه وسيلة استلام
         order_id = db.add_order(_bid(ctx), u.id, ctx.user_data.get("c_name"), ctx.user_data.get("c_phone"),
                                 ctx.user_data.get("c_addr"), cart, tot,
-                                pay_status="awaiting" if pay_on else None)
+                                pay_status="awaiting" if pay_on else None,
+                                shipping=cost, ship_zone=zone)
         if pay_on:
             await _say(update, ctx, pay_instructions(_cfg(ctx).get("pay") or {}, tot, order_id),
                        reply_markup=_pay_kb())
@@ -258,10 +448,9 @@ def build_store(app: Application):
             await _say(update, ctx,
                 _cfg(ctx).get("thanks") or "🎉 تم استلام طلبك! هنتواصل لتأكيد التوصيل.",
                 reply_markup=ReplyKeyboardRemove())
-        lines = "\n".join(f"• {i['name']} × {i['qty']}" for i in cart)
         await _tell_owner(ctx, f"🛒 طلب جديد #{order_id} «{_cfg(ctx).get('business_name','')}»\n"
                                f"👤 {ctx.user_data.get('c_name')}\n📱 {ctx.user_data.get('c_phone')}\n"
-                               f"📍 {ctx.user_data.get('c_addr')}\n{lines}\n💰 {tot} ج"
+                               f"📍 {ctx.user_data.get('c_addr')}\n{summary}"
                                + ("\n💳 في انتظار إيصال الدفع" if pay_on else ""))
         customer = ctx.user_data.get("c_name")
         ctx.user_data.clear()
@@ -281,6 +470,7 @@ def build_store(app: Application):
                 ST_NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND, name)],
                 ST_PHONE:[MessageHandler(filters.TEXT & ~filters.COMMAND, phone)],
                 ST_ADDR:[MessageHandler(filters.TEXT & ~filters.COMMAND, addr)],
+                ST_SHIP:[MessageHandler(filters.TEXT & ~filters.COMMAND, zone)],
                 ST_CONFIRM:[MessageHandler(filters.TEXT & ~filters.COMMAND, confirm)],
                 ST_PAY:[MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_receipt),
                         MessageHandler(filters.TEXT & ~filters.COMMAND, on_pay_text)]},
@@ -289,6 +479,8 @@ def build_store(app: Application):
         allow_reentry=True))
     # زرّا صاحب البوت على الإيصال — خارج المحادثة (يصلان من محادثته هو لا من العميل)
     app.add_handler(CallbackQueryHandler(on_pay_decision, pattern=r"^bp:(ok|no):\d+$"))
+    # كتالوج صاحب المتجر من داخل تليجرام (إضافة مدفوعة) — قبل المحادثة بمجموعة
+    catalog_bot.register(app)
 
 # ---------- حجوزات ----------
 BK_DATE, BK_TIME, BK_NAME, BK_PHONE = range(20, 24)

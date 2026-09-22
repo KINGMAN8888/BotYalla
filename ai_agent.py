@@ -1105,10 +1105,20 @@ def _business_facts(cfg, platform=None):
     kb = cfg.get("kb")
     if isinstance(kb, dict) and kb:
         facts["info"] = kb
-    prods = [{"name": p.get("name"), "price_egp": p.get("price")}
+    prods = [{"name": p.get("name"), "price_egp": p.get("price"),
+              "about": (str(p.get("desc") or "").strip()[:200] or None)}
              for p in (cfg.get("products") or [])[:40] if p.get("name")]
     if prods:
         facts["products"] = prods
+    # الشحن حقيقة لا تخمين: «الشحن بكام؟» أكثر سؤال يسبق الطلب، وإجابة مخترَعة
+    # تكلّف التاجر الفرق. يُقرأ من نفس المُطبِّع الذي يحسب به البوت.
+    import templates_bot as _T
+    sh = _T.ship_conf(cfg)
+    if sh["mode"] != "none":
+        facts["shipping"] = {"mode": sh["mode"], "cost_egp": sh["cost"],
+                             "free_over_egp": sh["free_over"] or None,
+                             "zones": [{"name": z["name"], "cost_egp": z["cost"]} for z in sh["zones"]],
+                             "note": sh["note"] or None}
     if cfg.get("service_name") and cfg.get("open_hour") is not None:
         facts["booking"] = {"service": cfg.get("service_name"), "open_hour": cfg.get("open_hour"),
                             "close_hour": cfg.get("close_hour")}

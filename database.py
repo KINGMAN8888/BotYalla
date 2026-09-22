@@ -187,6 +187,12 @@ def _migrate(c):
     ocols = {r[1] for r in c.execute("PRAGMA table_info(orders)").fetchall()}
     if "pay_status" not in ocols:
         c.execute("ALTER TABLE orders ADD COLUMN pay_status TEXT")
+    # الشحن (2026-09-22): كان التاجر يضيفه «منتجاً» في الكتالوج ليظهر سعره، فيُحسب
+    # بالعدد أو يُتخطّى. صار إعداداً في مساره: قيمته ومنطقته تُحفظان مع الطلب.
+    if "shipping" not in ocols:
+        c.execute("ALTER TABLE orders ADD COLUMN shipping REAL NOT NULL DEFAULT 0")
+    if "ship_zone" not in ocols:
+        c.execute("ALTER TABLE orders ADD COLUMN ship_zone TEXT")
 
     pcols = {r[1] for r in c.execute("PRAGMA table_info(payments)").fetchall()}
     if "promo_id" not in pcols:                   # الكود المستخدم وقيمة الخصم وقت الدفع
@@ -1524,13 +1530,18 @@ def list_leads(bot_id, limit=300):
             d["media"] = by_lead.get(d["id"], [])
         return out
 
-def add_order(bot_id, tg_user_id, customer, phone, address, items, total, pay_status=None):
-    """يرجّع رقم الطلب — تحصيل المدفوعات يربط به إيصال العميل."""
+def add_order(bot_id, tg_user_id, customer, phone, address, items, total, pay_status=None,
+              shipping=0, ship_zone=None):
+    """يرجّع رقم الطلب — تحصيل المدفوعات يربط به إيصال العميل.
+
+    `total` يشمل الشحن (هو المبلغ المطلوب من العميل فعلاً)، و`shipping` يُحفظ
+    منفصلاً ليعرف التاجر صافي منتجاته."""
     with get_conn() as c:
         cur = c.execute("INSERT INTO orders(bot_id,tg_user_id,customer,phone,address,items_json,total,"
-                        "created_at,pay_status) VALUES(?,?,?,?,?,?,?,?,?)",
+                        "created_at,pay_status,shipping,ship_zone) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                         (bot_id, tg_user_id, customer, phone, address,
-                         json.dumps(items, ensure_ascii=False), total, int(time.time()), pay_status))
+                         json.dumps(items, ensure_ascii=False), total, int(time.time()), pay_status,
+                         float(shipping or 0), (ship_zone or None)))
         order_id = cur.lastrowid
     log_event(bot_id, "order", total)
     return order_id
@@ -1791,11 +1802,12 @@ def finalize_payment(pid, status):
                 row["user_id"], int(round(float(row["amount"] or 0) * 100)),
                 ref=f"payment:{row['id']}", note="topup", conn=c)
         elif status == "approved" and addon_bot_id(row["plan"]):
-            # إضافة «تحصيل المدفوعات» لبوت بعينه — 30 يوماً تُمدّ من انتهائها لو ما زالت
-            # سارية. داخل نفس المعاملة: لا دفعة معتمدة بلا إضافة مفعّلة.
-            bid = addon_bot_id(row["plan"])
+            # إضافة لبوت بعينه (تحصيل المدفوعات · منتجاتي من تليجرام) — 30 يوماً تُمدّ من
+            # انتهائها لو ما زالت سارية. داخل نفس المعاملة: لا دفعة معتمدة بلا إضافة مفعّلة.
+            kind, bid = parse_addon_plan(row["plan"])
             if c.execute("SELECT 1 FROM bots WHERE id=?", (bid,)).fetchone():
-                row["addon_expires"] = extend_addon(bid, "pay", days=30, conn=c)
+                row["addon_kind"] = kind
+                row["addon_expires"] = extend_addon(bid, kind, days=30, conn=c)
             else:
                 log.warning("payment #%s approved for the add-on of deleted bot #%s", row["id"], bid)
         elif status == "approved":
@@ -2198,6 +2210,18 @@ def create_promo(code, kind, value, plan=None, max_uses=None,
             return cur.lastrowid, None
         except sqlite3.IntegrityError:
             return None, "duplicate"
+
+def ensure_promo(code, kind, value, plan=None, max_uses=None, per_user_once=1):
+    """ينشئ كوداً مرة واحدة فقط (لو الكود غير موجود) ويرجّع صفّه.
+
+    للأكواد التي تزرعها المنصة نفسها عند الإقلاع. حذف المالك للكود لاحقاً قرارٌ
+    له: المستدعي يحرس بعلامة في `platform` فلا يعود الكود بعد حذفه."""
+    row = get_promo_by_code(code)
+    if row:
+        return row
+    create_promo(code, kind, value, plan=plan, max_uses=max_uses, per_user_once=per_user_once)
+    return get_promo_by_code(code)
+
 
 def set_promo_active(promo_id, active):
     with get_conn() as c:
@@ -3231,29 +3255,39 @@ def analytics_summary(days=30):
     return out
 
 
-# ---------- تحصيل مدفوعات عملاء البوت (إضافة مدفوعة لكل بوت) ----------
-# شراء الإضافة دفعة منصة عادية (إيصال + موافقة الأدمن) بـ plan = __addon_pay__:<bot_id> —
+# ---------- إضافات البوت المدفوعة (لكل بوت على حدة) ----------
+# `pay`     : تحصيل مدفوعات عملاء البوت.
+# `catalog` : إدارة المنتجات من داخل تليجرام (catalog_bot).
+# شراء أي إضافة دفعة منصة عادية (إيصال + موافقة الأدمن) بـ plan = __addon_<kind>__:<bot_id> —
 # كشحن المحفظة: `plans.is_sellable` ترفضه، و`finalize_payment` تفعّل الإضافة لذلك البوت.
-ADDON_PAY = "__addon_pay__"
+ADDON_PAY = "__addon_pay__"                 # موروث: كود دفعات الإضافة الأولى كما هو
+ADDON_KINDS = ("pay", "catalog")
+_ADDON_PLAN_RE = re.compile(r"^__addon_([a-z]{1,16})__:(\d{1,12})$")
 
 
-def addon_plan(bot_id):
-    return f"{ADDON_PAY}:{int(bot_id)}"
+def addon_plan(bot_id, addon="pay"):
+    if addon not in ADDON_KINDS:
+        raise ValueError(f"unknown addon: {addon}")
+    return f"__addon_{addon}__:{int(bot_id)}"
+
+
+def parse_addon_plan(plan):
+    """(نوع الإضافة، رقم البوت) أو (None, None) لأي كود آخر."""
+    m = _ADDON_PLAN_RE.match(str(plan or ""))
+    if not m or m.group(1) not in ADDON_KINDS:
+        return None, None
+    return m.group(1), int(m.group(2))
 
 
 def addon_bot_id(plan):
-    if isinstance(plan, str) and plan.startswith(ADDON_PAY + ":"):
-        try:
-            return int(plan.split(":", 1)[1])
-        except ValueError:
-            return None
-    return None
+    """رقم البوت من كود دفعة إضافة — أياً كان نوعها."""
+    return parse_addon_plan(plan)[1]
 
 
 def addon_plans_in_payments():
     with get_conn() as c:
-        return [r[0] for r in c.execute("SELECT DISTINCT plan FROM payments WHERE substr(plan,1,?)=?",
-                                        (len(ADDON_PAY) + 1, ADDON_PAY + ":")).fetchall()]
+        return [r[0] for r in c.execute(
+            "SELECT DISTINCT plan FROM payments WHERE substr(plan,1,8)='__addon_'").fetchall()]
 
 
 def addon_expires(bot_id, addon="pay"):

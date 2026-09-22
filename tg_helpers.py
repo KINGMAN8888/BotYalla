@@ -176,6 +176,10 @@ def remove_bot_photo(token):
 def default_commands(template):
     """أوامر البوت الافتراضية حسب النوع (تظهر في قائمة الأوامر بتليجرام)."""
     cmds = [{"command": "start", "description": "ابدأ / Start"}]
+    if template == "store":
+        # إدارة المنتجات من داخل البوت (إضافة مدفوعة) — الأمر ظاهر للكل ليجده صاحب
+        # المتجر بلا شرح، والبوت يردّ على أي شخص آخر بسطر واحد أنه لصاحب المتجر.
+        cmds.append({"command": "products", "description": "إدارة المنتجات (لصاحب المتجر)"})
     return cmds
 
 

@@ -640,10 +640,20 @@ async def _ai_action(bot_row, cfg, raw_channel, peer, action):
             if p and 1 <= qty <= 99:
                 items.append({"name": p["name"], "price": float(p.get("price") or 0), "qty": qty})
         if items:
-            total = round(sum(i["price"] * i["qty"] for i in items), 2)
+            # الشحن يُحسب هنا أيضاً لا في مسار القالب وحده: طلب يأتي من الذكاء الاصطناعي
+            # كان يصل صاحب المتجر بمجموع المنتجات وحدها، فيدفع هو فرق التوصيل.
+            import templates_bot as _T
+            sh = _T.ship_conf(cfg)
+            sub = round(sum(i["price"] * i["qty"] for i in items), 2)
+            zone = _T.match_zone(sh, action.get("address")) if sh["mode"] == "zones" else None
+            ship = _T.ship_cost(sh, zone, sub)
+            total = round(sub + ship, 2)
             db.add_order(bot_id, _peer_num(peer), action.get("customer"), action.get("phone"),
-                         action.get("address"), items, total)
+                         action.get("address"), items, total, shipping=ship, ship_zone=zone)
             lines = "\n".join(f"• {i['name']} × {i['qty']}" for i in items)
+            if sh["mode"] != "none":
+                where = f" ({zone})" if zone else ""
+                lines += f"\n🚚 الشحن{where}: " + (f"{ship:g} ج" if ship else "مجاني")
             await notify_owner(bot_row, raw_channel,
                                f"🛒 طلب جديد عبر الذكاء الاصطناعي «{biz}»\n👤 {action.get('customer') or '—'}"
                                f"\n📱 {action.get('phone') or '—'}\n📍 {action.get('address') or '—'}"

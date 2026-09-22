@@ -564,9 +564,14 @@ function LinkOwner({ bot }) {
 function ProductsEditor({ products }) {
   const [rows, setRows] = useState(products.length ? products : [{ name: "", price: "", image: "" }]);
   const set = (i, k, v) => setRows(rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
+  const drop = (i) => setRows(rows.length > 1 ? rows.filter((_, j) => j !== i) : [{ name: "", price: "", image: "" }]);
   return (
     <>
       <SectionTitle icon="store">{t("products")}</SectionTitle>
+      <p className="mt-0 mb-4 text-[12.5px] leading-relaxed text-ink-3">
+        {bi("صورة المنتج بتظهر للعميل مع اسمه وسعره ووصفه في بطاقة واحدة. الشحن مش منتج — اضبطه تحت.",
+            "The product photo is shown to the customer in one card with its name, price and description. Shipping is not a product — set it below.")}
+      </p>
       <div className="flex flex-col gap-4">
         {rows.map((r, i) => (
           <div key={i} className="rounded-2xl bg-black/15 p-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
@@ -575,10 +580,19 @@ function ProductsEditor({ products }) {
               <Input name="p_price" value={r.price} onChange={(e) => set(i, "price", e.target.value)} placeholder={t("price_egp")} inputMode="decimal" />
               <Input name="p_image" value={r.image || ""} onChange={(e) => set(i, "image", e.target.value)} placeholder={t("image_url_opt")} />
             </div>
+            <div className="mt-3">
+              <Input name="p_desc" value={r.desc || ""} maxLength={400}
+                     onChange={(e) => set(i, "desc", e.target.value)} placeholder={t("product_desc")} />
+            </div>
             <div className="mt-2.5 flex flex-wrap items-center gap-2 text-[12px] text-ink-3">
               <span>{t("product_media")}:</span>
               <AssetPicker compact name="p_asset" value={r.asset || ""} kinds={["image"]}
                            onChange={(v) => set(i, "asset", v)} />
+              <button type="button" onClick={() => drop(i)}
+                      className="ms-auto cursor-pointer rounded-lg border-0 bg-white/[0.05] px-2.5 py-1.5 text-[12px]
+                                 font-bold text-ink-3 hover:bg-rose-500/20 hover:text-rose-200">
+                <Icon name="close" size={12} className="me-1" />{bi("احذف المنتج", "Remove")}
+              </button>
             </div>
           </div>
         ))}
@@ -588,6 +602,79 @@ function ProductsEditor({ products }) {
              onClick={() => setRows([...rows, { name: "", price: "", image: "" }])}>
           {t("new_product")}
         </Btn>
+      </div>
+    </>
+  );
+}
+
+/* ---------------------------------------------------------------- الشحن والتوصيل
+   مسار ثابت بدل «منتج اسمه الشحن»: الاختيار بين بلا شحن · سعر موحّد · سعر لكل منطقة،
+   والبوت يسأل العميل عن منطقته مرة واحدة قبل الملخص ويجمع الشحن على الإجمالي. */
+const SHIP_MODES = [
+  { k: "none",  ar: "من غير شحن",        en: "No shipping" },
+  { k: "flat",  ar: "سعر توصيل موحّد",    en: "Flat delivery fee" },
+  { k: "zones", ar: "سعر لكل منطقة",      en: "Fee per zone" },
+];
+
+function ShippingEditor({ cfg }) {
+  const sh = cfg.shipping || {};
+  const [mode, setMode] = useState(SHIP_MODES.some((m) => m.k === sh.mode) ? sh.mode : "none");
+  const [zones, setZones] = useState((sh.zones || []).length ? sh.zones : [{ name: "", cost: "" }]);
+  const setZ = (i, k, v) => setZones(zones.map((z, j) => (j === i ? { ...z, [k]: v } : z)));
+  const show = (on) => (on ? "" : "hidden");
+  return (
+    <>
+      <SectionTitle icon="truck">{bi("الشحن والتوصيل", "Shipping & delivery")}</SectionTitle>
+      <p className="mt-0 mb-4 text-[12.5px] leading-relaxed text-ink-3">
+        {bi("خلي الشحن إعداد مستقل بدل ما يبقى «منتج» في القائمة — البوت بيسأل العميل عن منطقته ويضيف السعر على الإجمالي، والطلب بيتسجّل بالشحن ومنطقته.",
+            "Shipping is its own setting, not a product in the menu — the bot asks the customer for their zone, adds the fee to the total, and saves both with the order.")}
+      </p>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label={bi("طريقة حساب الشحن", "How shipping is charged")}>
+          <Select name="ship_mode" value={mode} onChange={(e) => setMode(e.target.value)}>
+            {SHIP_MODES.map((m) => <option key={m.k} value={m.k}>{bi(m.ar, m.en)}</option>)}
+          </Select>
+        </Field>
+        <div className={show(mode !== "none")}>
+          <Field label={bi("توصيل مجاني فوق (اختياري)", "Free delivery over (optional)")}
+                 hint={bi("سيبه فاضي أو صفر يعني مفيش توصيل مجاني.", "Leave empty or 0 for no free delivery.")}>
+            <Input name="ship_free_over" defaultValue={sh.free_over || ""} inputMode="decimal" placeholder="1000" />
+          </Field>
+        </div>
+      </div>
+      <div className={"mt-4 " + show(mode === "flat")}>
+        <Field label={bi("سعر التوصيل (ج)", "Delivery fee (EGP)")}>
+          <Input name="ship_cost" defaultValue={sh.cost || ""} inputMode="decimal" placeholder="70" />
+        </Field>
+      </div>
+      <div className={"mt-4 " + show(mode === "zones")}>
+        <span className="mb-2 block text-[13px] font-bold text-ink-2">{bi("المناطق وأسعارها", "Zones and fees")}</span>
+        <div className="flex flex-col gap-2.5">
+          {zones.map((z, i) => (
+            <div key={i} className="grid grid-cols-[minmax(0,1fr)_110px_auto] gap-2.5">
+              <Input name="z_name" value={z.name || ""} onChange={(e) => setZ(i, "name", e.target.value)}
+                     placeholder={bi("القاهرة والجيزة", "Cairo & Giza")} />
+              <Input name="z_cost" value={z.cost ?? ""} onChange={(e) => setZ(i, "cost", e.target.value)}
+                     inputMode="decimal" placeholder={bi("السعر", "Fee")} />
+              <button type="button" aria-label={bi("احذف المنطقة", "Remove zone")}
+                      onClick={() => setZones(zones.length > 1 ? zones.filter((_, j) => j !== i) : [{ name: "", cost: "" }])}
+                      className="cursor-pointer rounded-xl border-0 bg-white/[0.05] px-3 text-ink-3 hover:bg-rose-500/20 hover:text-rose-200">
+                <Icon name="close" size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2.5">
+          <Btn variant="ghost" sm icon="plus" type="button" onClick={() => setZones([...zones, { name: "", cost: "" }])}>
+            {bi("منطقة جديدة", "New zone")}
+          </Btn>
+        </div>
+      </div>
+      <div className="mt-4">
+        <Field label={bi("ملاحظة للعميل (اختياري)", "Note for the customer (optional)")}>
+          <Input name="ship_note" defaultValue={sh.note || ""} maxLength={200}
+                 placeholder={bi("التوصيل خلال ٢-٤ أيام", "Delivery in 2–4 days")} />
+        </Field>
       </div>
     </>
   );
@@ -974,7 +1061,8 @@ function ChatBtn({ botId, peer }) {
 /* --------------------------------------------------------------- الصفحة */
 export default function BotDetail() {
   const { bot, plan = {}, leads = [], orders = [], bookings = [], usage = null,
-          links = null, isNew = false, unread = 0, versions = [], ai = {}, pay = null } = P;
+          links = null, isNew = false, unread = 0, versions = [], ai = {}, pay = null,
+          catalog = null } = P;
   const cfg = bot.config || {};
   const meta = BY.templates.find((x) => x.k === bot.template) || { icon: "bot", label: bot.template };
   const isFlow = ["flow", "customer_service", "feedback", "support"].includes(bot.template);
@@ -1134,9 +1222,14 @@ export default function BotDetail() {
           </div>
 
           {bot.template === "store" && (
-            <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
-              <ProductsEditor products={cfg.products || []} />
-            </div>
+            <>
+              <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
+                <ProductsEditor products={cfg.products || []} />
+              </div>
+              <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
+                <ShippingEditor cfg={cfg} />
+              </div>
+            </>
           )}
           {bot.template === "faq" && (
             <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
@@ -1153,6 +1246,7 @@ export default function BotDetail() {
         </Form>
       </Card>
 
+      <CatalogCard bot={bot} catalog={catalog} cfg={cfg} />
       <PaymentsCard bot={bot} pay={pay} />
 
       {/* البيانات المُجمّعة — وبجانب كل عميل زرّ المحادثة */}
@@ -1161,7 +1255,16 @@ export default function BotDetail() {
                   exportUrl={`/bot/${bot.id}/export/orders`}
                   head={[t("col_customer"), t("col_phone"), t("col_address"), t("col_total"),
                          bi("الدفع", "Payment"), t("col_date"), ""]}
-                  render={(o) => [o.customer, o.phone, o.address, `${num(o.total)} ${t("egp")}`,
+                  render={(o) => [o.customer, o.phone,
+                                  <div>
+                                    <div>{o.address}</div>
+                                    {Number(o.shipping) > 0 && (
+                                      <div className="mt-0.5 text-[11.5px] text-ink-3">
+                                        🚚 {o.ship_zone || bi("توصيل", "Delivery")} — {num(o.shipping)} {t("egp")}
+                                      </div>
+                                    )}
+                                  </div>,
+                                  `${num(o.total)} ${t("egp")}`,
                                   <OrderPay s={o.pay_status} />, fmtDate(o.created_at),
                                   <ChatBtn botId={bot.id} peer={o.peer} />]} />
       )}
@@ -1189,6 +1292,77 @@ export default function BotDetail() {
                     </div>, fmtDate(l.created_at), <ChatBtn botId={bot.id} peer={l.peer} />]} />
       )}
     </>
+  );
+}
+
+/* ================================================== منتجاتي من تليجرام (إضافة)
+   صاحب المتجر يضيف منتجاته من داخل بوته: صورة مكتوب تحتها الاسم والسعر. لمن لا يفتح
+   لوحة تحكم أصلاً — وهم كثير. الإضافة لكل بوت، والكونسول لصاحب البوت وحده. */
+function CatalogCard({ bot, catalog, cfg }) {
+  if (!catalog || !catalog.eligible) return null;
+  const link = cfg.bot_username ? `https://t.me/${cfg.bot_username}` : "";
+  const Step = ({ n, children }) => (
+    <li className="flex items-start gap-2.5">
+      <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-au-violet/25 text-[11px] font-extrabold text-white">{n}</span>
+      <span>{children}</span>
+    </li>
+  );
+  return (
+    <Card className="mb-6" id="catalog">
+      <SectionTitle icon="store"
+        extra={catalog.staff
+          ? <Pill tone="on" dot>{bi("مفتوحة لحساب الإدارة", "Included for admin")}</Pill>
+          : catalog.active
+          ? <Pill tone="on" dot>{bi(`مفعّلة حتى ${fmtDate(catalog.expires)}`, `Active until ${fmtDate(catalog.expires)}`)}</Pill>
+          : <Pill tone="mute">{bi("غير مفعّلة", "Not active")}</Pill>}>
+        {bi("منتجاتي من تليجرام", "Products from Telegram")}
+      </SectionTitle>
+      <p className="mt-0 mb-4 text-[13px] leading-relaxed text-ink-2">
+        {bi("ضيف منتجاتك وانت ماشي: افتح بوتك، ابعت صورة المنتج ومكتوب تحتها اسمه وسعره — يتضاف فوراً للمتجر بصورته. وتقدر تغيّر السعر أو تمسح أي منتج بضغطة، من غير ما تفتح الموقع.",
+            "Add products on the go: open your bot, send the product photo with its name and price in the caption — it goes straight into the store with its image. Change a price or delete a product with one tap, without opening the site.")}
+      </p>
+      {!catalog.active ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl p-4
+                        bg-[linear-gradient(120deg,rgb(124_108_246/0.18),rgb(34_211_238/0.06))]">
+          <div className="min-w-0 flex-1">
+            <b className="block tnum text-[15px] text-ink">
+              {bi(`${num(catalog.price)} ج.م شهرياً لهذا البوت`, `${num(catalog.price)} EGP / month for this bot`)}
+            </b>
+            <span className="text-[12.5px] text-ink-3">
+              {bi("إضافة منفصلة عن باقتك — ومعاك كود خصم؟ اكتبه في صفحة التفعيل.",
+                  "Separate from your plan — got a coupon? Enter it on the activation page.")}
+            </span>
+          </div>
+          <Btn icon="store" href={`/bot/${bot.id}/addon/catalog`}>{bi("فعّل الإضافة", "Activate the add-on")}</Btn>
+        </div>
+      ) : (
+        <>
+          <ol className="m-0 flex list-none flex-col gap-2.5 p-0 text-[13px] leading-relaxed text-ink-2">
+            <Step n="1">{bi("افتح بوتك على تليجرام", "Open your bot on Telegram")}
+              {link && <> — <a href={link} target="_blank" rel="noopener" className="font-bold text-au-cyan">@{cfg.bot_username}</a></>}
+            </Step>
+            <Step n="2">{bi("ابعت الأمر /products", "Send the command /products")}</Step>
+            <Step n="3">{bi("ابعت صورة المنتج ومكتوب تحتها: «فستان صيفي 250»", "Send the product photo captioned: “Summer dress 250”")}</Step>
+          </ol>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            {link && <Btn sm icon="link" href={link} target="_blank" rel="noopener">{bi("افتح البوت", "Open the bot")}</Btn>}
+            {!catalog.staff && (
+              <Btn sm variant="ghost" icon="card" href={`/bot/${bot.id}/addon/catalog`}>{bi("جدّد الإضافة", "Renew the add-on")}</Btn>
+            )}
+            <span className="text-[12.5px] text-ink-3">
+              {bi(`${num(catalog.products)} منتج في المتجر دلوقتي`, `${num(catalog.products)} products in the store`)}
+            </span>
+          </div>
+          {!catalog.owner && (
+            <p className="mt-4 mb-0 rounded-xl bg-yellow-400/[0.07] p-3 text-[12.5px] leading-relaxed text-amber-200
+                          shadow-[inset_0_0_0_1px_rgb(250_204_21/0.25)]">
+              {bi("محتاج تربط حسابك بالبوت الأول (خانة «معرّف تليجرام لصاحب البوت» فوق) — من غيرها البوت مش هيعرف إنك صاحب المتجر.",
+                  "Link your Telegram account first (the owner ID field above) — without it the bot can't tell that you are the owner.")}
+            </p>
+          )}
+        </>
+      )}
+    </Card>
   );
 }
 
@@ -1321,7 +1495,8 @@ function PaymentsCard({ bot, pay }) {
 /* شراء/تجديد إضافة «تحصيل المدفوعات» — نفس مسار الدفع للمنصة: إيصال ← فحص آلي ← موافقة الأدمن.
    المبلغ يعرضه الخادم ويفرضه (لا يُرسل من هنا). */
 export function AddonPay() {
-  const { bot = {}, price = 0, expires = null, plat = {}, qr, action } = P;
+  const { bot = {}, price = 0, expires = null, plat = {}, qr, action, addon = "pay" } = P;
+  const isCatalog = addon === "catalog";
   const [copied, setCopied] = useState("");
   const active = expires && expires * 1000 > Date.now();
   const copy = (v, k) => {
@@ -1338,7 +1513,8 @@ export function AddonPay() {
   );
   return (
     <>
-      <PageHead icon="wallet" title={t("addon_pay_title")} sub={bot.name}
+      <PageHead icon={isCatalog ? "store" : "wallet"}
+        title={t(isCatalog ? "addon_catalog_title" : "addon_pay_title")} sub={bot.name}
         actions={<Btn variant="ghost" sm icon="back" href={`/bot/${bot.id}`}>{t("back")}</Btn>} />
       <Card className="mb-6 bg-[linear-gradient(120deg,rgb(124_108_246/0.18),rgb(34_211_238/0.06))]">
         <div className="text-[14px] text-ink-2">{t("pay_amount")}</div>
@@ -1346,11 +1522,32 @@ export function AddonPay() {
           {num(price)} {t("egp")}<span className="ms-2 text-[15px] font-bold text-ink-3">{t("per_month")}</span>
         </div>
         <p className="mt-3 mb-0 max-w-[640px] text-[12.5px] leading-relaxed text-ink-3">
-          {bi(`تحصيل مدفوعات عملاء «${bot.name}» لمدة 30 يوماً — العملاء يحوّلون على حساباتك أنت، والبوت يفحص الإيصالات ويرسلها لك للتأكيد.`,
-              `Collect payments from «${bot.name}» customers for 30 days — they pay into your own accounts, and the bot checks receipts and sends them to you to confirm.`)}
+          {isCatalog
+            ? bi(`إدارة منتجات «${bot.name}» من داخل تليجرام لمدة 30 يوماً — ابعت صورة المنتج ومكتوب تحتها اسمه وسعره فيتضاف فوراً، وغيّر الأسعار أو امسح أي منتج بضغطة.`,
+                 `Manage «${bot.name}» products from inside Telegram for 30 days — send the product photo with its name and price in the caption, and change prices or delete products with one tap.`)
+            : bi(`تحصيل مدفوعات عملاء «${bot.name}» لمدة 30 يوماً — العملاء يحوّلون على حساباتك أنت، والبوت يفحص الإيصالات ويرسلها لك للتأكيد.`,
+                 `Collect payments from «${bot.name}» customers for 30 days — they pay into your own accounts, and the bot checks receipts and sends them to you to confirm.`)}
           {active && " " + bi(`مفعّلة حتى ${fmtDate(expires)} — الدفع الآن يمدّها 30 يوماً من هذا التاريخ.`,
                               `Active until ${fmtDate(expires)} — paying now extends it by 30 days from that date.`)}
         </p>
+      </Card>
+
+      <Card className="mb-6">
+        <SectionTitle icon="tag">{bi("عندك كود خصم؟", "Got a coupon?")}</SectionTitle>
+        <p className="mt-0 mb-4 text-[12.5px] leading-relaxed text-ink-3">
+          {bi("لو معاك كود بيغطي الإضافة بالكامل، هتتفعّل على طول 30 يوم بلا أي دفع.",
+              "If your code covers the full price, the add-on activates immediately for 30 days with no payment.")}
+        </p>
+        <Form action={action}>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="min-w-[200px] flex-1">
+              <Field label={t("promo_code")}>
+                <Input name="promo" placeholder="CATALOG1" dir="ltr" autoComplete="off" required maxLength={40} />
+              </Field>
+            </div>
+            <Btn icon="tag" type="submit">{bi("فعّل بالكود", "Redeem")}</Btn>
+          </div>
+        </Form>
       </Card>
 
       <Card>
