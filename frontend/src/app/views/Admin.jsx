@@ -87,24 +87,127 @@ export function AdminOverview() {
 }
 
 /* ------------------------------------------------------------- المستخدمون */
-/* «ادخل وجهّز له»: بإذن العميل (من لوحته) أو بموافقة أخذها الموظف منه — ملاحظة إلزامية تُسجَّل ويُبلَّغ بها العميل */
-function AssistButton({ u, grant }) {
-  const ref = useRef(null);
-  const onSubmit = (e) => {
-    if (grant) return;
-    const note = window.prompt(bi(
-      `العميل «${u.username}» مامنحش إذن من لوحته.\nاكتب إزاي أخدت موافقته (مثلاً: وافق على واتساب النهارده الساعة 3):`,
-      `“${u.username}” hasn't granted access from their dashboard.\nWrite how you got their consent:`));
-    if (!note || note.trim().length < 8) { e.preventDefault(); return; }
-    ref.current.value = note.trim();
+/* «ادخل وجهّز له»: بإذن العميل من لوحته — أو بموافقة أخذها الموظف منه، تُختار من قائمة وتُسجَّل
+   (القناة + التفاصيل + الوقت) ويُبلَّغ بها العميل بالبريد. لا نص حر إجباري: اختيار وتأكيد. */
+const CONSENT_WAYS = [
+  { k: "wa",     icon: "chat",     ar: "وافق على واتساب",            en: "Agreed on WhatsApp" },
+  { k: "call",   icon: "phone",    ar: "وافق في مكالمة تليفون",       en: "Agreed on a phone call" },
+  { k: "ticket", icon: "ticket",   ar: "طلب في تذكرة دعم",            en: "Asked in a support ticket" },
+  { k: "social", icon: "megaphone", ar: "طلب على ماسنجر/إنستجرام",   en: "Asked on Messenger/Instagram" },
+  { k: "tg",     icon: "link",     ar: "وافق على تليجرام",            en: "Agreed on Telegram" },
+  { k: "person", icon: "user",     ar: "وافق وجهاً لوجه",             en: "Agreed in person" },
+];
+const CONSENT_NEEDS = [
+  { k: "new",    ar: "يعمل أول بوت",            en: "Create the first bot" },
+  { k: "design", ar: "يصمّم ردود البوت",         en: "Design the replies" },
+  { k: "fix",    ar: "يصلّح مشكلة في البوت",     en: "Fix a bot problem" },
+  { k: "wa",     ar: "يجهّز بوت واتساب",          en: "Set up a WhatsApp bot" },
+];
+
+function ConsentModal({ u, onClose, onGo }) {
+  const [way, setWay] = useState("");
+  const [needs, setNeeds] = useState([]);
+  const [extra, setExtra] = useState("");
+  const [sure, setSure] = useState(false);
+  const toggle = (k) => setNeeds((n) => (n.includes(k) ? n.filter((x) => x !== k) : [...n, k]));
+  const w = CONSENT_WAYS.find((x) => x.k === way);
+  const go = () => {
+    const when = new Date().toLocaleString("ar-EG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    const what = needs.map((k) => CONSENT_NEEDS.find((x) => x.k === k).ar).join("، ");
+    onGo([w.ar, what && "المطلوب: " + what, extra.trim(), when].filter(Boolean).join(" — "));
   };
+  const chip = (on) => "flex cursor-pointer items-center gap-2 rounded-xl border-0 px-3 py-2.5 text-start text-[13px] font-bold " +
+    "transition-colors " + (on ? "bg-au-violet/25 text-white shadow-[inset_0_0_0_1.5px_rgb(124_108_246/0.9)]"
+                             : "bg-white/[0.04] text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:bg-white/[0.08]");
   return (
-    <Form action={`/admin/users/${u.id}/assist`} onSubmit={onSubmit} className="mb-2">
-      <input type="hidden" name="consent_note" ref={ref} />
-      <Btn sm type="submit" variant={grant ? "primary" : "ghost"} icon="users">
-        {grant ? bi("ادخل وجهّز له", "Enter & set up") : bi("جهّز له (بموافقته)", "Set up (with consent)")}
-      </Btn>
-    </Form>
+    <div className="fixed inset-0 z-[360] grid place-items-center bg-black/65 p-4 backdrop-blur-sm" onClick={onClose}>
+      <Card className="max-h-[92vh] w-full max-w-[560px] overflow-y-auto !p-0" onClick={(e) => e.stopPropagation()}>
+        <div className="bg-[linear-gradient(120deg,rgb(124_108_246/0.25),rgb(34_211_238/0.08))] px-6 pb-4 pt-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="m-0 flex items-center gap-2 text-[18px] font-extrabold text-ink">
+                <Icon name="users" size={19} className="text-au-cyan" />
+                {bi(`تجهيز بوت «${u.username}»`, `Set up “${u.username}”'s bot`)}
+              </h3>
+              <p className="mb-0 mt-1.5 text-[12.5px] leading-relaxed text-ink-3">
+                {bi("العميل مامنحش إذن من لوحته — سجّل موافقته اللي أخدتها منه. هيوصله إيميل بكده، وكل تعديل هيتسجّل.",
+                    "The customer hasn't granted access — record the consent you got. They'll get an email and every change is logged.")}
+              </p>
+            </div>
+            <button type="button" onClick={onClose} aria-label={bi("إغلاق", "Close")}
+              className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg border-0 bg-white/[0.06] text-ink-2 hover:text-white">
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-col gap-5 px-6 py-5">
+          <div>
+            <div className="mb-2 text-[12.5px] font-extrabold text-ink">1. {bi("وافق إزاي؟", "How did they agree?")}</div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup">
+              {CONSENT_WAYS.map((x) => (
+                <button key={x.k} type="button" role="radio" aria-checked={way === x.k} onClick={() => setWay(x.k)} className={chip(way === x.k)}>
+                  <span className={"grid size-7 shrink-0 place-items-center rounded-lg " + (way === x.k ? "bg-au-violet text-white" : "bg-white/[0.06] text-au-cyan")}>
+                    <Icon name={x.icon} size={15} />
+                  </span>
+                  {bi(x.ar, x.en)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="mb-2 text-[12.5px] font-extrabold text-ink">2. {bi("محتاج إيه؟", "What do they need?")}
+              <span className="ms-1.5 font-normal text-ink-4">{bi("(اختياري — أكتر من اختيار)", "(optional — pick any)")}</span></div>
+            <div className="flex flex-wrap gap-2">
+              {CONSENT_NEEDS.map((x) => (
+                <button key={x.k} type="button" aria-pressed={needs.includes(x.k)} onClick={() => toggle(x.k)}
+                  className={"cursor-pointer rounded-full border-0 px-3.5 py-2 text-[12.5px] font-bold transition-colors " +
+                    (needs.includes(x.k) ? "bg-au-teal/20 text-au-teal shadow-[inset_0_0_0_1px_rgb(45_212_191/0.5)]"
+                                         : "bg-white/[0.05] text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]")}>
+                  {needs.includes(x.k) ? "✓ " : ""}{bi(x.ar, x.en)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="mb-2 text-[12.5px] font-extrabold text-ink">3. {bi("تفاصيل", "Details")}
+              <span className="ms-1.5 font-normal text-ink-4">{bi("(اختياري)", "(optional)")}</span></div>
+            <Input value={extra} maxLength={200} onChange={(e) => setExtra(e.target.value)}
+                   placeholder={bi("مثلاً: محل ملابس أطفال — عايزة البوت ياخد الطلبات", "e.g. kids' clothing shop — take orders")} />
+          </div>
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl bg-yellow-400/[0.07] p-3 text-[12.5px] leading-relaxed text-ink-2
+                            shadow-[inset_0_0_0_1px_rgb(250_204_21/0.25)]">
+            <input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} className="mt-0.5 size-4 accent-[#7c6cf6]" />
+            <span>{bi("أأكد إن العميل وافق فعلاً، وإني هشتغل على البوتات بس.", "I confirm the customer really agreed, and I'll only work on bots.")}</span>
+          </label>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 px-6 pb-5">
+          <span className="text-[11.5px] text-ink-4">{bi("الإذن 7 أيام · العميل يقدر يوقفه في أي وقت", "7-day access · the customer can stop it any time")}</span>
+          <div className="flex gap-2">
+            <Btn variant="ghost" type="button" onClick={onClose}>{bi("إلغاء", "Cancel")}</Btn>
+            <Btn icon="check" type="button" disabled={!way || !sure} onClick={go}>{bi("سجّل وادخل", "Record & enter")}</Btn>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function AssistButton({ u, grant }) {
+  const form = useRef(null);
+  const note = useRef(null);
+  const [open, setOpen] = useState(false);
+  const enter = (text) => { note.current.value = text; setOpen(false); form.current.submit(); };
+  return (
+    <>
+      <Form action={`/admin/users/${u.id}/assist`} className="mb-2" ref={form}>
+        <input type="hidden" name="consent_note" ref={note} />
+        <Btn sm type={grant ? "submit" : "button"} variant={grant ? "primary" : "ghost"} icon="users"
+             onClick={grant ? undefined : () => setOpen(true)}>
+          {grant ? bi("ادخل وجهّز له", "Enter & set up") : bi("جهّز له (بموافقته)", "Set up (with consent)")}
+        </Btn>
+      </Form>
+      {open && <ConsentModal u={u} onClose={() => setOpen(false)} onGo={enter} />}
+    </>
   );
 }
 
