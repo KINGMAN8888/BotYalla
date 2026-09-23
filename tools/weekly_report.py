@@ -20,7 +20,30 @@ import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+
+def load_env():
+    """يقرأ `.env` كما يقرؤه `app.py` عند الاستيراد.
+
+    ضروري: هذه الأداة لا تستورد `app`، وبلا `.env` يرى `mailer` أن SMTP
+    غير مضبوط فلا يُرسل التقرير بالبريد ويظنّ المُشغّل أن المشكلة في الخادم."""
+    path = os.path.join(ROOT, ".env")
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+    except OSError:
+        pass
+
+
+load_env()
 
 
 def main():
