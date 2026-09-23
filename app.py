@@ -3045,6 +3045,7 @@ def _report_days():
 def _report_props(rep, days):
     return {"r": rep, "days": days, "options": list(_REPORT_DAYS),
             "csvUrl": url_for("admin_report_csv", days=days),
+            "mdUrl": url_for("admin_report_md", days=days),
             "sendUrl": url_for("admin_report_send"),
             "autoUrl": url_for("admin_report_auto"),
             "convUrl": url_for("admin_conversations", days=days),
@@ -3076,6 +3077,18 @@ def admin_report_csv():
         w.writerow([_csv_cell(x) for x in row])
     return Response("\ufeff" + out.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": f"attachment; filename=botyalla_report_{days}d.csv"})
+
+
+@app.route("/admin/report.md")
+@require_roles("admin")
+def admin_report_md():
+    """التقرير كاملاً ملفَّ ماركداون — للأرشفة، ولقراءته بلا لوحة، ولتحليله بأداة أخرى."""
+    lang = session.get("lang", i18n.DEFAULT)
+    days = _report_days()
+    md = WR.to_markdown(WR.build(days, lang=lang))
+    return Response(md, mimetype="text/markdown; charset=utf-8",
+                    headers={"Content-Disposition":
+                             f"attachment; filename=botyalla_report_{days}d.md"})
 
 
 @app.route("/admin/report/send", methods=["POST"])

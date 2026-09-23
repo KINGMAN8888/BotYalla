@@ -151,7 +151,8 @@ export function WeeklyReport() {
           <div className="flex flex-wrap items-center gap-2">
             <DayTabs days={P.days} options={P.options} />
             <Btn sm variant="ghost" icon="chat" href={P.convUrl}>{t("adm_convo")}</Btn>
-            <Btn sm variant="ghost" icon="download" href={P.csvUrl}>{bi("تصدير", "Export")}</Btn>
+            <Btn sm variant="ghost" icon="download" href={P.csvUrl}>{bi("تصدير CSV", "CSV")}</Btn>
+            <Btn sm variant="ghost" icon="copy" href={P.mdUrl}>{bi("ملف ماركداون", "Markdown")}</Btn>
           </div>} />
 
       {/* ---------- الخلاصة ---------- */}

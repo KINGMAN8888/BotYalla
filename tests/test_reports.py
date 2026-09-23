@@ -386,6 +386,17 @@ class PageTests(unittest.TestCase):
         self.assertEqual(self.c.get("/admin/conversations?bot=abc").status_code, 200)
         self.assertTrue(live)
 
+    def test_markdown_export(self):
+        r = self.c.get("/admin/report.md")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("markdown", r.headers["Content-Type"])
+        self.assertIn("botyalla_report", r.headers["Content-Disposition"])
+        md = r.data.decode("utf-8")
+        for section in ("# تقرير BotYalla", "## الخلاصة",
+                        "## المال", "## سجل الخادم",
+                        "## المحادثات", "## نتائج كل بوت"):
+            self.assertIn(section, md, section)
+
     def test_csv_exports(self):
         r = self.c.get("/admin/report.csv")
         self.assertEqual(r.status_code, 200)
@@ -469,6 +480,14 @@ class DigestTests(unittest.TestCase):
         self.assertIn(WR.metric_name("signups"), flat)
         self.assertIn("كوكي اون لاين", flat)
         self.assertIn("stalled", flat)
+
+    def test_markdown_carries_the_numbers_not_a_summary(self):
+        md = WR.to_markdown(self.rep)
+        self.assertIn("كوكي اون لاين", md)          # جدول البوتات
+        self.assertIn("stalled", md)                 # المتعثّرون
+        self.assertIn("|---", md)                    # جداول ماركداون سليمة
+        self.assertNotIn("pw_hash", md)
+        self.assertNotIn("T:live", md)               # لا توكن في ملف يُرسل أو يُلصق
 
     def test_email_has_no_secrets_and_a_link(self):
         subject, html, text = mailer.weekly_report_email(self.rep, "ar")

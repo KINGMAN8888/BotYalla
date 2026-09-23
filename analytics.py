@@ -107,7 +107,10 @@ def csp_sources():
         script += ["https://analytics.tiktok.com", "https://sf16-scmcdn-va.ibytedtos.com"]
         connect += ["https://analytics.tiktok.com", "https://analytics-sg.tiktok.com"]
     if i["clarity"]:
-        script.append("https://www.clarity.ms")
+        # وسم Clarity (من www.clarity.ms) يحمّل محرّكه من **نطاق آخر**:
+        # scripts.clarity.ms/<version>/clarity.js. بدونه يُحجب المحرّك وحده فيظنّ من
+        # ضبط Clarity أنها تسجّل وهي لا تسجّل شيئاً (حدث فعلاً على الإنتاج).
+        script += ["https://www.clarity.ms", "https://scripts.clarity.ms"]
         connect += ["https://*.clarity.ms", "https://c.bing.com"]
 
     out = {}

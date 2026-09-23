@@ -380,6 +380,29 @@ def conv_summary(a, b, bot_id=None):
         return {"messages": 0, "error": type(e).__name__}
 
 
+def tg_send(chat_id, text):
+    """رسالة واحدة عبر Bot API مباشرةً — بلا `bot_manager`.
+
+    لماذا لا المدير؟ لأن التقرير يُرسل أيضاً من سطر الأوامر ومن cron خارج عملية
+    الويب، وتشغيل بوت المنصة هناك يفتح `getUpdates` ثانياً فيتصارع مع الإنتاج
+    (تليجرام يعطي 409 ويتوقف استقبال رسائل الأدمن). `sendMessage` وحدها بلا polling
+    آمنة تماماً. التوكن لا يُسجَّل ولا يُطبع (AGENTS §17)."""
+    import json as _json
+    import urllib.request
+    token = db.get_platform("platform_bot_token", "") or ""
+    if not token or not chat_id:
+        return False
+    data = _json.dumps({"chat_id": str(chat_id), "text": text,
+                        "disable_web_page_preview": True}).encode("utf-8")
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return _json.loads(r.read().decode("utf-8")).get("ok", False)
+    except Exception:                            # noqa: BLE001 — best-effort مثل البريد
+        return False
+
+
 def deliver(rep, notify=None, emails=None):
     """يوصّل التقرير: تليجرام لكل أدمن + بريد لكل حساب إدارة. `{email, telegram}`.
 
@@ -389,6 +412,7 @@ def deliver(rep, notify=None, emails=None):
     «أُرسل هذا الأسبوع»، وإلا أحرق أول تشغيل التقرير بلا أن يصل."""
     out = {"email": 0, "telegram": 0}
     text = to_text(rep)
+    notify = notify or tg_send        # بلا مدير بوتات: Bot API مباشرةً
     if notify:
         for cid in db.admin_chat_ids():
             try:
@@ -462,6 +486,200 @@ METRIC_NAMES = {
 def metric_name(key, lang="ar"):
     pair = METRIC_NAMES.get(key)
     return (pair[1] if lang == "en" else pair[0]) if pair else key
+
+
+# ---------------------------------------------------------------- ماركداون
+def _md_table(head, rows):
+    if not rows:
+        return "_لا بيانات._\n"
+    out = ["| " + " | ".join(str(h) for h in head) + " |",
+           "|" + "|".join(["---"] * len(head)) + "|"]
+    for r in rows:
+        cells = [str(x).replace("|", "/").replace("\n", " ") for x in r]
+        out.append("| " + " | ".join(cells) + " |")
+    return "\n".join(out) + "\n"
+
+
+def _when(ts):
+    return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "—"
+
+
+def to_markdown(rep):
+    """التقرير كاملاً ملفَّ ماركداون — للقراءة، وللأرشفة، ولتحليله بأداة أخرى.
+
+    لماذا ماركداون لا JSON: الملف يُقرأ بعين الإنسان أولاً، ويُلصق في محادثة تحليل
+    ثانياً. الأرقام كلها هنا كما هي في الصفحة — لا ملخّص ولا اجتزاء — وعيّنات رسائل
+    العملاء مرّت بالحجب قبل أن تصل إلى هنا."""
+    n, d, p = rep["now"], rep["delta"], rep["period"]
+    logs, conv, em = rep.get("logs") or {}, rep.get("conv") or {}, rep.get("emails") or {}
+    L = []
+    add = L.append
+
+    add(f"# تقرير BotYalla — {p['label']}")
+    add(f"\n> الفترة: **{p['label']}** ({p['days']} يوماً) · المقارنة بـ **{p['prev_label']}**"
+        f" · أُنشئ: {_when(p['generated_at'])}\n")
+
+    add("## الخلاصة\n")
+    for s in rep["summary"]:
+        add(f"- {s}")
+    add("")
+
+    add("## ما يحتاج تدخّلاً\n")
+    icon = {"risk": "🔴 عاجل", "warn": "🟠 انتبه", "good": "🟢 جيد", "info": "⚪ معلومة"}
+    if rep["findings"]:
+        for f in rep["findings"]:
+            add(f"### {icon.get(f['level'], '•')} — {f['title']}")
+            if f.get("detail"):
+                add(f"{f['detail']}")
+            if f.get("action"):
+                add(f"**الإجراء:** {f['action']}")
+            add("")
+    else:
+        add("_لا ملاحظة عاجلة في هذه الفترة._\n")
+
+    add("## المقاييس مقارنةً بالفترة السابقة\n")
+    add(_md_table(["المقياس", "الفترة", "السابقة", "التغيّر %"],
+                  [[metric_name(k), v["now"], v["prev"],
+                    "جديد" if v["change"] is None else v["change"]] for k, v in d.items()]))
+
+    add("## أين يتوقّف الناس\n")
+    f = n["funnel"]
+    add(_md_table(["المرحلة", "العدد"],
+                  [["سجّلوا", f["signup"]], ["أنشأوا بوتاً", f["bot_created"]],
+                   ["شغّلوا البوت", f["bot_live"]], ["وصلتهم أول رسالة عميل", f["first_message"]],
+                   ["اشتراك مدفوع", f["paid"]]]))
+    add(_md_table(["الحالة", "العدد"],
+                  [["سجّل ولم ينشئ بوتاً", n["signups_no_bot"]],
+                   ["أنشأ بوتاً ولم يشغّله", n["bots_never_started"]],
+                   ["شغّل بوتاً ولم تصله رسالة عميل", n["bots_started_silent"]],
+                   ["بوتات شغّالة صامتة في الفترة", n["silent_active_bots"]],
+                   ["حساب جديد لم يؤكّد بريده", n["signups_stuck_verify"]]]))
+
+    add("## التنبؤ للفترة القادمة\n")
+    add("> خطّ اتجاه (انحدار خطّي) على السلسلة اليومية — تقدير لا وعد، ومعه درجة الثقة.\n")
+    add(_md_table(["المقياس", "المتوقّع", "الفترة الماضية", "لليوم", "الثقة"],
+                  [[metric_name(k), round(v["expected"], 1), v["last_period"], v["per_day"],
+                    v["confidence"]] for k, v in (rep.get("forecast") or {}).items()]))
+    cap = rep["capacity"]
+    add(f"- سعة الخادم: **{cap['running']} / {cap['capacity']}** بوت شغّال ({cap['pct']}%)"
+        + (f" — يبلغ السقف خلال ~{cap['weeks_to_full']} أسبوعاً بمعدّل النمو الحالي."
+           if cap.get("weeks_to_full") else "."))
+    add(f"- اشتراكات تنتهي خلال 7 أيام: **{len(rep['expiring'])}** "
+        f"(قيمة تجديدها بسعر القائمة ≈ {rep['renewal_value']} ج.م): "
+        + (", ".join(x["username"] for x in rep["expiring"][:20]) or "—") + "\n")
+
+    add("## المال\n")
+    add(_md_table(["البند", "القيمة"],
+                  [["إيراد معتمد في الفترة", n["revenue"]],
+                   ["دفعات وصلت", n["pay_sent"]], ["اعتُمدت", n["pay_approved"]],
+                   ["رُفضت", n["pay_rejected"]],
+                   ["تنتظر قراراً الآن", n["pay_pending"]],
+                   ["منها متأخرة أكثر من يوم", n["pay_pending_late"]],
+                   ["شحن محفظة", n["wallet_topups"]], ["إضافات بيعت", n["addons_sold"]],
+                   ["مشتركون يدفعون الآن", n["paying_now"]],
+                   ["إيصالات مرفوضة آلياً", n["refusals"]],
+                   ["طلبات عملاء البوتات", n["orders"]],
+                   ["قيمتها", n["orders_value"]],
+                   ["إيصالات عملاء البوتات", n["bot_payments"]]]))
+    if n["refusals_by_reason"]:
+        add("أسباب رفض الإيصالات:\n")
+        add(_md_table(["السبب", "مرات"], [[r["k"], r["v"]] for r in n["refusals_by_reason"]]))
+
+    add("## الزوار ومصادرهم\n")
+    add(_md_table(["المصدر", "زوار"], [[r["k"], r["v"]] for r in n["visitor_sources"]]))
+    add(_md_table(["الصفحة", "زوار"], [[r["k"], r["v"]] for r in n["top_pages"]]))
+    add(_md_table(["مصدر التسجيل", "عدد"], [[r["k"], r["v"]] for r in n["signup_sources"]]))
+
+    add("## نتائج كل بوت\n")
+    add(_md_table(["البوت", "المالك", "النوع", "القناة", "شغّال", "وارد", "صادر", "ذكاء",
+                   "بشري", "عملاء", "جدد", "بيانات", "طلبات", "قيمة", "حجوزات", "آخر رسالة"],
+                  [[b["name"], b["owner"], b["template"], b["channel"],
+                    "نعم" if b["is_active"] else "لا", b["msgs_in"], b["msgs_out"],
+                    b["ai_replies"], b["human_replies"], b["customers"], b["new_customers"],
+                    b["leads"], b["orders"], b["orders_value"], b["bookings"],
+                    _when(b["last_in"])] for b in rep["bots"]]))
+
+    add("## من حدثت معه مشكلة\n")
+    add(_md_table(["المستخدم", "الباقة", "سجّل في", "ما حدث"],
+                  [[u.get("username", ""), u.get("plan", ""), _when(u.get("created_at")),
+                    " · ".join(f"{k}×{v}" for k, v in u["problems"].items())]
+                   for u in rep["problems"]]))
+
+    add("## البريد\n")
+    add(_md_table(["الحالة", "عدد"],
+                  [["وصلت", n["emails_sent"]], ["فشلت", n["emails_failed"]],
+                   ["تُخطّيت", n["emails_skipped"]], ["أكواد تأكيد أُرسلت", n["verify_emails"]]]))
+    if em.get("campaigns"):
+        add(_md_table(["الحملة", "النوع", "الجمهور", "وصلت", "فشلت", "تُخطّيت", "الحالة"],
+                      [[c["subject"] or f"#{c['id']}", c["kind"], c["audience"], c["sent"],
+                        c["failed"], c["skipped"], c["status"]] for c in em["campaigns"]]))
+    if em.get("failed_users"):
+        add("لم تصلهم: " + ", ".join(f"{x['username']} ({x['n']})" for x in em["failed_users"]) + "\n")
+
+    add("## سجل الخادم\n")
+    if logs.get("available"):
+        add(f"- قُرئ **{logs['lines']}** سطراً من {len(logs.get('files') or [])} ملف"
+            + (" (الأحدث فقط — السجل أكبر من سقف القراءة)" if logs.get("truncated") else "") + ".")
+        add(f"- أخطاء: **{logs['errors']}** · تحذيرات: **{logs['warnings']}**.")
+        sig = {k: v for k, v in (logs.get("signals") or {}).items() if v}
+        if sig:
+            add("- إشارات: " + " · ".join(f"`{k}`={v}" for k, v in sig.items()))
+        add("")
+        add(_md_table(["العطل", "المستوى", "مرات", "أول ظهور", "آخر ظهور"],
+                      [[(g["trace"] or g["sample"])[:120], g["level"], g["count"],
+                        _when(g["first"]), _when(g["last"])] for g in logs.get("groups") or []]))
+        if logs.get("paths"):
+            add(_md_table(["مسار انهار", "مرات"], [[x["k"], x["v"]] for x in logs["paths"]]))
+    else:
+        add(f"_السجل غير متاح ({logs.get('reason', '')}) — المسار: {logs.get('dir', '')}._\n")
+
+    add("## المحادثات\n")
+    if conv.get("messages"):
+        add(f"- **{conv['in_count']}** رسالة عميل من **{conv['customers']}** عميلاً في "
+            f"**{conv['conversations']}** محادثة · نسبة الرد **{conv['answer_rate']}%** · "
+            f"**{conv['unanswered_total']}** سؤالاً بلا إجابة · **{conv['waiting_total']}** "
+            f"محادثة تنتظر رداً الآن.")
+        if conv.get("truncated"):
+            add("- ⚠️ الرسائل أكثر من سقف التحليل، فحُلِّل الأحدث منها فقط.")
+        add("")
+        add("### عمّ يسأل العملاء\n")
+        import conv_insights as _CI
+        add(_md_table(["النيّة", "عدد", "%"],
+                      [[_CI.intent_name(i["k"]), i["v"], i["pct"]] for i in conv["intents"]]))
+        add("### أسئلة بلا إجابة (أهم قائمة في التقرير)\n")
+        add(_md_table(["السؤال", "تكرّر", "البوت"],
+                      [[q.get("sample") or q["k"], q["v"], q.get("bot_id")]
+                       for q in conv["unanswered"]]))
+        add("### عبارات تتكرر حرفياً\n")
+        add(_md_table(["العبارة", "مرات"],
+                      [[x.get("sample") or x["k"], x["v"]] for x in conv["phrases"]]))
+        add("### سرعة الرد (بالثواني)\n")
+        add(_md_table(["من يردّ", "ردود", "الوسيط", "المتوسط", "أبطأ 10%"],
+                      [[k, v["n"], v["median"], v["avg"], v["p90"]]
+                       for k, v in (conv.get("response") or {}).items() if v]))
+        s = conv.get("sentiment") or {}
+        add(f"- النبرة: سلبية **{s.get('neg', 0)}** ({s.get('neg_pct', 0)}%) · "
+            f"إيجابية {s.get('pos', 0)} · محايدة {s.get('neutral', 0)}")
+        if conv.get("negatives"):
+            add("\n### شكاوى متكررة\n")
+            add(_md_table(["الشكوى", "مرات"],
+                          [[x.get("text", ""), x.get("count", 1)] for x in conv["negatives"]]))
+        if conv.get("bots"):
+            add("### المحادثات لكل بوت\n")
+            add(_md_table(["البوت", "وارد", "صادر", "عملاء", "بلا إجابة", "نسبة الرد", "أكثر نيّة"],
+                          [[b["name"], b["msgs_in"], b["msgs_out"], b["customers"],
+                            b["unanswered"], b["answer_rate"], b["top_intent"]]
+                           for b in conv["bots"]]))
+        add("### ساعات الذروة\n")
+        add(_md_table(["الساعة", "رسائل"],
+                      [[f"{h['k']:02d}", h["v"]] for h in conv.get("hours") or [] if h["v"]]))
+    else:
+        add("_لا رسائل في هذه الفترة._\n")
+
+    add("---\n")
+    add("_وُلِّد آلياً من BotYalla. عيّنات رسائل العملاء مرّت بالحجب: لا أرقام هواتف ولا "
+        "عناوين بريد ولا توكنات في هذا الملف._")
+    return "\n".join(L) + "\n"
 
 
 _CSV_SECTIONS = ("summary", "bots", "problems", "unanswered")
