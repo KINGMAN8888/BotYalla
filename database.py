@@ -3466,3 +3466,405 @@ def set_asset_ref(asset_id, bot_id, ref, expires_at=None):
 def drop_asset_ref(asset_id, bot_id):
     with get_conn() as c:
         c.execute("DELETE FROM asset_refs WHERE asset_id=? AND bot_id=?", (asset_id, bot_id))
+
+
+# ============================================================================
+#  تقارير ورؤى — قراءة فقط (weekly_report.py · conv_insights.py)
+# ============================================================================
+# كل استعلامات التقارير هنا لا في الوحدتين، فـ«لا SQL خارج database.py» (AGENTS §1).
+# كلها **قراءة فقط** وبنافذة زمنية صريحة `[a, b)` بالثواني: لا «آخر 7 أيام» داخل
+# استعلام، حتى تُقارَن أي فترة بسابقتها بنفس الدوال بالضبط.
+# اليوم يُحسب بالتوقيت المحلي (`localtime`) مثل `page_views.day` و`_day()` —
+# خلط UTC بالمحلي يزيح صفوف الرسم يوماً كاملاً.
+
+_DAY = "strftime('%Y-%m-%d', {c}, 'unixepoch', 'localtime')"
+# دفعات الاشتراكات وحدها: لا شحن محفظة ولا شراء إضافة (كلاهما يمرّ بجدول payments).
+_SUB_PAY = f"plan <> '{WALLET_PLAN}' AND substr(plan,1,8) <> '__addon_'"
+
+
+def _win(c, q, a, b, *extra):
+    return c.execute(q, (a, b, *extra)).fetchone()[0] or 0
+
+
+def report_window(a, b):
+    """كل أرقام الفترة `[a, b)` في نداء واحد — أساس التقرير الأسبوعي.
+
+    الأسماء تصف ما يعنيه الرقم للمالك لا للجدول: `bots_never_started` بوت أُنشئ
+    ولم يُشغَّل، و`bots_started_silent` بوت شغّال لم تصله رسالة عميل واحدة —
+    وهما سؤالان مختلفان تماماً (الأول توقّف عند الإعداد، والثاني عند التسويق)."""
+    cohort = "SELECT id FROM users WHERE created_at >= ? AND created_at < ? AND role = 'user'"
+    with get_conn() as c:
+        one = lambda q, *p: c.execute(q, p).fetchone()[0] or 0
+        rows = lambda q, *p: [dict(r) for r in c.execute(q, p).fetchall()]
+        now = int(time.time())
+        out = {
+            "from": a, "to": b, "generated_at": now,
+            # ---------- الحسابات ----------
+            "signups": _win(c, "SELECT COUNT(*) FROM users WHERE created_at>=? AND created_at<? "
+                               "AND role='user'", a, b),
+            "signups_verified": _win(c, "SELECT COUNT(*) FROM users WHERE created_at>=? AND created_at<? "
+                                        "AND role='user' AND email_verified_at IS NOT NULL", a, b),
+            "signups_stuck_verify": _win(c, "SELECT COUNT(*) FROM users WHERE created_at>=? AND created_at<? "
+                                            "AND role='user' AND verify_required=1 "
+                                            "AND email_verified_at IS NULL", a, b),
+            "signups_with_phone": _win(c, "SELECT COUNT(*) FROM users WHERE created_at>=? AND created_at<? "
+                                          "AND role='user' AND phone IS NOT NULL", a, b),
+            "signups_oauth": _win(c, "SELECT COUNT(DISTINCT u.id) FROM users u JOIN user_identities i "
+                                     "ON i.user_id=u.id WHERE u.created_at>=? AND u.created_at<?", a, b),
+            "users_total": one("SELECT COUNT(*) FROM users WHERE role='user'"),
+            "users_blocked": one("SELECT COUNT(*) FROM users WHERE is_blocked=1"),
+            "signup_sources": rows(
+                "SELECT COALESCE(s.value,'direct') k, COUNT(*) v FROM users u "
+                "LEFT JOIN settings s ON s.user_id=u.id AND s.key='signup_src' "
+                "WHERE u.created_at>=? AND u.created_at<? AND u.role='user' "
+                "GROUP BY k ORDER BY v DESC LIMIT 10", a, b),
+            # ---------- البوتات ----------
+            "bots_new": _win(c, "SELECT COUNT(*) FROM bots WHERE created_at>=? AND created_at<?", a, b),
+            "bots_new_active": _win(c, "SELECT COUNT(*) FROM bots WHERE created_at>=? AND created_at<? "
+                                       "AND is_active=1", a, b),
+            "bots_total": one("SELECT COUNT(*) FROM bots"),
+            "bots_active": one("SELECT COUNT(*) FROM bots WHERE is_active=1"),
+            "bots_by_template": rows("SELECT template k, COUNT(*) v FROM bots WHERE created_at>=? "
+                                     "AND created_at<? GROUP BY k ORDER BY v DESC", a, b),
+            "bots_by_channel": rows("SELECT COALESCE(channel,'telegram') k, COUNT(*) v FROM bots "
+                                    "WHERE created_at>=? AND created_at<? GROUP BY k ORDER BY v DESC", a, b),
+            # أُنشئ في الفترة ولم يُشغَّل بعد
+            "bots_never_started": _win(c, "SELECT COUNT(*) FROM bots WHERE created_at>=? AND created_at<? "
+                                          "AND is_active=0", a, b),
+            # شغّال لكن لم تصله رسالة عميل واحدة منذ إنشائه
+            "bots_started_silent": _win(
+                c, "SELECT COUNT(*) FROM bots b WHERE b.created_at>=? AND b.created_at<? AND b.is_active=1 "
+                   "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.bot_id=b.id AND m.direction='in')", a, b),
+            # أصحاب حسابات سجّلوا في الفترة ولم ينشئوا بوتاً أصلاً
+            "signups_no_bot": _win(c, f"SELECT COUNT(*) FROM ({cohort}) x WHERE NOT EXISTS "
+                                      "(SELECT 1 FROM bots b WHERE b.owner_id=x.id)", a, b),
+            # كل البوتات الصامتة (لا رسائل واردة في الفترة) بغضّ النظر عن تاريخ إنشائها
+            "silent_active_bots": one(
+                "SELECT COUNT(*) FROM bots b WHERE b.is_active=1 AND NOT EXISTS "
+                "(SELECT 1 FROM messages m WHERE m.bot_id=b.id AND m.direction='in' "
+                " AND m.created_at>=? AND m.created_at<?)", a, b),
+            # ---------- المحادثات ----------
+            "msgs_in": _win(c, "SELECT COUNT(*) FROM messages WHERE direction='in' "
+                               "AND created_at>=? AND created_at<?", a, b),
+            "msgs_out": _win(c, "SELECT COUNT(*) FROM messages WHERE direction='out' "
+                                "AND created_at>=? AND created_at<?", a, b),
+            "msgs_by_sender": rows("SELECT sender k, COUNT(*) v FROM messages WHERE created_at>=? "
+                                   "AND created_at<? GROUP BY k ORDER BY v DESC", a, b),
+            "customers_active": _win(c, "SELECT COUNT(DISTINCT bot_id || '|' || peer) FROM messages "
+                                        "WHERE direction='in' AND created_at>=? AND created_at<?", a, b),
+            "customers_new": _win(c, "SELECT COUNT(*) FROM bot_users WHERE created_at>=? "
+                                     "AND created_at<?", a, b),
+            "opted_out": one("SELECT COUNT(*) FROM bot_users WHERE opted_out=1"),
+            "human_takeovers": one("SELECT COUNT(*) FROM conversations WHERE mode='human'"),
+            # ---------- النتائج ----------
+            "leads": _win(c, "SELECT COUNT(*) FROM leads WHERE created_at>=? AND created_at<?", a, b),
+            "orders": _win(c, "SELECT COUNT(*) FROM orders WHERE created_at>=? AND created_at<?", a, b),
+            "orders_value": round(float(_win(c, "SELECT COALESCE(SUM(total),0) FROM orders "
+                                                "WHERE created_at>=? AND created_at<?", a, b)), 2),
+            "bookings": _win(c, "SELECT COUNT(*) FROM bookings WHERE created_at>=? AND created_at<?", a, b),
+            # ---------- المال ----------
+            "pay_sent": _win(c, f"SELECT COUNT(*) FROM payments WHERE {_SUB_PAY} "
+                                "AND created_at>=? AND created_at<?", a, b),
+            "pay_approved": _win(c, f"SELECT COUNT(*) FROM payments WHERE {_SUB_PAY} AND status='approved' "
+                                    "AND decided_at>=? AND decided_at<?", a, b),
+            "pay_rejected": _win(c, f"SELECT COUNT(*) FROM payments WHERE {_SUB_PAY} AND status='rejected' "
+                                    "AND decided_at>=? AND decided_at<?", a, b),
+            "revenue": round(float(_win(c, f"SELECT COALESCE(SUM(amount),0) FROM payments WHERE {_SUB_PAY} "
+                                           "AND status='approved' AND decided_at>=? AND decided_at<?",
+                                        a, b)), 2),
+            "wallet_topups": round(float(one("SELECT COALESCE(SUM(amount),0) FROM payments WHERE plan=? "
+                                            "AND status='approved' AND decided_at>=? AND decided_at<?",
+                                            WALLET_PLAN, a, b)), 2),
+            "addons_sold": _win(c, "SELECT COUNT(*) FROM payments WHERE substr(plan,1,8)='__addon_' "
+                                   "AND status='approved' AND decided_at>=? AND decided_at<?", a, b),
+            "pay_pending": one("SELECT COUNT(*) FROM payments WHERE status='pending'"),
+            "pay_pending_late": one("SELECT COUNT(*) FROM payments WHERE status='pending' "
+                                    "AND created_at < ?", now - 86400),
+            "refusals": _win(c, "SELECT COUNT(*) FROM receipt_refusals WHERE created_at>=? "
+                                "AND created_at<?", a, b),
+            "refusals_by_reason": rows("SELECT reason k, COUNT(*) v FROM receipt_refusals "
+                                       "WHERE created_at>=? AND created_at<? GROUP BY k ORDER BY v DESC",
+                                       a, b),
+            "paying_now": one("SELECT COUNT(*) FROM subscriptions WHERE plan<>'free' AND status='active' "
+                              "AND (expires_at IS NULL OR expires_at>?)", now),
+            "subs_expired": _win(c, "SELECT COUNT(*) FROM subscriptions WHERE expires_at>=? "
+                                    "AND expires_at<?", a, b),
+            "bot_payments": _win(c, "SELECT COUNT(*) FROM bot_payments WHERE created_at>=? "
+                                    "AND created_at<?", a, b),
+            # ---------- الدعم ----------
+            "tickets_new": _win(c, "SELECT COUNT(*) FROM tickets WHERE created_at>=? AND created_at<?", a, b),
+            "tickets_by_kind": rows("SELECT kind k, COUNT(*) v FROM tickets WHERE created_at>=? "
+                                    "AND created_at<? GROUP BY k ORDER BY v DESC", a, b),
+            "tickets_open": one("SELECT COUNT(*) FROM tickets WHERE status='open'"),
+            "tickets_first_reply_avg": int(c.execute(
+                "SELECT COALESCE(AVG(m.fr - t.created_at),0) FROM tickets t JOIN "
+                "(SELECT ticket_id, MIN(created_at) fr FROM ticket_msgs WHERE sender='staff' "
+                " GROUP BY ticket_id) m ON m.ticket_id=t.id "
+                "WHERE t.created_at>=? AND t.created_at<?", (a, b)).fetchone()[0] or 0),
+            "tickets_unanswered": one(
+                "SELECT COUNT(*) FROM tickets t WHERE t.status='open' AND NOT EXISTS "
+                "(SELECT 1 FROM ticket_msgs m WHERE m.ticket_id=t.id AND m.sender='staff')"),
+            "custom_requests": _win(c, "SELECT COUNT(*) FROM bot_requests WHERE created_at>=? "
+                                       "AND created_at<?", a, b),
+            # ---------- الزوار ----------
+            "visitors": _win(c, "SELECT COUNT(DISTINCT day || '|' || vid) FROM page_views "
+                                "WHERE created_at>=? AND created_at<?", a, b),
+            "views": _win(c, "SELECT COUNT(*) FROM page_views WHERE created_at>=? AND created_at<?", a, b),
+            "pricing_visitors": _win(c, "SELECT COUNT(DISTINCT day || '|' || vid) FROM page_views "
+                                        "WHERE created_at>=? AND created_at<? AND path='/pricing'", a, b),
+            "top_pages": rows("SELECT path k, COUNT(DISTINCT day || '|' || vid) v FROM page_views "
+                              "WHERE created_at>=? AND created_at<? GROUP BY k ORDER BY v DESC LIMIT 8",
+                              a, b),
+            "visitor_sources": rows("SELECT COALESCE(src, ref, 'direct') k, "
+                                    "COUNT(DISTINCT day || '|' || vid) v FROM page_views "
+                                    "WHERE created_at>=? AND created_at<? GROUP BY k ORDER BY v DESC LIMIT 8",
+                                    a, b),
+            # ---------- البريد ----------
+            "emails_sent": _win(c, "SELECT COUNT(*) FROM email_sends WHERE status='sent' "
+                                   "AND sent_at>=? AND sent_at<?", a, b),
+            "emails_failed": _win(c, "SELECT COUNT(*) FROM email_sends WHERE status='failed' "
+                                     "AND sent_at>=? AND sent_at<?", a, b),
+            "emails_skipped": _win(c, "SELECT COUNT(*) FROM email_sends WHERE status='skipped' "
+                                      "AND sent_at>=? AND sent_at<?", a, b),
+            "verify_emails": _win(c, "SELECT COUNT(*) FROM email_verifications WHERE sent_at>=? "
+                                     "AND sent_at<?", a, b),
+            # ---------- قمع دفعة المسجّلين في الفترة ----------
+            "funnel": {
+                "signup": _win(c, f"SELECT COUNT(*) FROM ({cohort})", a, b),
+                "bot_created": _win(c, f"SELECT COUNT(DISTINCT owner_id) FROM bots "
+                                       f"WHERE owner_id IN ({cohort})", a, b),
+                "bot_live": _win(c, "SELECT COUNT(DISTINCT user_id) FROM funnel WHERE kind='bot_live' "
+                                    f"AND user_id IN ({cohort})", a, b),
+                "first_message": _win(c, f"SELECT COUNT(DISTINCT b.owner_id) FROM bots b "
+                                         f"WHERE b.owner_id IN ({cohort}) AND EXISTS "
+                                         "(SELECT 1 FROM messages m WHERE m.bot_id=b.id "
+                                         " AND m.direction='in')", a, b),
+                "paid": _win(c, f"SELECT COUNT(DISTINCT user_id) FROM payments WHERE {_SUB_PAY} "
+                                f"AND status='approved' AND user_id IN ({cohort})", a, b),
+            },
+        }
+    return out
+
+
+def report_daily(a, b):
+    """سلسلة يومية للفترة: التسجيل والبوتات والرسائل والإيراد والطلبات.
+    منها يُرسم البياني وتُحسب خطوط الاتجاه والتنبؤ."""
+    day_u = _DAY.format(c="created_at")
+    day_d = _DAY.format(c="decided_at")
+    with get_conn() as c:
+        grab = lambda q, *p: {r[0]: r[1] for r in c.execute(q, p).fetchall()}
+        signups = grab(f"SELECT {day_u} d, COUNT(*) FROM users WHERE created_at>=? AND created_at<? "
+                       "AND role='user' GROUP BY d", a, b)
+        bots = grab(f"SELECT {day_u} d, COUNT(*) FROM bots WHERE created_at>=? AND created_at<? "
+                    "GROUP BY d", a, b)
+        mi = grab(f"SELECT {day_u} d, COUNT(*) FROM messages WHERE direction='in' "
+                  "AND created_at>=? AND created_at<? GROUP BY d", a, b)
+        mo = grab(f"SELECT {day_u} d, COUNT(*) FROM messages WHERE direction='out' "
+                  "AND created_at>=? AND created_at<? GROUP BY d", a, b)
+        orders = grab(f"SELECT {day_u} d, COUNT(*) FROM orders WHERE created_at>=? AND created_at<? "
+                      "GROUP BY d", a, b)
+        rev = grab(f"SELECT {day_d} d, COALESCE(SUM(amount),0) FROM payments WHERE {_SUB_PAY} "
+                   "AND status='approved' AND decided_at>=? AND decided_at<? GROUP BY d", a, b)
+        views = grab(f"SELECT day d, COUNT(DISTINCT vid) FROM page_views WHERE created_at>=? "
+                     "AND created_at<? GROUP BY d", a, b)
+    import datetime
+    out, day = [], datetime.date.fromtimestamp(a)
+    last = datetime.date.fromtimestamp(max(a, b - 1))
+    while day <= last:
+        k = day.isoformat()
+        out.append({"day": k, "signups": signups.get(k, 0), "bots": bots.get(k, 0),
+                    "msgs_in": mi.get(k, 0), "msgs_out": mo.get(k, 0),
+                    "orders": orders.get(k, 0), "revenue": round(float(rev.get(k, 0) or 0), 2),
+                    "visitors": views.get(k, 0)})
+        day += datetime.timedelta(days=1)
+    return out
+
+
+def report_bots(a, b, limit=200):
+    """صفّ لكل بوت: حركته في الفترة ونتائجها ومن يملكه. مرتّب بالأكثر نشاطاً."""
+    win = "created_at>=? AND created_at<?"
+    q = f"""
+        SELECT b.id, b.name, b.template, COALESCE(b.channel,'telegram') channel, b.is_active,
+               b.created_at, b.owner_id, u.username owner, u.role owner_role,
+               COALESCE(s.plan,'free') plan,
+               (SELECT COUNT(*) FROM messages m WHERE m.bot_id=b.id AND m.direction='in'
+                 AND m.{win}) msgs_in,
+               (SELECT COUNT(*) FROM messages m WHERE m.bot_id=b.id AND m.direction='out'
+                 AND m.{win}) msgs_out,
+               (SELECT COUNT(*) FROM messages m WHERE m.bot_id=b.id AND m.sender='ai'
+                 AND m.{win}) ai_replies,
+               (SELECT COUNT(*) FROM messages m WHERE m.bot_id=b.id AND m.sender='human'
+                 AND m.{win}) human_replies,
+               (SELECT COUNT(DISTINCT peer) FROM messages m WHERE m.bot_id=b.id AND m.direction='in'
+                 AND m.{win}) customers,
+               (SELECT COUNT(*) FROM bot_users x WHERE x.bot_id=b.id AND x.{win}) new_customers,
+               (SELECT COUNT(*) FROM bot_users x WHERE x.bot_id=b.id AND x.opted_out=1) opted_out,
+               (SELECT COUNT(*) FROM leads l WHERE l.bot_id=b.id AND l.{win}) leads,
+               (SELECT COUNT(*) FROM orders o WHERE o.bot_id=b.id AND o.{win}) orders,
+               (SELECT COALESCE(SUM(total),0) FROM orders o WHERE o.bot_id=b.id AND o.{win}) orders_value,
+               (SELECT COUNT(*) FROM bookings k WHERE k.bot_id=b.id AND k.{win}) bookings,
+               (SELECT MAX(created_at) FROM messages m WHERE m.bot_id=b.id AND m.direction='in') last_in,
+               (SELECT COUNT(*) FROM conversations v WHERE v.bot_id=b.id AND v.mode='human') human_convos
+        FROM bots b JOIN users u ON u.id=b.owner_id
+        LEFT JOIN subscriptions s ON s.user_id=b.owner_id
+        ORDER BY msgs_in DESC, b.created_at DESC LIMIT ?
+    """
+    p = (a, b) * 10          # عدد نوافذ {win} في الاستعلام أعلاه
+    with get_conn() as c:
+        rows = [dict(r) for r in c.execute(q, (*p, int(limit))).fetchall()]
+    for r in rows:
+        r["orders_value"] = round(float(r["orders_value"] or 0), 2)
+    return rows
+
+
+def report_bot_options(limit=400):
+    """قائمة مختصرة للفلترة (رقم البوت واسمه وصاحبه) — بلا توكن ولا إعداد."""
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT b.id, b.name, u.username owner FROM bots b JOIN users u ON u.id=b.owner_id "
+            "ORDER BY b.id DESC LIMIT ?", (int(limit),)).fetchall()]
+
+
+# رموز المشاكل: المفتاح يُترجم في الواجهة، فلا نصّ عربي في القاعدة.
+PROBLEM_KINDS = ("verify_stuck", "receipt_refused", "payment_rejected", "payment_waiting",
+                 "ticket_open", "bot_never_started", "bot_silent", "no_bot", "blocked")
+
+
+def report_problem_users(a, b, limit=200):
+    """من تعثّر في الفترة ولماذا — صفٌّ لكل مستخدم بقائمة أسبابه.
+
+    «مشكلة» هنا حدث ملموس لا انطباع: إيصال مرفوض آلياً، دفعة رُفضت، دفعة تنتظرنا
+    أكثر من يوم، تذكرة دعم مفتوحة، بريد لم يُؤكَّد فالحساب محجوب، بوت أُنشئ ولم
+    يُشغَّل، بوت شغّال بلا رسالة واحدة، حساب بلا بوت أصلاً، وحساب محظور."""
+    late = int(time.time()) - 86400
+    parts = (
+        ("verify_stuck", "SELECT id user_id, 1 n FROM users WHERE created_at>=? AND created_at<? "
+                         "AND role='user' AND verify_required=1 AND email_verified_at IS NULL"),
+        ("receipt_refused", "SELECT user_id, COUNT(*) n FROM receipt_refusals "
+                            "WHERE created_at>=? AND created_at<? GROUP BY user_id"),
+        ("payment_rejected", f"SELECT user_id, COUNT(*) n FROM payments WHERE {_SUB_PAY} "
+                             "AND status='rejected' AND decided_at>=? AND decided_at<? GROUP BY user_id"),
+        ("payment_waiting", "SELECT user_id, COUNT(*) n FROM payments WHERE status='pending' "
+                            "AND created_at>=? AND created_at<? AND created_at<? GROUP BY user_id"),
+        ("ticket_open", "SELECT user_id, COUNT(*) n FROM tickets WHERE created_at>=? AND created_at<? "
+                        "AND status<>'closed' GROUP BY user_id"),
+        ("bot_never_started", "SELECT owner_id user_id, COUNT(*) n FROM bots WHERE created_at>=? "
+                              "AND created_at<? AND is_active=0 GROUP BY owner_id"),
+        ("bot_silent", "SELECT b.owner_id user_id, COUNT(*) n FROM bots b WHERE b.created_at>=? "
+                       "AND b.created_at<? AND b.is_active=1 AND NOT EXISTS "
+                       "(SELECT 1 FROM messages m WHERE m.bot_id=b.id AND m.direction='in') "
+                       "GROUP BY b.owner_id"),
+        ("no_bot", "SELECT id user_id, 1 n FROM users u WHERE created_at>=? AND created_at<? "
+                   "AND role='user' AND NOT EXISTS (SELECT 1 FROM bots b WHERE b.owner_id=u.id)"),
+        ("blocked", "SELECT id user_id, 1 n FROM users WHERE is_blocked=1 AND created_at>=? "
+                    "AND created_at<?"),
+    )
+    found = {}
+    with get_conn() as c:
+        for kind, q in parts:
+            p = (a, b, late) if kind == "payment_waiting" else (a, b)
+            for r in c.execute(q, p).fetchall():
+                u = found.setdefault(r["user_id"], {"user_id": r["user_id"], "problems": {}})
+                u["problems"][kind] = u["problems"].get(kind, 0) + (r["n"] or 1)
+        ids = list(found)
+        for i in range(0, len(ids), 400):          # SQLite: سقف المتغيّرات في الاستعلام
+            chunk = ids[i:i + 400]
+            ph = ",".join("?" * len(chunk))
+            for r in c.execute(
+                    f"SELECT u.id, u.username, u.created_at, u.email IS NOT NULL has_email, "
+                    f"COALESCE(s.plan,'free') plan FROM users u "
+                    f"LEFT JOIN subscriptions s ON s.user_id=u.id WHERE u.id IN ({ph})",
+                    chunk).fetchall():
+                found[r["id"]].update(username=r["username"], created_at=r["created_at"],
+                                      has_email=bool(r["has_email"]), plan=r["plan"])
+    out = [u for u in found.values() if u.get("username")]
+    out.sort(key=lambda u: (-len(u["problems"]), -sum(u["problems"].values())))
+    return out[:limit]
+
+
+def report_emails(a, b):
+    """نتائج البريد في الفترة: كل حملة وما وصل منها وما فشل، وإجمالي الفترة."""
+    with get_conn() as c:
+        camps = [dict(r) for r in c.execute(
+            "SELECT c.id, c.kind, c.audience, c.status, c.note, c.total, c.created_at, c.finished_at, "
+            " c.content, "
+            " (SELECT COUNT(*) FROM email_sends e WHERE e.campaign_id=c.id AND e.status='sent') sent, "
+            " (SELECT COUNT(*) FROM email_sends e WHERE e.campaign_id=c.id AND e.status='failed') failed, "
+            " (SELECT COUNT(*) FROM email_sends e WHERE e.campaign_id=c.id AND e.status='skipped') skipped "
+            "FROM email_campaigns c WHERE c.created_at>=? AND c.created_at<? "
+            "ORDER BY c.created_at DESC", (a, b)).fetchall()]
+        by_status = {r[0]: r[1] for r in c.execute(
+            "SELECT status, COUNT(*) FROM email_sends WHERE sent_at>=? AND sent_at<? "
+            "GROUP BY status", (a, b)).fetchall()}
+        failed_users = [dict(r) for r in c.execute(
+            "SELECT u.username, COUNT(*) n FROM email_sends e JOIN users u ON u.id=e.user_id "
+            "WHERE e.status='failed' AND e.sent_at>=? AND e.sent_at<? "
+            "GROUP BY u.id ORDER BY n DESC LIMIT 20", (a, b)).fetchall()]
+    for r in camps:
+        try:
+            content = json.loads(r.pop("content") or "{}")
+        except ValueError:
+            content = {}
+        r["subject"] = ((content.get("ar") or {}).get("subject") or "").strip()[:120]
+    return {"campaigns": camps, "by_status": by_status, "failed_users": failed_users}
+
+
+def report_expiring(days=7):
+    """اشتراكات تنتهي خلال الأيام القادمة — أساس تقدير التجديد وخطر الفقد."""
+    now = int(time.time())
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT u.id user_id, u.username, s.plan, s.expires_at, s.billing_cycle "
+            "FROM subscriptions s JOIN users u ON u.id=s.user_id "
+            "WHERE s.plan<>'free' AND s.status='active' AND s.expires_at IS NOT NULL "
+            "AND s.expires_at>=? AND s.expires_at<? ORDER BY s.expires_at",
+            (now, now + int(days) * 86400)).fetchall()]
+
+
+# ---------- تحليل الرسائل (conv_insights.py) ----------
+def conv_totals(a, b, bot_id=None):
+    """أعداد الرسائل في الفترة مقسّمة كما يحتاجها التحليل (مرسِل · نوع · ساعة)."""
+    where = "created_at>=? AND created_at<?" + (" AND bot_id=?" if bot_id else "")
+    p = (a, b) + ((int(bot_id),) if bot_id else ())
+    with get_conn() as c:
+        rows = lambda q: [dict(r) for r in c.execute(q, p).fetchall()]
+        one = lambda q: c.execute(q, p).fetchone()[0] or 0
+        return {
+            "total": one(f"SELECT COUNT(*) FROM messages WHERE {where}"),
+            "by_sender": rows(f"SELECT sender k, COUNT(*) v FROM messages WHERE {where} "
+                              "GROUP BY k ORDER BY v DESC"),
+            "by_kind": rows(f"SELECT kind k, COUNT(*) v FROM messages WHERE {where} "
+                            "GROUP BY k ORDER BY v DESC"),
+            "by_direction": rows(f"SELECT direction k, COUNT(*) v FROM messages WHERE {where} "
+                                 "GROUP BY k ORDER BY v DESC"),
+            "conversations": one(f"SELECT COUNT(DISTINCT bot_id || '|' || peer) FROM messages "
+                                 f"WHERE {where}"),
+            "bots": one(f"SELECT COUNT(DISTINCT bot_id) FROM messages WHERE {where}"),
+        }
+
+
+CONV_ROWS_MAX = 40000
+
+
+def conv_rows(a, b, bot_id=None, limit=CONV_ROWS_MAX):
+    """رسائل الفترة للتحليل النصّي — الأحدث أولاً وبسقف صريح.
+
+    السقف مقصود: التحليل يمرّ على كل صف في الذاكرة، وعملية الويب نفسها تشغّل
+    البوتات (`workers=1`). ما تجاوز السقف يُعلَن في التقرير بدل أن يُسقَط بصمت."""
+    where = "m.created_at>=? AND m.created_at<?" + (" AND m.bot_id=?" if bot_id else "")
+    p = (a, b) + ((int(bot_id),) if bot_id else ()) + (int(limit),)
+    with get_conn() as c:
+        rows = [dict(r) for r in c.execute(
+            f"SELECT m.bot_id, m.peer, m.direction, m.sender, m.kind, m.text, m.created_at, "
+            f"b.name bot_name FROM messages m LEFT JOIN bots b ON b.id=m.bot_id "
+            f"WHERE {where} ORDER BY m.id DESC LIMIT ?", p).fetchall()]
+    rows.reverse()                                  # التحليل يحتاجها بترتيبها الزمني
+    return rows
+
+
+def admin_emails():
+    """بريد حسابات الإدارة وحدها — إليه يُرسل التقرير الأسبوعي."""
+    with get_conn() as c:
+        return [r[0] for r in c.execute(
+            "SELECT email FROM users WHERE role='admin' AND email IS NOT NULL "
+            "AND is_blocked=0 ORDER BY id").fetchall() if r[0]]

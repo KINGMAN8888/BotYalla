@@ -251,6 +251,8 @@ T = {
  "bc_mode_direct":   {"ar": "إرسال مباشر (Direct Send)", "en": "Direct Send"},
  "adm_analytics":    {"ar": "إحصائيات الزوار", "en": "Visitor analytics"},
  "adm_emails":       {"ar": "رسائل البريد", "en": "Email campaigns"},
+ "adm_report":       {"ar": "التقرير الأسبوعي", "en": "Weekly report"},
+ "adm_convo":        {"ar": "تحليل المحادثات", "en": "Conversation insights"},
  "unsub_title":      {"ar": "اشتراك البريد", "en": "Email preferences"},
  "verify_title":     {"ar": "تأكيد البريد", "en": "Verify your email"},
  "complete_title":   {"ar": "أكمل حسابك", "en": "Complete your account"},

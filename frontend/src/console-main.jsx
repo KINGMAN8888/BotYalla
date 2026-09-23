@@ -21,6 +21,7 @@ const waTpl     = () => import("./app/views/WaTemplates.jsx");
 const wallet    = () => import("./app/views/Wallet.jsx");
 const inbox     = () => import("./app/views/Inbox.jsx");
 const media     = () => import("./app/media.jsx");
+const reports   = () => import("./app/views/Reports.jsx");
 
 /* خريطة العرض ← [وحدته، اسم المكوّن المصدَّر]. Flask يحدّد العرض عبر data-view. */
 const VIEWS = {
@@ -43,6 +44,8 @@ const VIEWS = {
   admin_tickets:  [admin, "AdminTickets"],
   admin_platform: [admin, "AdminPlatform"],
   admin_analytics: [admin, "AdminAnalytics"],
+  admin_report:    [reports, "WeeklyReport"],
+  admin_convo:     [reports, "ConvInsights"],
   admin_growth:    [admin, "AdminGrowth"],
   admin_meta:      [admin, "AdminMeta"],
   admin_emails:    [emails, "AdminEmails"],

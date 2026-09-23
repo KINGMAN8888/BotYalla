@@ -55,6 +55,8 @@ import accounts as ACC
 import urllib.request as _ureq
 import legal_content as LEGAL
 import analytics as AN
+import weekly_report as WR
+import conv_insights as CI
 import wa_signup as WAS
 from xml.sax.saxutils import escape as _xesc
 import time as _time
@@ -3024,6 +3026,135 @@ def admin_analytics():
     days = int(days) if days in ("7", "30", "90") else 30
     return react_page("admin_analytics", "adm_analytics", {"a": db.analytics_summary(days)})
 
+# ===================================================================== التقرير الأسبوعي
+# «ماذا حدث في المنصة هذا الأسبوع، وماذا يعني، وماذا أفعل به.» ثلاثة مصادر في
+# صفحة واحدة: قاعدة البيانات + سجل الخادم + تحليل المحادثات — وكلها تُبنى في
+# `weekly_report.build` (لا حساب هنا، فالمسار يبقى قابلاً للاختبار وحده).
+# للمالك وحده: أرقام العمل كلها، وأسماء العملاء المتعثّرين، وعيّنات رسائل.
+_REPORT_DAYS = (7, 14, 30)
+
+
+def _report_days():
+    try:
+        d = int(request.args.get("days", 7))
+    except (TypeError, ValueError):
+        d = 7
+    return d if d in _REPORT_DAYS else 7
+
+
+def _report_props(rep, days):
+    return {"r": rep, "days": days, "options": list(_REPORT_DAYS),
+            "csvUrl": url_for("admin_report_csv", days=days),
+            "sendUrl": url_for("admin_report_send"),
+            "autoUrl": url_for("admin_report_auto"),
+            "convUrl": url_for("admin_conversations", days=days),
+            "usersUrl": url_for("admin_users"),
+            "auto": db.get_platform("weekly_report", "1") == "1",
+            "smtp": mailer.configured(), "emails": len(db.admin_emails()),
+            "lastSent": int(db.get_platform("weekly_report_at", "0") or 0)}
+
+
+@app.route("/admin/report")
+@require_roles("admin")
+def admin_report():
+    """التقرير الأسبوعي الكامل."""
+    lang = session.get("lang", i18n.DEFAULT)
+    days = _report_days()
+    return react_page("admin_report", "adm_report", _report_props(WR.build(days, lang=lang), days))
+
+
+@app.route("/admin/report.csv")
+@require_roles("admin")
+def admin_report_csv():
+    """نفس التقرير ملفاً: المقاييس ومقارنتها · كل بوت · المتعثّرون · الأسئلة بلا إجابة."""
+    lang = session.get("lang", i18n.DEFAULT)
+    days = _report_days()
+    rep = WR.build(days, lang=lang)
+    out = io.StringIO()
+    w = csv.writer(out)
+    for row in WR.csv_rows(rep):
+        w.writerow([_csv_cell(x) for x in row])
+    return Response("\ufeff" + out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename=botyalla_report_{days}d.csv"})
+
+
+@app.route("/admin/report/send", methods=["POST"])
+@require_roles("admin")
+def admin_report_send():
+    """إرسال التقرير الآن: بريد كل أدمن + تليجرام. نفس ما ترسله الحلقة الأسبوعية."""
+    rep = WR.build(_report_days(), lang=session.get("lang", i18n.DEFAULT))
+    res = WR.deliver(rep, notify=manager.notify_text, emails=db.admin_emails())
+    if res["email"] or res["telegram"]:
+        db.set_platform("weekly_report_at", str(int(_time.time())))
+        flash(f"اتبعت التقرير: {res['email']} بريد · {res['telegram']} تليجرام", "ok")
+    else:
+        flash("لم يُرسل التقرير — اضبط SMTP أو شغّل بوت المنصة واربط معرّف الأدمن.", "error")
+    return redirect(url_for("admin_report", days=_report_days()))
+
+
+@app.route("/admin/report/auto", methods=["POST"])
+@require_roles("admin")
+def admin_report_auto():
+    """تشغيل/إيقاف الإرسال الأسبوعي التلقائي (حلقة `bot_manager`)."""
+    db.set_platform("weekly_report", "1" if request.form.get("on") == "1" else "0")
+    flash("اتحفظ", "ok")
+    return redirect(url_for("admin_report"))
+
+
+# ===================================================================== تحليل المحادثات
+# كل رسالة بين العميل والبوت والذكاء الاصطناعي وصاحب النشاط ورسائل النظام:
+# عمّ يسأل الناس، ما الذي لم يُجَب، كم يستغرق الرد، ومن ينتظر الآن.
+@app.route("/admin/conversations")
+@require_roles("admin")
+def admin_conversations():
+    lang = session.get("lang", i18n.DEFAULT)
+    days = _report_days()
+    bot_id = request.args.get("bot", "").strip()
+    bot_id = int(bot_id) if bot_id.isdigit() else 0
+    a, b = WR.period(days)
+    rep = WR.conv_summary(a, b, bot_id or None)
+    return react_page("admin_convo", "adm_convo", {
+        "c": rep, "days": days, "options": list(_REPORT_DAYS), "botId": bot_id,
+        "bots": db.report_bot_options(), "label": WR.label(a, b),
+        "totals": db.conv_totals(a, b, bot_id or None),
+        "head": CI.headline(rep, lang),
+        "csvUrl": url_for("admin_conversations_csv", days=days, bot=bot_id or None),
+        "reportUrl": url_for("admin_report", days=days)})
+
+
+@app.route("/admin/conversations.csv")
+@require_roles("admin")
+def admin_conversations_csv():
+    days = _report_days()
+    bot_id = request.args.get("bot", "").strip()
+    bot_id = int(bot_id) if bot_id.isdigit() else 0
+    a, b = WR.period(days)
+    rep = WR.conv_summary(a, b, bot_id or None)
+    out = io.StringIO()
+    w = csv.writer(out)
+    put = lambda cells: w.writerow([_csv_cell(x) for x in cells])
+    put(["تحليل المحادثات", WR.label(a, b)])
+    put([])
+    put(["سؤال بلا إجابة", "مرات", "البوت"])
+    for q in rep.get("unanswered", []):
+        put([q.get("sample") or q["k"], q["v"], q.get("bot_id") or ""])
+    put([])
+    put(["نيّة", "عدد", "%"])
+    for i in rep.get("intents", []):
+        put([i["k"], i["v"], i["pct"]])
+    put([])
+    put(["عبارة متكررة", "مرات"])
+    for p in rep.get("phrases", []):
+        put([p.get("sample") or p["k"], p["v"]])
+    put([])
+    put(["البوت", "وارد", "صادر", "عملاء", "بلا إجابة", "نسبة الرد %", "أكثر نيّة"])
+    for r in rep.get("bots", []):
+        put([r["name"], r["msgs_in"], r["msgs_out"], r["customers"], r["unanswered"],
+             r["answer_rate"], r["top_intent"]])
+    return Response("\ufeff" + out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=botyalla_conversations.csv"})
+
+
 # ---------- رسائل البريد: حملات الأدمن (email_campaigns.py) ----------
 _EMAIL_PARTS = (("subject", 150), ("preheader", 150), ("title", 150), ("body", 6000), ("cta", 40))
 
@@ -4775,6 +4906,8 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
                 {"k": "admin_promos",     "u": url_for("admin_promos"),     "i": "bolt",     "l": i18n.t("adm_promos", lang)},
                 {"k": "admin_affiliates", "u": url_for("admin_affiliates"), "i": "users",    "l": i18n.t("adm_affiliates", lang)},
                 {"k": "settings",         "u": url_for("settings"),         "i": "sparkles", "l": i18n.t("nav_ai", lang)},
+                {"k": "admin_report",     "u": url_for("admin_report"),     "i": "chart",    "l": i18n.t("adm_report", lang)},
+                {"k": "admin_convo",      "u": url_for("admin_conversations"), "i": "chat",  "l": i18n.t("adm_convo", lang)},
                 {"k": "admin_analytics",  "u": url_for("admin_analytics"),  "i": "chart",    "l": i18n.t("adm_analytics", lang)},
                 {"k": "admin_growth",     "u": url_for("admin_growth"),     "i": "megaphone", "l": i18n.t("adm_growth", lang)},
                 {"k": "admin_meta",       "u": url_for("admin_meta"),       "i": "chat",     "l": i18n.t("adm_meta", lang)},

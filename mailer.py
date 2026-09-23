@@ -716,6 +716,71 @@ def expiry_email(kind, plan_name, date, lang="ar", link=None):
     return subject, html, text
 
 
+def weekly_report_email(rep, lang="ar"):
+    """(subject, html, text) لتقرير المنصة الأسبوعي — لصاحب المنصة وحده.
+
+    إشعار داخلي لا حملة: بلا رابط إلغاء اشتراك (ليس بريداً تسويقياً)، وكل نصّ
+    يمرّ بـ`escape` لأن فيه أسماء مستخدمين وعيّنات رسائل عملاء."""
+    en = lang == "en"
+    p = rep.get("period", {})
+    d = rep.get("delta", {})
+    n = rep.get("now", {})
+    title = "تقرير الأسبوع" if not en else "Your weekly report"
+    subject = (f"BotYalla weekly report · {p.get('label', '')}" if en else
+               f"تقرير BotYalla الأسبوعي · {p.get('label', '')}")
+    intro = ("هذا ما حدث في المنصة خلال الفترة، ومقارنته بالفترة السابقة، وما يحتاج تدخّلك."
+             if not en else
+             "Here is what happened on the platform, how it compares with the period before, "
+             "and what needs you.")
+
+    def row(key, ar, e):
+        v = d.get(key) or {}
+        c = v.get("change")
+        arrow = "" if c is None else f"  ({'+' if c > 0 else ''}{c}%)"
+        return ((e if en else ar), f"{v.get('now', 0)}{arrow}")
+
+    rows = [row("signups", "تسجيلات جديدة", "New signups"),
+            row("bots_new", "بوتات جديدة", "New bots"),
+            row("msgs_in", "رسائل عملاء", "Customer messages"),
+            row("orders", "طلبات", "Orders"),
+            row("revenue", "إيراد معتمد (ج.م)", "Approved revenue (EGP)"),
+            (("Payments awaiting you" if en else "دفعات تنتظر قرارك"), n.get("pay_pending", 0)),
+            (("Created but never started" if en else "بوتات أُنشئت ولم تُشغَّل"),
+             n.get("bots_never_started", 0)),
+            (("Live bots with no customer" if en else "بوتات شغّالة بلا عميل"),
+             n.get("bots_started_silent", 0))]
+
+    body = _p(escape(intro)) + _facts(rows, lang)
+
+    tone = {"risk": "warn", "warn": "warn", "good": "ok", "info": "info"}
+    for f in (rep.get("findings") or [])[:5]:
+        html = (f'<b style="color:{INK};">{escape(f["title"])}</b>'
+                + (f'<br>{escape(f["detail"])}' if f.get("detail") else "")
+                + (f'<br>← {escape(f["action"])}' if f.get("action") else ""))
+        body += _note(html, lang, tone.get(f["level"], "info"))
+
+    conv = rep.get("conv") or {}
+    if conv.get("unanswered"):
+        head = ("Top unanswered customer questions" if en else "أكثر أسئلة العملاء بلا إجابة")
+        items = "".join(f'<li style="margin:4px 0;">({q["v"]}×) {escape(q.get("sample") or q["k"])}</li>'
+                        for q in conv["unanswered"][:5])
+        body += (f'<p style="margin:22px 0 6px;color:{INK};font-size:15px;font-weight:800;">'
+                 f'{escape(head)}</p>'
+                 f'<ul style="margin:0;padding-inline-start:20px;color:{BODY};font-size:13.5px;'
+                 f'line-height:1.9;">{items}</ul>')
+
+    link = site_url("/admin/report")
+    if link:
+        body += _button(link, "افتح التقرير كاملاً" if not en else "Open the full report")
+
+    html = _layout(lang, title, body, badge="service", preheader=subject)
+    text = (f"{intro}\n\n" + "\n".join(f"{k}: {v}" for k, v in rows)
+            + "\n\n" + "\n".join(f"- {f['title']} -> {f.get('action', '')}"
+                                  for f in (rep.get("findings") or [])[:5])
+            + (f"\n\n{link}" if link else ""))
+    return subject, html, text
+
+
 # ------------------------------------------------------------ حملات البريد
 _URL_RE = re.compile(r"https://[^\s<>\"'()\[\]]+")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")

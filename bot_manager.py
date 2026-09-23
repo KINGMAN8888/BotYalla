@@ -809,6 +809,28 @@ class BotManager:
         for b in db.all_active_bots():
             ok, msg = self.start_bot(b["id"]); log.info("resume %s: %s", b["id"], msg)
 
+    # ---- التقرير الأسبوعي لصاحب المنصة ----
+    def _weekly_report_cycle(self):
+        """تقرير المنصة الأسبوعي: مرة كل سبعة أيام، من نفس حلقة التذكيرات.
+
+        الطابع الزمني يُكتب **بعد** وصول رسالة فعلاً — لو كان بوت المنصة متوقفاً
+        وSMTP غير مضبوط لم يُسجَّل شيء وأُعيدت المحاولة في الدورة التالية، تماماً
+        كتذكيرات الاشتراك. وأول تشغيل بعد التحديث يرسل تقريراً فوراً (وهو
+        المقصود: أول صورة كاملة للمنصة)، ثم يلتزم الأسبوع."""
+        if db.get_platform("weekly_report", "1") != "1":
+            return
+        last = int(db.get_platform("weekly_report_at", "0") or 0)
+        now = int(_time.time())
+        if now - last < 7 * 86400 - 3600:        # هامش ساعة: لا ينزلق الموعد يوماً كل أسابيع
+            return
+        import weekly_report as WR
+        rep = WR.build(7, lang="ar")
+        res = WR.deliver(rep, notify=self.notify_text)
+        if res["email"] or res["telegram"]:
+            db.set_platform("weekly_report_at", str(now))
+            log.info("weekly report delivered: %s email, %s telegram",
+                     res["email"], res["telegram"])
+
     # ---- تذكيرات انتهاء الاشتراك ----
     def _reminder_loop(self):
         """حلقة خلفية تعمل كل 6 ساعات لإرسال تذكيرات الاشتراك."""
@@ -819,6 +841,10 @@ class BotManager:
                 self._send_reminder_cycle()
             except Exception:
                 log.exception("reminder cycle error")
+            try:
+                self._weekly_report_cycle()
+            except Exception:
+                log.exception("weekly report cycle error")
             try:
                 n = db.purge_stale_chat_state()
                 if n:
