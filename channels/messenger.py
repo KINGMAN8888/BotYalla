@@ -147,7 +147,15 @@ class MessengerChannel(Channel):
                 # المحادثة كانت مع صندوق الصفحة (Business Suite) بعد تسليمها لإنسان — استرجعناها
                 r = await c.post(f"{GRAPH}/me/messages", json=body, params={"access_token": self.token})
             if r.status_code >= 400:
-                log.error("Messenger API %s (%s): %s", r.status_code, self.platform, r.text[:400])
+                # (#551/#10/#100-2018001) العميل نفسه غير قابل للمراسلة الآن: حذف المحادثة
+                # أو حظر الصفحة أو انتهت نافذة الـ24 ساعة. ليست عطلاً في المنصة، وتسجيلها
+                # خطأً يدفن الأعطال الحقيقية — تحذير سطر واحد يكفي.
+                if self._unreachable(r):
+                    log.warning("Messenger (%s): recipient not reachable now (#551/window)",
+                                self.platform)
+                else:
+                    log.error("Messenger API %s (%s): %s", r.status_code, self.platform,
+                              r.text[:400])
                 self.last_error = r.text[:300]
                 return None
             res = r.json() or {}
@@ -159,6 +167,17 @@ class MessengerChannel(Channel):
         except Exception:
             log.exception("Messenger API call failed")
             return None
+
+    @staticmethod
+    def _unreachable(r):
+        """المستلم غير قابل للمراسلة الآن — لا عطل عندنا."""
+        try:
+            e = (r.json() or {}).get("error") or {}
+        except Exception:                                    # noqa: BLE001
+            return False
+        return (e.get("code") in (551, 10, 2018001)
+                or e.get("error_subcode") in (2018001, 2018108)
+                or "not available" in str(e.get("message", "")).lower())
 
     @staticmethod
     def _token_error(r):

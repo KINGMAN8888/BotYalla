@@ -10,7 +10,13 @@ from .base import Channel
 
 # معرّف العميل الخاص بالنشاط (BSUID) لمن فعّل «اسم المستخدم» وأخفى رقمه على واتساب:
 # كود الدولة ثم نقطة ثم حتى 128 حرفاً/رقماً — مثل EG.13491208655302741918. Meta تحذف `from`
-# تماماً في هذه الحالة وترسل `from_user_id` دائماً، والرد يكون بحقل `recipient` لا `to`.
+# تماماً في هذه الحالة وترسل `from_user_id`.
+#
+# ⚠️ الرد يُرسل في حقل `to` كأي عميل. جُرِّب `recipient` أولاً (كما فهمناه من التوثيق)
+# فرفضته Meta في الإنتاج 21 مرة بـ«The parameter to is required» — أي أن كل رسالة إلى
+# عميل مخفي الرقم كانت تضيع بصمت: محادثته تظهر في الوارد ولا يصله ردّ أبداً.
+# لذلك: `to` دائماً، ومع رفضٍ يذكر `recipient` صراحةً تُعاد المحاولة مرة واحدة بالحقل
+# الآخر (بلا خصم ثانٍ من العدّاد) — فأي تغيير مستقبلي في Meta لا يُسكت البوت من جديد.
 BSUID_RE = re.compile(r"^[A-Z]{2}\.[A-Za-z0-9]{1,128}$")
 
 
@@ -109,15 +115,28 @@ class WhatsAppChannel(Channel):
         self.token = token
         self.on_send = on_send
 
+    async def _raw(self, payload):
+        """طلب واحد بلا حجز رصيد — تستعمله `_post` وإعادة المحاولة معاً."""
+        c = await _http()
+        return await c.post(f"{META_API}/{self.phone_id}/messages", json=payload,
+                            headers={"Authorization": f"Bearer {self.token}",
+                                     "Content-Type": "application/json"})
+
     async def _post(self, payload):
         if self.on_send is not None and (await self.on_send()) is False:
             log.warning("send blocked for phone_id %s: monthly limit reached", self.phone_id)
             return None
         try:
-            c = await _http()
-            r = await c.post(f"{META_API}/{self.phone_id}/messages", json=payload,
-                             headers={"Authorization": f"Bearer {self.token}",
-                                      "Content-Type": "application/json"})
+            r = await self._raw(payload)
+            if r.status_code >= 400 and is_bsuid(payload.get("to", "")) and \
+                    "recipient" in (r.text or "").lower():
+                # Meta تطلب الحقل الآخر لهذا النوع من المعرّفات: محاولة واحدة بلا خصم ثانٍ
+                alt = dict(payload)
+                alt["recipient"] = alt.pop("to")
+                r2 = await self._raw(alt)
+                if r2.status_code < 400:
+                    log.warning("WhatsApp: hidden-number recipient accepted via `recipient`")
+                    return r2.json()
             if r.status_code >= 400:
                 # نص خطأ Meta هو الوحيد الذي يفسّر سبب الرفض (نافذة، قالب، توكن)
                 log.error("WhatsApp API %s: %s", r.status_code, r.text[:400])
@@ -151,10 +170,9 @@ class WhatsAppChannel(Channel):
         return peer[3:] if peer.startswith("wa:") else peer
 
     def _base(self, peer, kind):
-        to = self._to(peer)
-        # العميل برقم مخفي (BSUID): Meta تقبله في `recipient` فقط
+        # `to` لكل العملاء — بمن فيهم مخفيو الرقم (راجع التعليق أعلى الملف)
         return {"messaging_product": "whatsapp", "recipient_type": "individual",
-                ("recipient" if is_bsuid(to) else "to"): to, "type": kind}
+                "to": self._to(peer), "type": kind}
 
     async def send_text(self, peer, text):
         p = self._base(peer, "text")

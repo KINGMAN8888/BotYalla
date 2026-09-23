@@ -62,15 +62,28 @@ _QUESTION = re.compile(r"[؟?]|^(?:ايه|ازاي|امتي|فين|كام|بكا
 INTENTS = (
     ("price",      "سعر اسعار بكام كام تمن ثمن التمن كم السعر price cost how much"),
     ("shipping",   "شحن توصيل التوصيل الشحن دليفري مصاريف محافظه محافظات شيبينج shipping delivery"),
-    ("stock",      "متوفر متاح موجود عندكم فيه مقاس مقاسات لون الوان stock available size color"),
+    ("stock",      "متوفر متاح موجود عندكم مقاس مقاسات لون الوان stock available size color"),
     # «عايز» وحدها ليست طلب شراء — «عايز اتكلم مع موظف» طلب إنسان لا أوردر.
     ("order",      "اطلب طلب اوردر اشتري شراء احجزلي order buy"),
     ("order_status", "طلبي اوردري وصل الاوردر فين طلبي حالة الطلب tracking where is my order"),
     ("payment",    "دفع ادفع فودافون انستاباي تحويل فيزا كاش الدفع payment pay instapay"),
     ("booking",    "ميعاد معاد موعد حجز احجز مواعيد appointment booking slot"),
-    ("hours",      "مواعيد العمل فاتح مفتوح بتقفلوا بتفتحوا العنوان فرع فروع مكانكم location address hours open"),
+    ("hours",      "مواعيد العمل فاتح مفتوح بتقفلوا بتفتحوا العنوان فرع فروع مكانكم موقعك "
+                   "موقعكم location address hours open"),
     ("complaint",  "شكوي مشكله مشكلة زعلان متضايق وحش زفت سيئ تاخير اتاخر مردتوش نصب استرجاع ارجاع refund complaint problem broken late"),
     ("human",      "موظف حد يكلمني بشري خدمه العملاء مسؤول اتكلم مع حد agent human support representative"),
+    # ↓ نيّات أضافها تقرير الإنتاج: 74.5% من الرسائل كانت «أخرى»، وأكثرها في الحقيقة
+    #   عن المنصة نفسها لا عن متجر. و«محتار» أهمها: من يقول «مش فاهم» لا يشترك أبداً.
+    ("confused",   "فاهم فاهمه افهم مفهوم اشرح اشرحلي وضح وضحلي محتار تايه عارف عارفه "
+                   "اعرف قادر صعب معقد confused stuck lost"),
+    ("earn",       "اكسب كسب ربح ارباح فلوس دخل عموله عمولة افلوس مكسب earn profit commission"),
+    ("signup",     "سجلت التسجيل اسجل حسابي الكود كود تفعيل التفعيل تاكيد ايميلي "
+                   "الايميل الباسورد كلمه السر signup register verification code"),
+    ("subscribe",  "اشتراك الاشتراك باقه باقات الباقه الباقات مجاني مجانا تجربه تجديد "
+                   "ترقيه plan plans subscription free trial"),
+    ("whatsapp",   "واتساب واتس الواتساب whatsapp"),
+    ("howto",      "ازاي ازى طريقه الطريقه خطوات ابدا البدايه انشاء انشئ اعمل شرح "
+                   "فيديو دليل تشغيل how start setup guide"),
     ("greeting",   "السلام عليكم صباح مساء اهلا هاي هلا مرحبا hi hello good morning"),
     ("thanks",     "شكرا متشكر تسلم ميرسي تمام ممتاز رائع جميل thanks thank you great"),
 )
@@ -84,6 +97,11 @@ INTENT_NAMES = {
     "order_status": ("أين طلبي", "order status"), "payment": ("الدفع", "payment"),
     "booking": ("حجز موعد", "booking"), "hours": ("المواعيد والعنوان", "hours & address"),
     "complaint": ("شكوى", "complaints"), "human": ("طلب موظف", "asking for a human"),
+    "confused": ("محتار — «مش فاهم»", "confused — “I don't get it”"),
+    "earn": ("سؤال عن الربح", "asking about earning money"),
+    "signup": ("التسجيل والتفعيل", "signup & verification"),
+    "subscribe": ("الباقات والاشتراك", "plans & subscription"),
+    "whatsapp": ("واتساب", "WhatsApp"), "howto": ("كيف أبدأ", "how do I start"),
     "greeting": ("تحية", "greetings"), "thanks": ("شكر", "thanks"),
     "other": ("أخرى", "other"),
 }

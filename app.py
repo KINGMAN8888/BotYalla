@@ -104,6 +104,23 @@ log = logging.getLogger("botyalla")
 LOG_DIR = os.environ.get(
     "BOTYALLA_LOGS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs"))
 
+class _TransientNet(logging.Filter):
+    """يخفض انقطاعات الشبكة العابرة من ERROR إلى WARNING.
+
+    ليست إخفاءً: السطر يبقى كاملاً بأثره، لكنه يخرج من عدّاد الأخطاء الذي يقرؤه
+    التقرير الأسبوعي — وإلا صار «225 خطأ» رقماً بلا معنى، نصفه انقطاعات يعيد
+    python-telegram-bot المحاولة بعدها تلقائياً بلا أثر على أي مستخدم."""
+    PATTERNS = ("NetworkError", "ReadError", "Bad Gateway", "TimedOut", "Timed out",
+                "ConnectError", "ReadTimeout", "RemoteProtocolError", "ServerDisconnected")
+
+    def filter(self, record):
+        if record.levelno >= logging.ERROR:
+            text = f"{record.getMessage()} {record.exc_info[1] if record.exc_info else ''}"
+            if any(p in text for p in self.PATTERNS):
+                record.levelno, record.levelname = logging.WARNING, "WARNING"
+        return True
+
+
 def setup_logging():
     """INFO إلى stderr (يلتقطه journald) وإلى ملف دوّار `logs/botyalla.log` (10MB × 5).
     تُستدعى من `bootstrap()` وحده لا عند الاستيراد — حتى لا تكتب الاختبارات في
@@ -128,6 +145,10 @@ def setup_logging():
     # Flask يضيف معالج stderr خاصاً به؛ مع معالج root يتكرر كل سطر مرتين.
     from flask.logging import default_handler
     app.logger.removeHandler(default_handler)
+    # انقطاعات تليجرام العابرة: المكتبة تعيد المحاولة وحدها، فهي حدث تشغيلي لا عطل.
+    for name in ("telegram.ext.Updater", "telegram.ext._updater", "telegram.ext.Application",
+                 "telegram.ext._application"):
+        logging.getLogger(name).addFilter(_TransientNet())
     # ⚠️ httpx يسجّل كل طلب بمستوى INFO والرابط فيه **توكن البوت**
     # (api.telegram.org/bot<TOKEN>/getUpdates) كل بضع ثوانٍ لكل بوت — سرّ في
     # ملف السجل وملف يتضخّم. لا يُسجَّل منه إلا التحذيرات.

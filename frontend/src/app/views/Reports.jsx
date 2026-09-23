@@ -26,6 +26,10 @@ const INTENT = {
   order: ["طلب شراء", "Ordering"], order_status: ["أين طلبي", "Order status"],
   payment: ["الدفع", "Payment"], booking: ["حجز موعد", "Booking"], hours: ["المواعيد والعنوان", "Hours & address"],
   complaint: ["شكوى", "Complaint"], human: ["يريد موظفاً", "Wants a human"],
+  confused: ["محتار — «مش فاهم»", "Confused"], earn: ["سؤال عن الربح", "Earning money"],
+  signup: ["التسجيل والتفعيل", "Signup & verification"],
+  subscribe: ["الباقات والاشتراك", "Plans & subscription"],
+  whatsapp: ["واتساب", "WhatsApp"], howto: ["كيف أبدأ", "How do I start"],
   greeting: ["تحية", "Greeting"], thanks: ["شكر", "Thanks"], other: ["أخرى", "Other"],
 };
 const intentLabel = (k) => (INTENT[k] ? bi(INTENT[k][0], INTENT[k][1]) : k || "—");

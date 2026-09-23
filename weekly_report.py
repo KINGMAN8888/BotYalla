@@ -221,6 +221,33 @@ def findings(rep, lang="ar"):
               f"{conv.get('unanswered_total', 0)} questions went unanswered — all listed below."),
             T("حوّل أكثرها تكراراً إلى ردود جاهزة أو خطوات في الفلو.",
               "Turn the most repeated ones into canned answers or flow steps."), ans)
+    intents = {i["k"]: i for i in (conv.get("intents") or [])}
+    lost = intents.get("confused")
+    if lost and lost["pct"] >= 5:
+        add("risk" if lost["pct"] >= 10 else "warn", "confused",
+            T(f"{lost['pct']}% من رسائل العملاء تقول «مش فاهم» ({lost['v']} رسالة)",
+              f"{lost['pct']}% of customer messages say “I don't understand” ({lost['v']})"),
+            T("من لا يفهم لا يشترك ولا يشتري — هذه أعلى نقطة تسريب في المنصة كلها.",
+              "People who don't understand never subscribe — this is the biggest leak there is."),
+            T("افتح «تحليل المحادثات» واقرأ العبارات نفسها، ثم حوّل أكثرها تكراراً إلى "
+              "ردّ جاهز أو خطوة في الفلو أو فيديو من دقيقة.",
+              "Open Conversation insights, read the actual phrasing, and turn the most "
+              "repeated ones into a canned answer, a flow step, or a one-minute video."),
+            lost["pct"])
+    money = intents.get("earn")
+    if money and money["pct"] >= 5:
+        add("warn", "earn_expectation",
+            T(f"{money['pct']}% من الرسائل تسأل «هكسب منها إزاي؟»",
+              f"{money['pct']}% of messages ask “how do I make money from this?”"),
+            T("الزائر فهم أن المنصة فرصة دخل لا أداة لنشاطه — غالباً من نصّ إعلان أو "
+              "منشور يَعِد بالربح. هؤلاء لا يتحوّلون إلى مشتركين ويستهلكون وقت الدعم.",
+              "They read the platform as an income opportunity, not a tool for their business — "
+              "usually because of ad copy. They rarely convert and they consume support time."),
+            T("صحّح نصّ الإعلان ليقول «بوت لنشاطك»، أو حوّلهم لبرنامج الشركاء (الأفيليت) "
+              "برسالة جاهزة بدل الشرح اليدوي كل مرة.",
+              "Fix the ad copy to say “a bot for your business”, or route them to the affiliate "
+              "programme with a canned reply instead of explaining by hand every time."),
+            money["pct"])
     if conv.get("waiting_total"):
         add("warn", "waiting",
             T(f"{conv['waiting_total']} محادثة آخر رسالة فيها من العميل",

@@ -37,11 +37,24 @@ class R:
     text = ""
 
 
+class Err400:
+    """رفض Meta الحقيقي حين يكون الحقل خاطئاً."""
+    status_code = 400
+    text = '{"error":{"message":"(#100) The parameter recipient is required.","code":100}}'
+    def json(self): return {"error": {"message": "The parameter recipient is required.",
+                                      "code": 100}}
+
+
 class FakeHttp:
     sent = []
     is_closed = False
+    # ردّ لكل طلب بالترتيب؛ الفارغ يعني 200
+    replies = []
+
     async def post(self, url, json=None, headers=None, **k):
         FakeHttp.sent.append(json)
+        if FakeHttp.replies:
+            return FakeHttp.replies.pop(0)
         return R()
 
 
@@ -79,20 +92,48 @@ class NormalizeTests(unittest.TestCase):
 class SendTests(unittest.TestCase):
     def setUp(self):
         FakeHttp.sent = []
+        FakeHttp.replies = []
         self._c = W._client
         W._client = FakeHttp()
 
     def tearDown(self):
         W._client = self._c
 
-    def test_reply_to_hidden_number_uses_recipient(self):
+    def test_reply_to_hidden_number_uses_to(self):
+        """الإنتاج ردّ «The parameter to is required» 21 مرة على `recipient`،
+        فكل رسالة لعميل مخفي الرقم كانت تضيع بصمت. الحقل `to` كأي عميل."""
         ch = W.WhatsAppChannel("123", "tok")
         asyncio.run(ch.send_text(f"wa:{U1}", "أهلاً"))
         body = FakeHttp.sent[-1]
-        self.assertEqual(body.get("recipient"), U1)
-        self.assertNotIn("to", body)
+        self.assertEqual(body.get("to"), U1)
+        self.assertNotIn("recipient", body)
         asyncio.run(ch.send_buttons(f"wa:{U1}", "اختار", ["أ", "ب"]))
-        self.assertEqual(FakeHttp.sent[-1].get("recipient"), U1)
+        self.assertEqual(FakeHttp.sent[-1].get("to"), U1)
+
+    def test_a_meta_refusal_naming_recipient_is_retried_once(self):
+        """لو عادت Meta تطلب الحقل الآخر: محاولة واحدة به، بلا خصم ثانٍ من العدّاد."""
+        charged = []
+
+        async def on_send():
+            charged.append(1)
+            return True
+
+        ch = W.WhatsAppChannel("123", "tok", on_send=on_send)
+        FakeHttp.replies = [Err400()]                 # الأولى تُرفض، والثانية تنجح
+        res = asyncio.run(ch.send_text(f"wa:{U1}", "أهلاً"))
+        self.assertIsNotNone(res, "الرسالة يجب أن تصل في المحاولة الثانية")
+        self.assertEqual(len(FakeHttp.sent), 2)
+        self.assertEqual(FakeHttp.sent[0].get("to"), U1)
+        self.assertEqual(FakeHttp.sent[1].get("recipient"), U1)
+        self.assertNotIn("to", FakeHttp.sent[1])
+        self.assertEqual(len(charged), 1, "لا تُخصم رسالتان من رصيد الباقة")
+
+    def test_a_phone_refusal_is_not_retried(self):
+        """الرفض لعميل برقم عادي لا علاقة له بالحقل — لا إعادة محاولة."""
+        ch = W.WhatsAppChannel("123", "tok")
+        FakeHttp.replies = [Err400()]
+        self.assertIsNone(asyncio.run(ch.send_text("wa:201001234567", "x")))
+        self.assertEqual(len(FakeHttp.sent), 1)
 
     def test_phone_still_uses_to(self):
         asyncio.run(W.WhatsAppChannel("123", "tok").send_text("wa:201001234567", "x"))
