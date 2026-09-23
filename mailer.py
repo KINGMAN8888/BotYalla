@@ -716,6 +716,17 @@ def expiry_email(kind, plan_name, date, lang="ar", link=None):
     return subject, html, text
 
 
+def activation_email(subject, text, lang="ar"):
+    """(subject, html, text) لرسالة تفعيل من `activation.py`.
+
+    **إشعار خدمة لا تسويق** (AGENTS §47): تكمل خطوةً بدأها المستخدم بنفسه، فلا
+    تحتاج اشتراكاً في الأخبار ولا رابط إلغاء. النصّ يمرّ بـ`rich_text` فيُهرَّب
+    كل حرف وتتحوّل روابط https وحدها إلى أزرار — لا HTML خام أبداً."""
+    title = subject or ("One step left" if lang == "en" else "خطوة ناقصة")
+    html = _layout(lang, title, rich_text(text, lang), badge="service", preheader=title)
+    return title, html, _plain(text)
+
+
 def weekly_report_email(rep, lang="ar"):
     """(subject, html, text) لتقرير المنصة الأسبوعي — لصاحب المنصة وحده.
 

@@ -555,6 +555,42 @@ export function WeeklyReport() {
         ) : <Empty icon="chat" title={bi("لا رسائل في الفترة", "No messages this period")} />}
       </Card>
 
+      {/* ---------- رسائل التفعيل ---------- */}
+      <Card className="mb-6">
+        <SectionTitle icon="bolt"
+          extra={<Pill tone={P.nudges ? "on" : "mute"} dot={P.nudges}>
+            {P.nudges ? bi("شغّالة", "On") : bi("متوقفة", "Off")}</Pill>}>
+          {bi("رسائل التفعيل — من توقّف في منتصف الطريق", "Activation nudges — people who stalled")}
+        </SectionTitle>
+        <p className="mt-0 mb-4 text-[12.5px] leading-relaxed text-ink-3">
+          {bi("رسالة واحدة (تليجرام أو بريد) لمن سجّل ولم ينشئ بوتاً، أو أنشأه ولم يشغّله، أو شغّله ولم تصله رسالة عميل، أو لم يؤكّد بريده. رسالة واحدة لكل حالة، ولا تُرسل بين 10م و9ص.",
+              "One message (Telegram or email) to whoever signed up without a bot, created one without starting it, started one that got no customers, or never confirmed their email. One message per case, never between 10pm and 9am.")}
+        </p>
+        {(r.nudges || []).length ? (
+          <Table head={[bi("الرسالة", "Nudge"), bi("أُرسلت", "Sent"), bi("تقدّم بعدها", "Moved on"),
+                        bi("النسبة", "Rate")]}>
+            {r.nudges.map((n) => (
+              <Tr key={n.k}>
+                <Td>{n.k}</Td>
+                <Td className="tnum font-bold text-ink">{num(n.v)}</Td>
+                <Td className="tnum">{num(n.advanced)}</Td>
+                <Td className="tnum">{pct(n.advanced, n.v)}%</Td>
+              </Tr>
+            ))}
+          </Table>
+        ) : <Empty icon="bolt" title={bi("لم تُرسل رسائل تفعيل في الفترة", "No nudges sent this period")}
+                   text={bi("إما لا أحد توقّف، أو الميزة متوقفة.", "Either nobody stalled, or the feature is off.")} />}
+        <div className="mt-4">
+          <Form action={P.nudgesUrl}>
+            <input type="hidden" name="on" value={P.nudges ? "0" : "1"} />
+            <Btn sm variant="ghost" icon={P.nudges ? "shield" : "bolt"} type="submit">
+              {P.nudges ? bi("أوقف رسائل التفعيل", "Turn nudges off")
+                        : bi("شغّل رسائل التفعيل", "Turn nudges on")}
+            </Btn>
+          </Form>
+        </div>
+      </Card>
+
       {/* ---------- الإرسال ---------- */}
       <Card>
         <SectionTitle icon="mail">{bi("إرسال التقرير", "Sending the report")}</SectionTitle>

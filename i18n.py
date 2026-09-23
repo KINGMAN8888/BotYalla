@@ -253,6 +253,61 @@ T = {
  "adm_emails":       {"ar": "رسائل البريد", "en": "Email campaigns"},
  "adm_report":       {"ar": "التقرير الأسبوعي", "en": "Weekly report"},
  "adm_convo":        {"ar": "تحليل المحادثات", "en": "Conversation insights"},
+
+ # ---- محرّك التفعيل (activation.py): رسالة واحدة لكل حالة، كل واحدة فيها إجراء واحد ----
+ "act_no_bot_1h":    {"ar": "أهلاً {name} 👋\nحسابك في BotYalla جاهز، وناقص خطوة واحدة بس: بوتك.\n"
+                            "اعمله بضغطة من لوحتك: {link}\n"
+                            "أو ابعتلي اسم نشاطك في رسالة هنا وأنا أجهّزهولك.",
+                      "en": "Hi {name} 👋\nYour BotYalla account is ready — one step left: your bot.\n"
+                            "Create it in one tap: {link}\n"
+                            "Or just reply here with your business name and I'll set it up with you."},
+ "act_no_bot_1h_s":  {"ar": "خطوة واحدة وبوتك يشتغل", "en": "One step and your bot is live"},
+
+ "act_verify_2h":    {"ar": "{name}، كود تأكيد حسابك مستنيك على {email}.\n"
+                            "مش لاقيه؟ بصّ في «الرسائل المهملة / Spam»، أو اطلب كود جديد: {verify}\n"
+                            "ولو مش بيوصل خالص، ردّ على الرسالة دي وهنأكّد حسابك بنفسنا.",
+                      "en": "{name}, your verification code is waiting at {email}.\n"
+                            "Can't find it? Check the Spam folder, or request a new one: {verify}\n"
+                            "If it never arrives, reply here and we'll verify your account for you."},
+ "act_verify_2h_s":  {"ar": "كود تأكيد حسابك مستنيك", "en": "Your verification code is waiting"},
+
+ "act_bot_off":      {"ar": "بوت «{bot}» جاهز بس لسه متوقف ⏸️\n"
+                            "اضغط «تشغيل» من صفحة البوت ويبدأ يرد على عملاءك فوراً: {link}",
+                      "en": "Your bot “{bot}” is ready but still stopped ⏸️\n"
+                            "Hit Start on its page and it begins answering customers right away: {link}"},
+ "act_bot_off_s":    {"ar": "بوتك جاهز — ناقص تشغيل", "en": "Your bot is ready — just start it"},
+
+ "act_no_bot_24h":   {"ar": "{name}، عمل البوت بياخد دقيقة:\n"
+                            "١) اختار نوع نشاطك\n٢) البوت يتعمل بضغطة\n٣) ابعت رابطه لعملاءك\n"
+                            "ابدأ من هنا: {link}\nواقف في خطوة؟ ردّ عليّ بكلمة وأنا أكمّلها معاك.",
+                      "en": "{name}, creating your bot takes a minute:\n"
+                            "1) Pick your business type\n2) The bot is created in one tap\n"
+                            "3) Send its link to your customers\nStart here: {link}\n"
+                            "Stuck on a step? Reply with one word and I'll walk you through it."},
+ "act_no_bot_24h_s": {"ar": "دقيقة واحدة ويبقى عندك بوت", "en": "One minute and you have a bot"},
+
+ "act_bot_silent":   {"ar": "بوت «{bot}» شغال من يوم ومحدش كلّمه لسه — وده طبيعي لحد ما تنشر رابطه.\n"
+                            "هتلاقي رابط البوت وكود QR وملصق جاهز للطباعة في صفحة البوت: {link}\n"
+                            "أسرع حاجة تعملها دلوقتي: ابعت الرابط في ستوري وفي جروبات عملائك.",
+                      "en": "Your bot “{bot}” has been live for a day and nobody has messaged it yet — "
+                            "that's normal until you share its link.\n"
+                            "Its link, QR code and a print-ready poster are on the bot page: {link}\n"
+                            "Fastest thing you can do now: post the link on your story and in your "
+                            "customer groups."},
+ "act_bot_silent_s": {"ar": "بوتك شغال… بس محدش يعرفه لسه", "en": "Your bot is live… but nobody knows it"},
+
+ "act_no_bot_72h":   {"ar": "{name}، عرض بسيط: ابعتلي اسم نشاطك وإيه اللي بتبيعه، وفريقنا يجهّزلك "
+                            "البوت كامل ويبعتلك رابطه جاهز — من غير ما تعمل أي حاجة.\n"
+                            "أو كمّلها بنفسك في دقيقة: {link}",
+                      "en": "{name}, simple offer: reply with your business name and what you sell, and "
+                            "our team will build the whole bot and send you its link — you do nothing.\n"
+                            "Or finish it yourself in a minute: {link}"},
+ "act_no_bot_72h_s": {"ar": "تحب نجهّز بوتك بدالك؟", "en": "Want us to set your bot up for you?"},
+
+ "act_waiting":      {"ar": "⏳ عميل مستني رد\n«{name}» كتب لبوت «{bot}» من {mins} دقيقة ولسه محدش ردّ.\n"
+                            "اعمل Reply على الرسالة دي والرد هيوصله فوراً.",
+                      "en": "⏳ A customer is waiting\n“{name}” messaged your bot “{bot}” {mins} minutes "
+                            "ago with no reply yet.\nReply to this message and it reaches them instantly."},
  "unsub_title":      {"ar": "اشتراك البريد", "en": "Email preferences"},
  "verify_title":     {"ar": "تأكيد البريد", "en": "Verify your email"},
  "complete_title":   {"ar": "أكمل حسابك", "en": "Complete your account"},

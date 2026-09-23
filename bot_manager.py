@@ -341,6 +341,9 @@ class BotManager:
         # خيط التذكيرات: daemon يعمل كل 6 ساعات
         t = threading.Thread(target=self._reminder_loop, daemon=True)
         t.start()
+        # محرّك التفعيل وتنبيه العميل المنتظر: دورة أقصر، فـ«بعد ساعة من التسجيل»
+        # لا معنى لها في حلقة كل ست ساعات.
+        threading.Thread(target=self._activation_loop, daemon=True).start()
 
     def _run(self):
         self._loop = asyncio.new_event_loop()
@@ -808,6 +811,32 @@ class BotManager:
     def resume_active_bots(self):
         for b in db.all_active_bots():
             ok, msg = self.start_bot(b["id"]); log.info("resume %s: %s", b["id"], msg)
+
+    # ---- محرّك التفعيل: من توقّف في منتصف الطريق ----
+    def _activation_loop(self):
+        """كل نصف ساعة: رسالة لمن توقّف، وتنبيه لمن ينتظر رداً."""
+        INTERVAL = 30 * 60
+        _time.sleep(60)                     # اترك التشغيل يكتمل أولاً
+        while True:
+            try:
+                import activation
+                activation.run_cycle(self.notify_text)
+                activation.waiting_cycle(self._waiting_alert)
+            except Exception:
+                log.exception("activation cycle error")
+            _time.sleep(INTERVAL)
+
+    def _waiting_alert(self, bot_row, peer, head, detail):
+        """تنبيه «عميل ينتظر» بنفس مسار «محتاج دعم»: نفس المستلمين ونفس زرّ الردّ.
+
+        `inbox_relay.alert` كوروتين يعمل داخل حلقة المدير، وهذا الخيط خارجها —
+        لذلك `_submit` لا النداء المباشر (AGENTS §32)."""
+        import inbox_relay
+        try:
+            return self._submit(inbox_relay.alert(bot_row, peer, head, detail))
+        except Exception:
+            log.warning("waiting alert not delivered for bot #%s", bot_row.get("id"))
+            return False
 
     # ---- التقرير الأسبوعي لصاحب المنصة ----
     def _weekly_report_cycle(self):

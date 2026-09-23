@@ -57,6 +57,12 @@ def _num(v):
     return f"{v:,.0f}" if float(v).is_integer() else f"{v:,.2f}"
 
 
+def _aff_rate():
+    """نسبة عمولة الشركاء من إعداد المنصة — لا رقم مكتوب في نصّ يقرأه عميل."""
+    v = (db.get_platform("aff_default_rate", "20") or "20").strip()
+    return v if v.replace(".", "", 1).isdigit() else "20"
+
+
 def facts():
     """قاموس الحقائق الذي يُحقن في `<business>` لعقل البوت."""
     ov = db.plan_overrides()
@@ -89,7 +95,8 @@ def facts():
     links = {}
     if site:
         links = {"site": site + "/", "signup": site + "/register", "pricing": site + "/pricing",
-                 "privacy": site + "/privacy", "terms": site + "/terms"}
+                 "privacy": site + "/privacy", "terms": site + "/terms",
+                 "partners": site + "/affiliate"}
 
     return {
         "about": ("BotYalla منصة مصرية عربية/إنجليزية لإنشاء وتشغيل بوتات محادثة لأصحاب الأنشطة "
@@ -116,6 +123,10 @@ def facts():
             "بصورة مكتوب تحتها الاسم والسعر، ويعدّل الأسعار ويمسح المنتجات بضغطة",
             "بوت مخصّص بالكامل عند الطلب",
         ],
+        "partners": ("برنامج الشركاء: أي حد يقدر يشتغل معانا بالعمولة من غير توظيف ولا "
+                     f"التزام — يسجّل حساب مجاني، ياخد رابط إحالة باسمه من صفحة «برنامج الشركاء»، "
+                     f"وكل مشترك يجي منه ياخد {_aff_rate()}% من قيمة اشتراكه. الأرباح تظهر في "
+                     "لوحته ويطلبها لما توصل الحد الأدنى. مفيش رسوم اشتراك ولا شراء باقة للدخول."),
         "plans": rows,
         "billing": ("الاشتراك شهري أو سنوي (السنوي بخصم 30%). الترقية تنقل قيمة الأيام المتبقية للباقة الجديدة. "
                     "الدفع يدوي: حوّل المبلغ وارفع صورة الإيصال من صفحة الاشتراك، والفريق يفعّل الاشتراك بعد المراجعة."),
@@ -133,6 +144,11 @@ def facts():
             "افهم نشاط العميل وقناته (واتساب أم تليجرام) ثم رشّح الباقة المناسبة: تليجرام فقط ← المجانية للتجربة ثم التاجر؛ واتساب ← باقة واتساب؛ وكالات تدير بوتات لعملاء ← الوكالة.",
             "أفضل خطوة تالية دائماً: التسجيل المجاني من رابط signup وتجربة البوت بنفسه.",
             "لو العميل عايز بوت مخصّص أو حالة خاصة أو خصم: اعرض تحويله لفريق المبيعات (handoff).",
+            "لو سأل «هكسب منها إزاي؟» أو «فيه شغل؟»: اشرح برنامج الشركاء بالعمولة ورابطه، "
+            "ولا تَعِد بوظيفة ولا براتب ولا بدخل مضمون. ولو مصرّ على شغل ثابت اطلب نبذة "
+            "قصيرة عنه وخبرته وحوّله للفريق (handoff) — الفريق هو من يقرر.",
+            "المنصة أداة لصاحب نشاط تجاري، مش فرصة دخل سريع. لو ظهر إن المتحدث ليس عنده "
+            "نشاط ولا ينوي بيع أي شيء، وجّهه لبرنامج الشركاء بأدب بدل شرح الباقات.",
         ],
     }
 
@@ -145,6 +161,9 @@ _INTENTS = (
                  "human", "agent", "person", "complain", "support team")),
     ("prices",  ("سعر", "اسعار", "بكام", "كام", "باقه", "باقات", "اشتراك", "تكلفه", "فلوس",
                  "price", "pricing", "plan", "cost", "how much", "subscription")),
+    ("work",    ("شغل", "وظيفه", "وظيفة", "اشتغل", "اكسب", "كسب", "ربح", "ارباح", "عموله",
+                 "عمولة", "دخل", "فرصه", "فرصة", "شريك", "تسويق بالعموله", "job", "work",
+                 "hiring", "earn", "affiliate", "commission")),
     ("start",   ("ابدا", "ابدء", "سجل", "تسجيل", "حساب", "جرب", "مجان", "start", "sign", "register",
                  "free", "try")),
     ("pay",     ("دفع", "ادفع", "فودافون", "انستاباي", "تحويل", "كاش", "pay", "instapay", "vodafone")),
@@ -201,6 +220,19 @@ def offline_reply(text, lang="ar"):
                 ("باقة واتساب على واتساب الرسمي من Meta، وفريقنا بيربط رقمك بنفسه. محتاجة سجل تجاري "
                  "وبطاقة ضريبية (شرط من Meta). أما تليجرام فشغّال على الباقة المجانية من غير أي أوراق.")), \
                (["Plans & pricing", "Start for free"] if en else ["الباقات والأسعار", "ابدأ مجاناً"])
+    if intent == "work":
+        p = links.get("partners", "")
+        return ((f"We work with partners on commission — no hiring, no commitment: create a free "
+                 f"account, take your referral link, and earn {_aff_rate()}% of every subscription "
+                 f"that comes through it, every month it stays active."
+                 + (f"\n{p}" if p else "")
+                 + "\nLooking for a full-time role instead? Send a short intro about yourself and "
+                   "your experience and the team will review it.") if en else
+                (f"بنشتغل مع شركاء بالعمولة — من غير توظيف ولا التزام: تعمل حساب مجاني، تاخد رابط "
+                 f"الإحالة بتاعك، وتاخد {_aff_rate()}% من كل اشتراك يجي منه، كل شهر ما دام مشترك."
+                 + (f"\n{p}" if p else "")
+                 + "\nولو بتدور على شغل ثابت، ابعتلنا نبذة قصيرة عنك وخبرتك والفريق هيراجعها.")), \
+               (["Start for free", "Plans & pricing"] if en else ["ابدأ مجاناً", "الباقات والأسعار"])
     if intent == "pay":
         pays = " · ".join(f["payment_methods"])
         return ((f"Pay by: {pays}. Transfer, upload the receipt on the subscription page, and the team "

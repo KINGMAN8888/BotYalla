@@ -207,6 +207,11 @@ def _migrate(c):
     if "channel" not in bcols:
         c.execute("ALTER TABLE bots ADD COLUMN channel TEXT NOT NULL DEFAULT 'telegram'")
 
+    # تنبيه «عميل ينتظر رداً»: وقت آخر تنبيه أُرسل عن هذه المحادثة
+    vcols = {r[1] for r in c.execute("PRAGMA table_info(conversations)").fetchall()}
+    if vcols and "waiting_alert_at" not in vcols:
+        c.execute("ALTER TABLE conversations ADD COLUMN waiting_alert_at INTEGER")
+
     ucols = {r[1] for r in c.execute("PRAGMA table_info(bot_users)").fetchall()}
     if "peer" not in ucols:
         c.execute("ALTER TABLE bot_users ADD COLUMN peer TEXT")
@@ -688,6 +693,7 @@ def init_db():
             last_text TEXT,
             last_at INTEGER NOT NULL,
             human_at INTEGER,                     -- آخر نشاط بشري: للعودة التلقائية للبوت
+            waiting_alert_at INTEGER,             -- آخر تنبيه «عميل ينتظر رداً» عن هذه المحادثة
             PRIMARY KEY(bot_id, peer),
             FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
         );
@@ -764,6 +770,7 @@ def init_db():
         _customer_pay_tables(c)
         _email_tables(c)
         _auth_tables(c)
+        _activation_tables(c)
 
 def _hot_indexes(c):
     """فهارس الاستعلامات الساخنة. EXPLAIN QUERY PLAN كان يُظهر مسحاً كاملاً لـ events و
@@ -3868,3 +3875,120 @@ def admin_emails():
         return [r[0] for r in c.execute(
             "SELECT email FROM users WHERE role='admin' AND email IS NOT NULL "
             "AND is_blocked=0 ORDER BY id").fetchall() if r[0]]
+
+
+# ============================================================================
+#  محرّك التفعيل — من توقّف في منتصف الطريق (activation.py)
+# ============================================================================
+# التقرير قال إن 6 من كل 10 مسجّلين لا ينشئون بوتاً أبداً، وإن بوتات تُشغَّل ولا
+# تصلها رسالة واحدة. هذه الدوال تجد **من توقّف وأين بالضبط**، مرة واحدة لكل حالة.
+#
+# `nudge_log` يمنع تكرار الرسالة نفسها للشخص نفسه إلى الأبد: المفتاح
+# (المستخدم، النوع، المرجع) — والمرجع رقم البوت في الحالات الخاصة ببوت بعينه،
+# فصاحب بوتين يُنبَّه لكل واحد منهما مرة، لا مرة واحدة للاثنين.
+
+def _activation_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS nudge_log(
+            user_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,                  -- no_bot_1h | bot_off_2h | ...
+            ref INTEGER NOT NULL DEFAULT 0,      -- رقم البوت إن كانت الرسالة عن بوت
+            sent_at INTEGER NOT NULL,
+            channel TEXT,                        -- telegram | email (أول قناة وصلت)
+            PRIMARY KEY(user_id, kind, ref),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_nudge_at ON nudge_log(sent_at);
+    """)
+
+
+def nudge_sent(user_id, kind, ref=0):
+    with get_conn() as c:
+        return c.execute("SELECT 1 FROM nudge_log WHERE user_id=? AND kind=? AND ref=?",
+                         (user_id, kind, ref)).fetchone() is not None
+
+
+def log_nudge(user_id, kind, ref=0, channel=None):
+    """يُسجَّل **بعد** وصول الرسالة فعلاً — رسالة لم تصل تُعاد في الدورة التالية."""
+    with get_conn() as c:
+        c.execute("INSERT OR IGNORE INTO nudge_log(user_id,kind,ref,sent_at,channel) "
+                  "VALUES(?,?,?,?,?)", (user_id, kind, ref, int(time.time()), channel))
+
+
+def nudge_counts(a, b):
+    """كم رسالة تفعيل أُرسلت في الفترة، وكم من أصحابها تقدّم بعدها فعلاً.
+
+    `advanced` = أنشأ بوتاً بعد الرسالة (لحالات «بلا بوت») أو شغّل بوته (للباقي) —
+    وهي الطريقة الوحيدة لمعرفة إن كانت الرسائل تنفع أصلاً بدل إرسالها على الإيمان."""
+    with get_conn() as c:
+        return [dict(r) for r in c.execute("""
+            SELECT n.kind k, COUNT(*) v,
+                   SUM(CASE WHEN EXISTS (SELECT 1 FROM bots b WHERE b.owner_id = n.user_id
+                                          AND b.created_at >= n.sent_at)
+                             OR EXISTS (SELECT 1 FROM bots b2 WHERE b2.owner_id = n.user_id
+                                          AND b2.is_active = 1 AND n.ref = b2.id)
+                        THEN 1 ELSE 0 END) advanced
+            FROM nudge_log n WHERE n.sent_at >= ? AND n.sent_at < ?
+            GROUP BY k ORDER BY v DESC""", (a, b)).fetchall()]
+
+
+# المرشّحون لكل حالة. كل استعلام يستبعد من نُبِّه من قبل، ومن حُظر، وحسابات الفريق.
+_ALIVE = "u.role = 'user' AND u.is_blocked = 0"
+_NOT_NUDGED = ("NOT EXISTS (SELECT 1 FROM nudge_log n WHERE n.user_id = u.id "
+               "AND n.kind = ? AND n.ref = {ref})")
+
+
+def activation_candidates(kind, older_than, younger_than=30 * 86400, limit=50):
+    """صفوف {user_id, username, email, ref, bot_name} لمن ينطبق عليه `kind` الآن.
+
+    `younger_than` سقف عمر: لا نلاحق من سجّل من شهر — الرسالة بعد شهر إزعاج لا مساعدة."""
+    now = int(time.time())
+    hi, lo = now - int(older_than), now - int(younger_than)      # القديم ≤ التسجيل ≤ الأحدث
+    base = ("SELECT u.id user_id, u.username, u.email, 0 ref, '' bot_name FROM users u "
+            f"WHERE {_ALIVE} AND u.created_at <= ? AND u.created_at >= ? ")
+    if kind in ("no_bot_1h", "no_bot_24h", "no_bot_72h"):
+        q = (base + "AND NOT EXISTS (SELECT 1 FROM bots b WHERE b.owner_id = u.id) AND "
+             + _NOT_NUDGED.format(ref=0) + " ORDER BY u.created_at DESC LIMIT ?")
+    elif kind == "verify_stuck_2h":
+        q = (base + "AND u.verify_required = 1 AND u.email_verified_at IS NULL AND "
+             + _NOT_NUDGED.format(ref=0) + " ORDER BY u.created_at DESC LIMIT ?")
+    elif kind in ("bot_off_2h", "bot_silent_24h"):
+        active = "1" if kind == "bot_silent_24h" else "0"
+        silent = ("AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.bot_id = b.id "
+                  "AND m.direction = 'in') " if kind == "bot_silent_24h" else "")
+        q = ("SELECT u.id user_id, u.username, u.email, b.id ref, b.name bot_name "
+             "FROM bots b JOIN users u ON u.id = b.owner_id "
+             f"WHERE {_ALIVE} AND b.is_active = {active} AND b.created_at <= ? "
+             f"AND b.created_at >= ? {silent}"
+             "AND NOT EXISTS (SELECT 1 FROM nudge_log n WHERE n.user_id = u.id "
+             "AND n.kind = ? AND n.ref = b.id) ORDER BY b.created_at DESC LIMIT ?")
+    else:
+        raise ValueError(f"unknown activation kind: {kind}")
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(q, (hi, lo, kind, int(limit))).fetchall()]
+
+
+# ---------- محادثات تنتظر رداً (تنبيه صاحب البوت) ----------
+def waiting_conversations(min_seconds=900, max_seconds=24 * 3600, limit=30):
+    """محادثات آخر رسالة فيها من العميل ومضى عليها `min_seconds` بلا ردّ.
+
+    الحدّ الأعلى مقصود: محادثة من يومين ليست «تنتظر» — إنها ضائعة، والتنبيه عليها
+    الآن إزعاج بلا فائدة. `waiting_alert_at` يمنع تكرار التنبيه لنفس الانتظار."""
+    now = int(time.time())
+    with get_conn() as c:
+        return [dict(r) for r in c.execute("""
+            SELECT v.bot_id, v.peer, v.name, v.last_text, v.last_at, b.name bot_name,
+                   b.owner_id
+            FROM conversations v JOIN bots b ON b.id = v.bot_id
+            WHERE v.mode = 'bot' AND v.last_at <= ? AND v.last_at >= ?
+              AND (v.waiting_alert_at IS NULL OR v.waiting_alert_at < v.last_at)
+              AND (SELECT m.direction FROM messages m WHERE m.bot_id = v.bot_id
+                    AND m.peer = v.peer ORDER BY m.id DESC LIMIT 1) = 'in'
+            ORDER BY v.last_at LIMIT ?""",
+            (now - int(min_seconds), now - int(max_seconds), int(limit))).fetchall()]
+
+
+def mark_waiting_alerted(bot_id, peer):
+    with get_conn() as c:
+        c.execute("UPDATE conversations SET waiting_alert_at=? WHERE bot_id=? AND peer=?",
+                  (int(time.time()), bot_id, peer))

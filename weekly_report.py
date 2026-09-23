@@ -372,6 +372,8 @@ def build(days=DEFAULT_DAYS, end=None, lang="ar", with_logs=True, with_conv=True
         "daily": daily, "trend_daily": trend_daily,
         "bots": db.report_bots(a, b), "problems": db.report_problem_users(a, b),
         "emails": db.report_emails(a, b), "expiring": expiring,
+        # قياس أثر محرّك التفعيل: كم رسالة ذهبت، وكم واحداً تقدّم بعدها فعلاً
+        "nudges": db.nudge_counts(a, b),
         "renewal_value": _renewal_value(expiring),
         "capacity": {"running": running, "capacity": cap_total,
                      "pct": int(round(running * 100.0 / cap_total)) if cap_total else 0,
@@ -631,6 +633,11 @@ def to_markdown(rep):
                   [[u.get("username", ""), u.get("plan", ""), _when(u.get("created_at")),
                     " · ".join(f"{k}×{v}" for k, v in u["problems"].items())]
                    for u in rep["problems"]]))
+
+    if rep.get("nudges"):
+        add("## رسائل التفعيل (من توقّف في منتصف الطريق)\n")
+        add(_md_table(["الرسالة", "أُرسلت", "تقدّم بعدها"],
+                      [[n["k"], n["v"], n["advanced"]] for n in rep["nudges"]]))
 
     add("## البريد\n")
     add(_md_table(["الحالة", "عدد"],

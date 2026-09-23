@@ -3072,6 +3072,8 @@ def _report_props(rep, days):
             "convUrl": url_for("admin_conversations", days=days),
             "usersUrl": url_for("admin_users"),
             "auto": db.get_platform("weekly_report", "1") == "1",
+            "nudges": db.get_platform("activation_nudges", "1") != "0",
+            "nudgesUrl": url_for("admin_report_nudges"),
             "smtp": mailer.configured(), "emails": len(db.admin_emails()),
             "lastSent": int(db.get_platform("weekly_report_at", "0") or 0)}
 
@@ -3124,6 +3126,15 @@ def admin_report_send():
     else:
         flash("لم يُرسل التقرير — اضبط SMTP أو شغّل بوت المنصة واربط معرّف الأدمن.", "error")
     return redirect(url_for("admin_report", days=_report_days()))
+
+
+@app.route("/admin/report/nudges", methods=["POST"])
+@require_roles("admin")
+def admin_report_nudges():
+    """تشغيل/إيقاف رسائل التفعيل (activation.py) — مفتاح واحد يوقف كل الرسائل."""
+    db.set_platform("activation_nudges", "1" if request.form.get("on") == "1" else "0")
+    flash("اتحفظ", "ok")
+    return redirect(url_for("admin_report"))
 
 
 @app.route("/admin/report/auto", methods=["POST"])
