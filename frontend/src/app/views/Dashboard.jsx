@@ -1193,7 +1193,89 @@ function Journey() {
   );
 }
 
+/* لحظة القيمة: بطاقة ترقية واحدة تظهر بعد أول نتيجة حقيقية، ومعها رقمها.
+   «مش دلوقتي» تخفيها لهذا المتصفح أسبوعاً — لا نلاحق من قال لا. */
+function UpgradeMoment() {
+  const u = P.upgrade;
+  const key = u && `by_upg_${u.key}`;
+  const [hide, setHide] = useState(() => {
+    try { return key ? Number(localStorage.getItem(key) || 0) > Date.now() : false; }
+    catch { return false; }
+  });
+  if (!u || hide) return null;
+  const later = () => {
+    try { localStorage.setItem(key, String(Date.now() + 7 * 864e5)); } catch { /* خاص */ }
+    setHide(true);
+  };
+  return (
+    <Card className="mb-6 bg-[linear-gradient(120deg,rgb(45_212_191/0.14),rgb(124_108_246/0.14))]
+                     shadow-[inset_0_0_0_1px_rgb(45_212_191/0.22)]">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-[260px] flex-1">
+          <h3 className="m-0 flex items-center gap-2 text-[16px] font-extrabold text-ink">
+            <Icon name="rocket" size={18} className="text-au-teal" />
+            {t(`upg_${u.key}_t`).replace("{n}", num(u.n))}
+          </h3>
+          <p className="mb-0 mt-2 max-w-[620px] text-[13.5px] leading-relaxed text-ink-2">
+            {t(`upg_${u.key}_d`)}
+          </p>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Btn icon="tag" href={BY.urls.pricing}>{t("upg_cta")}</Btn>
+          <Btn sm variant="ghost" type="button" onClick={later}>{t("upg_later")}</Btn>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/* ====================================================== صفحة «أول بوت» (/start)
+   نفس مكوّنات اللوحة، بلا أي شيء آخر: من سجّل للتوّ لا يحتاج إحصاءات أصفار ولا
+   بطاقات واتساب وماسنجر — يحتاج طريقاً واحداً لبوته. ثلاثة خيارات لا رابع:
+   بضغطة · بتوكن · أو نعملهولك. */
+function FirstBotPage() {
+  const dfy = P.doneForYou || {};
+  const [grant, setGrant] = useState(dfy.grant || null);
+  const [modal, setModal] = useState(false);
+  const quick = !!(P.oneTap || {}).available;
+  return (
+    <>
+      <PageHead icon="bot" title={t("start_title")}
+        sub={bi("خطوة واحدة وبوتك يبقى شغّال ويرد على عملاءك. اختار الطريقة اللي تريحك.",
+                "One step and your bot is live and answering customers. Pick whichever way suits you.")}
+        actions={<Btn sm variant="ghost" icon="grid" href={BY.urls.dashboard}>
+          {bi("لوحتي", "My dashboard")}</Btn>} />
+
+      {quick ? <OneTapCreate /> : <FirstBotGuide />}
+      <CreateWizard collapsed={quick} />
+
+      {dfy.allowed && !grant && (
+        <Card className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-[240px] flex-1">
+            <h3 className="m-0 flex items-center gap-2 text-[15.5px] font-extrabold text-ink">
+              <Icon name="users" size={18} className="text-au-cyan" />
+              {bi("مش عايز تعمله بنفسك؟", "Rather not do it yourself?")}
+            </h3>
+            <p className="mb-0 mt-1.5 text-[13px] leading-relaxed text-ink-3">
+              {bi("اكتب نشاطك واللي عايز البوت يعمله، وفريقنا يجهّزه بالكامل جوه حسابك ويبلّغك لما يخلص.",
+                  "Describe your business and what you need; our team builds it inside your account and tells you when it's done.")}
+            </p>
+          </div>
+          <Btn icon="sparkles" type="button" onClick={() => setModal(true)}>
+            {bi("سيبها علينا", "Do it for me")}
+          </Btn>
+        </Card>
+      )}
+      {grant && <Card className="mb-6"><TeamAtWork grant={grant} canRevoke={dfy.allowed}
+        onRevoke={async () => { await postJSON("/assist/revoke", {}); setGrant(null); }} /></Card>}
+      {modal && <DoneForYouModal onClose={() => setModal(false)}
+        onDone={(g) => { setGrant(g); setModal(false); }} />}
+    </>
+  );
+}
+
 export default function Dashboard() {
+  if (P.focus === "first_bot") return <FirstBotPage />;
   const { bots = [], total = {}, onboarding = {}, oneTap = {} } = P;
   const stage = onboarding.stage;
   const fresh = stage === "first_bot";
@@ -1207,6 +1289,7 @@ export default function Dashboard() {
       />
 
       <Journey />
+      <UpgradeMoment />
 
       {/* الإنشاء بضغطة أولاً — أسهل طريق لغير التقنيين. واتساب في الأول: مفتوح لباقات واتساب،
           ومقفول بتمويه لغيرها كدعوة للترقية */}

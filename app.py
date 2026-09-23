@@ -715,7 +715,7 @@ def _finish_signup(user_id, d, lang, news):
     # بلا تأكيد إجباري (بريد أكّده جوجل، أو SMTP غير مضبوط): الترحيب فوراً. الرابط من
     # `PUBLIC_URL` وحدها، وبدونه تُرسل بلا زرّ — الرسالة لا تحمل توكناً.
     mailer.send_welcome(user_id, d["email"], urow["username"], _public_url("dashboard"), lang)
-    return redirect(url_for("dashboard"))
+    return redirect(_home_for(user_id))
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
@@ -834,7 +834,7 @@ def verify_email():
         flash(i18n.t("email_prompt", lang), "error")
         return redirect(url_for("account"))
     if u.get("email_verified_at"):
-        return redirect(url_for("dashboard"))
+        return redirect(_home_for(uid()))
     if request.method == "POST":
         if _rate_limited(f"u{uid()}", limit=10, window=900, bucket="ev_code"):
             flash(_vmsg("locked", lang), "error")
@@ -844,7 +844,7 @@ def verify_email():
         if res == "ok":
             _after_verified(u, lang)
             flash(_vmsg("ok", lang), "ok")
-            return redirect(url_for("dashboard"))
+            return redirect(_home_for(uid()))
         flash(_vmsg(res, lang), "error")
         return redirect(url_for("verify_email"))
     ev = db.email_verification(uid())
@@ -1206,6 +1206,8 @@ def dashboard():
                        "metaConnect": current_role() in ("admin", "support"),
                        "waAssist": {"open": db.open_ticket_of_kind(uid(), "wa_setup") if wa_plan else None},
                        "onboarding": _onboarding(bots),
+                       # لحظة القيمة: عرض الترقية يظهر بعد أول نتيجة حقيقية لا قبلها
+                       "upgrade": upgrade_moment(plan_id, bots, total),
                        # رحلة النجاح: من أول بوت لأول ربح — خطوة واحدة واضحة كل مرة
                        "journey": _journey(bots, plan_id),
                        # «فريقنا يجهّزه لك»: الإذن الساري وسجل ما فعله الفريق (للعميل وحده)
@@ -1214,6 +1216,61 @@ def dashboard():
                        # الإنشاء بضغطة متاح فقط لو بوت المنصة يعمل وفيه «وضع إدارة البوتات»
                        "oneTap": {"available": bool(info.get("username") and info.get("can_manage")),
                                   "platformRunning": manager.platform_running()}})
+
+
+@app.route("/start")
+@login_required
+def first_bot():
+    """صفحة البداية لمن لا بوت له: سؤال واحد وطريق واحد.
+
+    اللوحة الكاملة أمام من سجّل للتوّ ليست ترحيباً — هي عشر بطاقات وقرارات
+    (واتساب · ماسنجر · إحصاءات أصفار · إعدادات) وهو لا يعرف بعدُ ما هو «البوت»
+    أصلاً. وثمن ذلك في تقرير 17–23 سبتمبر: **6 من كل 10 مسجّلين لم ينشئوا بوتاً
+    أبداً**. هذه الصفحة ترسم مكوّنات اللوحة نفسها (بلا تكرار كود) لكن بثلاثة
+    خيارات فقط: اعمله بضغطة · اعمله بتوكن · سيبها علينا.
+
+    ومن عنده بوت بالفعل تُعيده إلى لوحته — فلا «صفحة بداية» تحاصر من بدأ."""
+    if db.count_user_bots(uid()):
+        return redirect(url_for("dashboard"))
+    info = manager.platform_info()
+    return react_page("dashboard", "start_title", {
+        "focus": "first_bot", "bots": [], "total": {}, "onboarding": {"stage": "first_bot"},
+        "journey": {}, "waAllowed": False, "waEs": None, "waEsLocked": False,
+        "metaConnect": False, "waAssist": {"open": None}, "waPlan": False,
+        "doneForYou": {"grant": _grant_view(uid()), "allowed": current_role() == "user"
+                       and not session.get("assist")},
+        "oneTap": {"available": bool(info.get("username") and info.get("can_manage")),
+                   "platformRunning": manager.platform_running()}})
+
+
+def upgrade_moment(plan_id, bots, total):
+    """**لحظة القيمة**: ما الذي يفعله العميل الآن ويحتاج الترقية ليكمله — أو None.
+
+    دالّة خالصة تُختبر وحدها. مبنية على حقيقة تسعيرنا: رسائل تليجرام بلا حدّ
+    على المجانية، فلا يوجد «رصيد قارب ينفد» يضغط أحداً. ما يضغط فعلاً هو أن
+    يكون العميل **نجح**: عنده مشتركون يريد أن يبعث لهم، أو بيانات عملاء يريد
+    الرد عليها، أو بوت ثانٍ. لذلك لا رسالة ترقية قبل أول نتيجة حقيقية — عرض
+    الترقية على حساب فارغ إزعاج، وعلى حساب نجح خدمة.
+
+    16 زائراً فقط من 304 فتحوا صفحة الأسعار في أسبوع الإطلاق؛ العرض يجب أن
+    يذهب إليهم حيث هم، لا أن ينتظرهم هناك."""
+    if plan_id != "free" or not bots:
+        return None
+    subs = int(total.get("subscribers") or 0)
+    results = int(total.get("leads") or 0) + int(total.get("orders") or 0) + \
+        int(total.get("bookings") or 0)
+    if subs >= 10:
+        return {"key": "broadcast", "n": subs, "plan": "merchant"}
+    if results >= 3:
+        return {"key": "inbox", "n": results, "plan": "merchant"}
+    if len(bots) >= plans.plan("free")["max_bots"] and subs >= 5:
+        return {"key": "bots", "n": len(bots), "plan": "merchant"}
+    return None
+
+
+def _home_for(user_id):
+    """أين يذهب المستخدم بعد التسجيل أو التأكيد: «أول بوت» لمن لا بوت له."""
+    return url_for("first_bot") if not db.count_user_bots(user_id) else url_for("dashboard")
 
 
 def _journey(bots, plan_id):

@@ -58,14 +58,27 @@ def _link(path=""):
     return mailer.site_url(path) or ""
 
 
+def target(kind, row):
+    """الرابط الذي يفتح **الخطوة الناقصة نفسها** لا الصفحة الرئيسية.
+
+    «افتح لوحتك» لمن لا يعرف ما البوت أصلاً ليست مساعدة: من لا بوت له يذهب إلى
+    صفحة البوت الواحد (`/start`)، وصاحب بوت متوقف أو صامت يذهب إلى صفحة بوته
+    هو — حيث زرّ التشغيل ورابط البوت والملصق."""
+    if kind.startswith("no_bot"):
+        return "/start"
+    if row.get("ref"):
+        return f"/bot/{int(row['ref'])}"
+    return "/dashboard"
+
+
 def message(kind, row, lang="ar"):
     """نصّ الرسالة لهذه الحالة — مفتاح ترجمة واحد بعناصر نائبة، لا نصّ في الكود."""
     key = dict((k, t) for k, _, t in RULES)[kind]
     return i18n.t(key, lang).format(
         name=row.get("username") or "", bot=row.get("bot_name") or "",
-        email=row.get("email") or "",
-        link=_link("/dashboard"), verify=_link("/verify-email"),
-        bots=_link("/dashboard"), support=_link("/support"))
+        email=row.get("email") or "", link=_link(target(kind, row)),
+        verify=_link("/verify-email"), bots=_link("/dashboard"),
+        support=_link("/support"))
 
 
 def deliver(row, text, notify=None, subject=None, lang="ar"):

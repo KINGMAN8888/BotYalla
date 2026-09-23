@@ -144,7 +144,8 @@ class SignupTests(unittest.TestCase):
         c.post("/verify-email", data={"code": bad, "csrf_token": "tk"})
         self.assertIsNone(db.get_user(u["id"])["email_verified_at"])
         r = c.post("/verify-email", data={"code": code, "csrf_token": "tk"})
-        self.assertIn("/dashboard", r.headers["Location"])
+        # حساب جديد بلا بوت يبدأ من «/start» لا من اللوحة الكاملة (app.first_bot)
+        self.assertIn("/start", r.headers["Location"])
         self.assertIsNotNone(db.get_user(u["id"])["email_verified_at"])
         self.assertEqual(c.get("/dashboard").status_code, 200)
         self.assertTrue(any("أهلاً" in m["Subject"] for m in SENT), "الترحيب بعد التأكيد")
@@ -217,7 +218,7 @@ class SignupTests(unittest.TestCase):
         os.environ["SMTP_HOST"] = ""
         c = _client()
         r = c.post("/register", data=signup("no_smtp"))
-        self.assertIn("/dashboard", r.headers["Location"])
+        self.assertIn("/start", r.headers["Location"])
         self.assertEqual(c.get("/dashboard").status_code, 200)
 
     def test_legacy_accounts_are_never_gated_and_can_sign_in_with_email(self):
@@ -280,7 +281,7 @@ class OAuthTests(unittest.TestCase):
         for k in ("email", "password", "password2"):
             form.pop(k)
         r = c.post("/register/complete", data=form)
-        self.assertIn("/dashboard", r.headers["Location"])
+        self.assertIn("/start", r.headers["Location"])
         u = db.get_user_by_name("mona_ali")
         self.assertEqual(u["email"], "mona@gmail.com")
         self.assertIsNotNone(u["email_verified_at"], "جوجل أكّد البريد — لا كود")

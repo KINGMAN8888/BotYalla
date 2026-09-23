@@ -252,6 +252,28 @@ T = {
  "adm_analytics":    {"ar": "إحصائيات الزوار", "en": "Visitor analytics"},
  "adm_emails":       {"ar": "رسائل البريد", "en": "Email campaigns"},
  "adm_report":       {"ar": "التقرير الأسبوعي", "en": "Weekly report"},
+ "start_title":      {"ar": "يلا نعمل بوتك", "en": "Let's create your bot"},
+
+ # ---- لحظة الترقية داخل المنتج (app.upgrade_moment) ----
+ "upg_broadcast_t":  {"ar": "عندك {n} عميل مشترك في بوتك", "en": "{n} customers follow your bot"},
+ "upg_broadcast_d":  {"ar": "دول ناس اختاروا يتابعوك. بباقة التاجر تبعتلهم عرضاً أو خبراً واحداً "
+                            "بضغطة (حملة Broadcast) بدل ما تكلّم كل واحد لوحده.",
+                      "en": "These people chose to follow you. On the Merchant plan you can send "
+                            "them one offer or update in a single tap instead of messaging each one."},
+ "upg_inbox_t":      {"ar": "بوتك جابلك {n} نتيجة فعلاً", "en": "Your bot has brought in {n} results"},
+ "upg_inbox_d":      {"ar": "طلبات وبيانات عملاء حقيقية. بالترقية تفتح صندوق الوارد وترد على "
+                            "العميل بنفسك من نفس المكان، وتشغّل «عقل البوت» يرد على الأسئلة "
+                            "اللي الفلو مش عارفها.",
+                      "en": "Real orders and leads. Upgrading opens the inbox so you can reply "
+                            "yourself, and turns on the AI brain for questions your flow can't answer."},
+ "upg_bots_t":       {"ar": "وصلت لحد الباقة المجانية: بوت واحد",
+                      "en": "You've reached the free plan limit: one bot"},
+ "upg_bots_d":       {"ar": "بوتك الأول بيشتغل. لو عايز بوت تاني لفرع أو نشاط مختلف، باقة "
+                            "التاجر بتديك 3 بوتات.",
+                      "en": "Your first bot is working. For a second bot — another branch or a "
+                            "different business — the Merchant plan gives you 3."},
+ "upg_cta":          {"ar": "شوف الباقات", "en": "See the plans"},
+ "upg_later":        {"ar": "مش دلوقتي", "en": "Not now"},
  "adm_convo":        {"ar": "تحليل المحادثات", "en": "Conversation insights"},
 
  # ---- محرّك التفعيل (activation.py): رسالة واحدة لكل حالة، كل واحدة فيها إجراء واحد ----

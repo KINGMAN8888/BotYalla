@@ -104,7 +104,7 @@ class InviteTests(Base):
         self.assertIn("/register", c.get(f"/join/{token}").headers["Location"])
         self.assertIn('"invite": true', c.get("/register").get_data(as_text=True))
         r = c.post("/register", data=signup("invited_one"))
-        self.assertIn("/dashboard", r.headers["Location"])
+        self.assertIn("/start", r.headers["Location"])   # حساب جديد بلا بوت
         u = db.get_user_by_name("invited_one")
         self.assertFalse(db.email_gate(u))
         self.assertEqual(db.list_invites()[0]["used_by"], u["id"])
