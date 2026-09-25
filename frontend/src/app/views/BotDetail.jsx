@@ -1103,6 +1103,7 @@ export default function BotDetail() {
                 ? <a className={MENU_ROW} href={`/bot/${bot.id}/broadcast`}><Icon name="megaphone" size={16} className="text-au-cyan" />{t("campaign")}</a>
                 : <a className={MENU_ROW} href={BY.urls.pricing} title={t("upgrade_req")}><Icon name="lock" size={16} className="text-ink-3" />{t("campaign")}</a>}
               {isWa && <a className={MENU_ROW} href={`/bot/${bot.id}/templates`}><Icon name="grid" size={16} className="text-au-cyan" />{t("wa_tpl_link")}</a>}
+              {isWa && <a className={MENU_ROW} href={`/bot/${bot.id}/developer`}><Icon name="key" size={16} className="text-au-cyan" />{t("dev_title")}</a>}
               <a className={MENU_ROW} href={BY.urls.media}><Icon name="image" size={16} className="text-au-cyan" />{t("media_nav")}</a>
               <Form action={`/bot/${bot.id}/delete`} confirm={bi("حذف البوت نهائياً؟", "Delete this bot permanently?")}>
                 <button type="submit" className={MENU_ROW + " !text-red-300"}>

@@ -162,6 +162,10 @@ def _csrf_protect():
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
         if request.path in ("/wh/whatsapp", "/wh/meta"):    # التوقيع هو الحارس
             return
+        # واجهة الشركاء: المفتاح في ترويسة Authorization هو الحارس، ولا جلسة أصلاً.
+        # (بلا استثناء هنا يرفض كل نداء من خادم الشريك بـ400.)
+        if request.path.startswith("/api/v1/"):
+            return
         # إلغاء اشتراك البريد بضغطة (RFC 8058): Gmail/Yahoo يرسلان POST من خوادمهما بلا
         # جلسة. الحارس هنا توكن HMAC في الرابط نفسه (mailer.check_unsub) + حدّ للطلبات.
         if request.path.startswith("/email/unsubscribe/"):
@@ -747,6 +751,7 @@ def register():
                     db.set_setting(user_id, "email_waived", "invite")
                     log.info("invite signup user=%s (email verification waived)", user_id)
             if not err:
+                _consume_team_invite(user_id, lang)     # دعوة زميل: يدخل حساب شركته فوراً
                 return _finish_signup(user_id, d, lang, request.form.get("email_news") == "1")
             errs[{"email_taken": "email", "phone_taken": "phone"}.get(err, "username")] = ACC.msg(err, lang)
         return _signup_failed("register", "register", errs)
@@ -1181,7 +1186,7 @@ def reset_password(token):
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    bots = db.list_bots(uid())
+    bots = db.list_bots(acct())
     total = {"subscribers": 0, "orders": 0, "leads": 0, "bookings": 0, "revenue": 0}
     for b in bots:
         b["running"] = manager.is_running(b["id"])
@@ -1269,8 +1274,12 @@ def upgrade_moment(plan_id, bots, total):
 
 
 def _home_for(user_id):
-    """أين يذهب المستخدم بعد التسجيل أو التأكيد: «أول بوت» لمن لا بوت له."""
-    return url_for("first_bot") if not db.count_user_bots(user_id) else url_for("dashboard")
+    """أين يذهب المستخدم بعد التسجيل أو التأكيد: «أول بوت» لمن لا بوت له.
+
+    موظّف انضمّ لفريق: العبرة ببوتات الحساب لا ببوتاته هو — فلا نطلب منه إنشاء بوت
+    بينما حساب شركته مليء بالبوتات."""
+    return (url_for("first_bot") if not db.count_user_bots(db.account_of(user_id))
+            else url_for("dashboard"))
 
 
 def _journey(bots, plan_id):
@@ -1356,13 +1365,47 @@ def _greeting_set(b, cfg):
                 (_DEFAULT_FLOW.get("start_message") or "").strip()}
     return bool(sm) and sm not in defaults
 
+# ---------- الحساب الفعّال وفريقه ----------
+# صاحب العمل يدعو موظفيه فيعملون داخل حسابه هو: `acct()` هي الحساب الذي تجري عليه كل
+# العمليات، و`uid()` يبقى الشخص المسؤول عن الفعل (للسجل والتدقيق). كل ما كان يسأل عن
+# `uid()` لملكية بوت صار يسأل عن `acct()` — والفرق محصور في هذه الدوال الثلاث.
+def acct():
+    """حساب البوتات الحالي — حساب المستخدم نفسه، أو صاحب العمل الذي يعمل في فريقه."""
+    if not hasattr(g, "_acct"):
+        g._acct = db.account_of(uid()) if uid() else None
+    return g._acct
+
+
+def my_team_role():
+    """owner | admin | member — يُقرأ مرة واحدة لكل طلب."""
+    if not hasattr(g, "_team_role"):
+        g._team_role = db.team_role(uid()) if uid() else "owner"
+    return g._team_role
+
+
+def require_team(*roles):
+    """يحرس ما لا يخصّ الموظف العادي: الفريق، الأسرار، مفاتيح الـAPI."""
+    from functools import wraps
+
+    def deco(f):
+        @wraps(f)
+        def w(*a, **k):
+            if not uid():
+                return redirect(url_for("login"))
+            if my_team_role() not in roles:
+                abort(403)
+            return f(*a, **k)
+        return w
+    return deco
+
+
 def _owned(bot_id):
-    b = db.get_bot(bot_id, uid())
+    b = db.get_bot(bot_id, acct())
     if not b: abort(404)
     return b
 
 # أسرار تشغيلية داخل إعداد البوت — لا تصل للمتصفح أبداً (قائمة واحدة للنسختين تحت)
-_SECRET_CFG = ("wa_token", "wa_pin", "page_token")
+_SECRET_CFG = ("wa_token", "wa_pin", "page_token", "relay_secret")
 
 
 def _public_bot(b):
@@ -4992,6 +5035,10 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
         {"k": "support",     "u": url_for("support"),      "i": "help",     "l": i18n.t("nav_support", lang)},
         {"k": "affiliate",   "u": url_for("affiliate"),    "i": "crown",    "l": i18n.t("aff_title", lang)},
     ]
+    # «الفريق» لصاحب الحساب ومن يديره معه — لا يراه الموظف العادي
+    if uid() and my_team_role() in ("owner", "admin"):
+        nav.insert(6, {"k": "team", "u": url_for("team_page"), "i": "users",
+                       "l": i18n.t("team_nav", lang)})
     admin_nav = []
     if role in ("admin", "support"):
         admin_nav = [
@@ -6314,6 +6361,7 @@ def whatsapp_webhook():
     payload = request.get_json(silent=True)
     if payload:
         manager.process_wa_webhook(payload)
+        _relay_webhook(body, payload)      # نسخة لخادم الشريك إن سجّل ويبهوك
     return "OK", 200
 
 
@@ -6373,6 +6421,344 @@ def _migrate_ai_key():
     prov = db.get_platform("ai_provider", "gemini") or "gemini"
     if db.get_platform("ai_key", "") and not db.get_platform(f"ai_key_{prov}", ""):
         db.set_platform(f"ai_key_{prov}", db.get_platform("ai_key", ""))
+
+# ══════════════════ فريق الحساب · بوابة الأسرار · واجهة الشركاء ══════════════════
+# ثلاث حاجات لعميل واحد: موظفوه يديرون حسابه، والأسرار خلف كلمة مروره، وخادمه يبعث
+# ويستقبل. الأسرار لا تُرسل مع حمولة الصفحة أبداً (`_SECRET_CFG`) بل تُطلب بنداء
+# مستقلّ بعد إعادة إدخال كلمة المرور، فلا تلتقطها لقطة شاشة ولا سجلّ متصفح.
+
+_SUDO_TTL = 15 * 60          # نافذة إظهار الأسرار بعد إعادة إدخال كلمة المرور
+# لماذا يُرفض الانضمام أحياناً — رسالة لكل سبب بدل «فشل» مبهمة (database.join_team)
+_JOIN_ERR = {"has_bots": "team_join_has_bots", "has_team": "team_join_has_team",
+             "staff": "team_join_staff", "self": "team_join_failed"}
+
+
+def _sudo_ok():
+    return int(_time.time()) - int(session.get("sudo_at") or 0) < _SUDO_TTL
+
+
+def _sudo_open(password):
+    """يفتح النافذة بكلمة مرور المستخدم نفسه (لا بكلمة مرور صاحب الحساب)."""
+    u = db.get_user(uid())
+    if not u or not auth.verify_password(password or "", u["pw_hash"]):
+        return False
+    session["sudo_at"] = int(_time.time())
+    return True
+
+
+def _team_link(token):
+    return url_for("join_team_invite", token=token, _external=True)
+
+
+def _consume_team_invite(user_id, lang="ar"):
+    """دعوة زميل محفوظة في الجلسة تُستهلك لحظة إنشاء الحساب."""
+    tok = session.pop("team_invite", None)
+    if not tok:
+        return
+    err = db.use_team_invite(tok, user_id)
+    if err:
+        log.info("team invite not applied: user=%s reason=%s", user_id, err)
+        flash(i18n.t("team_join_failed", lang), "error")
+    else:
+        log.info("user=%s joined a team account", user_id)
+
+
+@app.route("/join/team/<token>")
+def join_team_invite(token):
+    """رابط الانضمام المخصّص: من له حساب ينضم فوراً، ومن لا حساب له يسجّل ثم ينضم."""
+    lang = session.get("lang", i18n.DEFAULT)
+    if _rate_limited(request.remote_addr or "?", limit=20, window=600, bucket="team_inv"):
+        abort(429)
+    inv = db.team_invite(token)
+    if not inv:
+        flash(i18n.t("team_link_bad", lang), "error")
+        return redirect(url_for("login") if not uid() else url_for("dashboard"))
+    if uid():
+        err = db.use_team_invite(token, uid())
+        flash(i18n.t("team_joined" if not err else _JOIN_ERR.get(err, "team_join_failed"), lang),
+              "ok" if not err else "error")
+        return redirect(url_for("dashboard"))
+    session["team_invite"] = token
+    flash(i18n.t("team_link_ok", lang).replace("{owner}", inv["owner_name"]), "ok")
+    resp = redirect(url_for("register"))
+    resp.headers["Referrer-Policy"] = "no-referrer"       # الرمز لا يتسرّب لأي طرف
+    return resp
+
+
+@app.route("/team")
+@require_team("owner", "admin")
+def team_page():
+    owner = acct()
+    return react_page("team", "team_title", {
+        "role": my_team_role(),
+        "me": uid(),
+        "members": db.team_members(owner),
+        "invites": db.list_team_invites(owner),
+        "newLink": session.pop("new_team_link", None),    # يُعرض مرة واحدة
+        "createUrl": url_for("team_invite_create"),
+        "teamBase": url_for("team_page"),        # الواجهة تبني /team/<id>/role ونظائره
+    })
+
+
+@app.route("/team/invite", methods=["POST"])
+@require_team("owner", "admin")
+def team_invite_create():
+    lang = session.get("lang", i18n.DEFAULT)
+    if db.team_size(acct()) + len(db.list_team_invites(acct())) >= 50:
+        flash(i18n.t("team_limit", lang), "error")
+        return redirect(url_for("team_page"))
+    role = request.form.get("role", "member")
+    token = _secrets.token_urlsafe(32)
+    db.create_team_invite(acct(), token, role=role, email=request.form.get("email", ""),
+                          days=7, note=request.form.get("note", ""))
+    session["new_team_link"] = _team_link(token)          # الرمز نفسه لا يُخزَّن في القاعدة
+    log.info("team invite created: account=%s by=%s role=%s", acct(), uid(), role)
+    flash(i18n.t("team_link_made", lang), "ok")
+    return redirect(url_for("team_page"))
+
+
+@app.route("/team/invite/<int:invite_id>/revoke", methods=["POST"])
+@require_team("owner", "admin")
+def team_invite_revoke(invite_id):
+    lang = session.get("lang", i18n.DEFAULT)
+    db.revoke_team_invite(acct(), invite_id)
+    flash(i18n.t("team_link_revoked", lang), "ok")
+    return redirect(url_for("team_page"))
+
+
+@app.route("/team/<int:member_id>/role", methods=["POST"])
+@require_team("owner")
+def team_member_role(member_id):
+    lang = session.get("lang", i18n.DEFAULT)
+    db.set_team_role(acct(), member_id, request.form.get("role", "member"))
+    flash(i18n.t("team_role_saved", lang), "ok")
+    return redirect(url_for("team_page"))
+
+
+@app.route("/team/<int:member_id>/remove", methods=["POST"])
+@require_team("owner")
+def team_member_remove(member_id):
+    lang = session.get("lang", i18n.DEFAULT)
+    if db.remove_team_member(acct(), member_id):
+        log.info("team member removed: account=%s member=%s by=%s", acct(), member_id, uid())
+        flash(i18n.t("team_removed", lang), "ok")
+    return redirect(url_for("team_page"))
+
+
+# ---------- صفحة المطوّر: المفاتيح والويبهوك ----------
+def _relay_url_error(url):
+    """يرفض ما ليس عنواناً عاماً بـhttps — الويبهوك يخرج من خادمنا، فلا يُوجَّه للداخل."""
+    from urllib.parse import urlparse
+    import ipaddress
+    p = urlparse(url or "")
+    if p.scheme != "https":
+        return "https"
+    host = (p.hostname or "").lower()
+    if not host or host == "localhost" or host.endswith(".local") or host.endswith(".internal"):
+        return "host"
+    try:
+        ip = ipaddress.ip_address(host)
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified):
+            return "host"
+    except ValueError:
+        pass                                   # اسم نطاق: يُحلّ وقت الإرسال
+    return ""
+
+
+@app.route("/bot/<int:bot_id>/developer")
+@require_team("owner", "admin")
+def bot_developer(bot_id):
+    b = _owned(bot_id)
+    try:
+        cfg = json.loads(b["config_json"] or "{}")
+    except (ValueError, TypeError):
+        cfg = {}
+    tok = str(b.get("token") or "")
+    is_wa = tok.startswith("wa:")
+    return react_page("developer", "dev_title", {
+        "bot": _public_bot(b),
+        "isWa": is_wa,
+        "phoneId": tok[3:] if is_wa else "",
+        "wabaId": cfg.get("wa_waba_id", ""),
+        "hasToken": bool(cfg.get("wa_token")),
+        "relayUrl": cfg.get("relay_url", ""),
+        "hasRelaySecret": bool(cfg.get("relay_secret")),
+        "keys": db.list_api_keys(acct()),
+        "newKey": session.pop("new_api_key", None),       # يُعرض مرة واحدة ثم لا يعود
+        "sudo": _sudo_ok(),
+        "apiBase": url_for("api_send", phone_id="__PID__", _external=True),
+        "revealUrl": url_for("bot_reveal", bot_id=bot_id),
+        "keyUrl": url_for("bot_key_create", bot_id=bot_id),
+        "relaySaveUrl": url_for("bot_relay_save", bot_id=bot_id),
+    })
+
+
+@app.route("/bot/<int:bot_id>/developer/reveal", methods=["POST"])
+@require_team("owner", "admin")
+def bot_reveal(bot_id):
+    """يُظهر الأسرار بعد كلمة المرور. لا تُسجَّل قيمة ولا جزء منها — الفعل وحده."""
+    lang = session.get("lang", i18n.DEFAULT)
+    b = _owned(bot_id)
+    if _rate_limited(f"sudo{uid()}", limit=8, window=300, bucket="sudo"):
+        return jsonify({"ok": False, "error": i18n.t("sudo_wait", lang)}), 429
+    pw = (request.get_json(silent=True) or {}).get("password", "")
+    if not (_sudo_ok() or _sudo_open(pw)):
+        log.info("secret reveal refused: user=%s bot=%s", uid(), bot_id)
+        return jsonify({"ok": False, "error": i18n.t("sudo_bad", lang)}), 403
+    try:
+        cfg = json.loads(b["config_json"] or "{}")
+    except (ValueError, TypeError):
+        cfg = {}
+    log.info("secrets revealed: user=%s bot=%s", uid(), bot_id)
+    return jsonify({"ok": True, "token": cfg.get("wa_token", ""),
+                    "relaySecret": cfg.get("relay_secret", "")})
+
+
+@app.route("/bot/<int:bot_id>/keys", methods=["POST"])
+@require_team("owner", "admin")
+def bot_key_create(bot_id):
+    lang = session.get("lang", i18n.DEFAULT)
+    _owned(bot_id)
+    if not _sudo_ok():
+        flash(i18n.t("sudo_first", lang), "error")
+        return redirect(url_for("bot_developer", bot_id=bot_id))
+    if len(db.list_api_keys(acct())) >= 20:
+        flash(i18n.t("key_limit", lang), "error")
+        return redirect(url_for("bot_developer", bot_id=bot_id))
+    key = "by_live_" + _secrets.token_urlsafe(32)
+    db.create_api_key(acct(), key, name=request.form.get("name", ""),
+                      bot_id=bot_id if request.form.get("scope") == "bot" else None,
+                      created_by=uid())
+    session["new_api_key"] = key                 # مرة واحدة: القاعدة تحفظ HMAC لا المفتاح
+    log.info("api key created: account=%s by=%s bot=%s", acct(), uid(), bot_id)
+    flash(i18n.t("key_made", lang), "ok")
+    return redirect(url_for("bot_developer", bot_id=bot_id))
+
+
+@app.route("/bot/<int:bot_id>/keys/<int:key_id>/revoke", methods=["POST"])
+@require_team("owner", "admin")
+def bot_key_revoke(bot_id, key_id):
+    lang = session.get("lang", i18n.DEFAULT)
+    _owned(bot_id)
+    if db.revoke_api_key(acct(), key_id):
+        log.info("api key revoked: account=%s key=%s by=%s", acct(), key_id, uid())
+        flash(i18n.t("key_revoked", lang), "ok")
+    return redirect(url_for("bot_developer", bot_id=bot_id))
+
+
+@app.route("/bot/<int:bot_id>/relay", methods=["POST"])
+@require_team("owner", "admin")
+def bot_relay_save(bot_id):
+    lang = session.get("lang", i18n.DEFAULT)
+    b = _owned(bot_id)
+    try:
+        cfg = json.loads(b["config_json"] or "{}")
+    except (ValueError, TypeError):
+        cfg = {}
+    url = request.form.get("relay_url", "").strip()
+    if url:
+        err = _relay_url_error(url)
+        if err:
+            flash(i18n.t("relay_bad_" + err, lang), "error")
+            return redirect(url_for("bot_developer", bot_id=bot_id))
+    cfg["relay_url"] = url
+    if url and (not cfg.get("relay_secret") or request.form.get("rotate") == "1"):
+        cfg["relay_secret"] = _secrets.token_urlsafe(32)
+        session.pop("sudo_at", None)             # السرّ الجديد يُرى بكلمة المرور من جديد
+    db.update_bot_config(bot_id, cfg)
+    log.info("relay %s: bot=%s by=%s", "set" if url else "cleared", bot_id, uid())
+    flash(i18n.t("relay_saved" if url else "relay_off", lang), "ok")
+    return redirect(url_for("bot_developer", bot_id=bot_id))
+
+
+# ---------- واجهة الشركاء: نفس شكل Cloud API، ومفتاحنا بدل توكن Meta ----------
+@app.route("/api/v1/<phone_id>/messages", methods=["POST"])
+def api_send(phone_id):
+    """`POST /api/v1/<phone_number_id>/messages` — بنية Meta حرفياً.
+
+    الشريك يغيّر عنوان الأساس وحده ويترك كوده كما هو. توكن Meta لا يغادر الخادم:
+    المفتاح هنا مفتاحنا، نلغيه وحده متى شئنا بلا مساس ببقية العملاء."""
+    key = ""
+    head = request.headers.get("Authorization", "")
+    if head[:7].lower() == "bearer ":
+        key = head[7:].strip()
+    key = key or request.headers.get("X-API-Key", "").strip()
+    row = db.api_key_row(key)
+    if not row:
+        return jsonify({"error": {"message": "invalid or revoked API key",
+                                  "type": "auth", "code": 401}}), 401
+    if _rate_limited(f"api{row['id']}", limit=600, window=60, bucket="api"):
+        return jsonify({"error": {"message": "too many requests",
+                                  "type": "rate_limit", "code": 429}}), 429
+    if not str(phone_id or "").isdigit():
+        return jsonify({"error": {"message": "bad phone number id", "code": 400}}), 400
+    b = db.get_bot_by_token("wa:" + str(phone_id))
+    if not b or b["owner_id"] != row["owner_id"] or (row["bot_id"] and row["bot_id"] != b["id"]):
+        return jsonify({"error": {"message": "this key cannot send from this number",
+                                  "type": "auth", "code": 403}}), 403
+    try:
+        cfg = json.loads(b["config_json"] or "{}")
+    except (ValueError, TypeError):
+        cfg = {}
+    if not cfg.get("wa_token"):
+        return jsonify({"error": {"message": "this number is not connected", "code": 409}}), 409
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": {"message": "body must be a JSON object", "code": 400}}), 400
+    status, data = WAC.proxy_send(str(phone_id), cfg["wa_token"], payload)
+    log.info("api send: account=%s key=%s bot=%s status=%s", row["owner_id"], row["id"],
+             b["id"], status)
+    return jsonify(data), status
+
+
+# ---------- تمرير الوارد إلى خادم الشريك ----------
+def _relay_targets(payload):
+    """{phone_id: (url, secret, bot_id)} لكل رقم في التحديث له ويبهوك مسجَّل."""
+    out = {}
+    for e in (payload.get("entry") or []):
+        for ch in (e.get("changes") or []):
+            meta = ((ch.get("value") or {}).get("metadata")) or {}
+            pid = str(meta.get("phone_number_id") or "")
+            if not pid or pid in out:
+                continue
+            b = db.get_bot_by_token("wa:" + pid)
+            if not b:
+                continue
+            try:
+                cfg = json.loads(b["config_json"] or "{}")
+            except (ValueError, TypeError):
+                continue
+            if cfg.get("relay_url") and cfg.get("relay_secret"):
+                out[pid] = (cfg["relay_url"], cfg["relay_secret"], b["id"])
+    return out
+
+
+def _relay_post(url, secret, body, bot_id):
+    """نسخة حرفية من تحديث Meta + توقيعنا. لا يُسجَّل العنوان (قد يحمل رمزاً في مساره)."""
+    import httpx
+    sig = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    try:
+        r = httpx.post(url, content=body, timeout=10.0, follow_redirects=False,
+                       headers={"Content-Type": "application/json",
+                                "X-BotYalla-Signature-256": sig,
+                                "User-Agent": "BotYalla-Relay/1"})
+        if r.status_code >= 400:
+            log.warning("relay rejected by partner: bot=%s status=%s", bot_id, r.status_code)
+    except Exception as e:                       # شبكة الشريك ليست مسؤوليتنا
+        log.warning("relay failed: bot=%s %s", bot_id, type(e).__name__)
+
+
+def _relay_webhook(body, payload):
+    """يمرّر التحديث في خيط منفصل: ردّنا لـMeta لا ينتظر خادم الشريك أبداً."""
+    import threading
+    try:
+        targets = _relay_targets(payload)
+    except (AttributeError, TypeError):
+        return
+    for url, secret, bid in targets.values():
+        threading.Thread(target=_relay_post, args=(url, secret, body, bid), daemon=True).start()
+
 
 def bootstrap():
     setup_logging()

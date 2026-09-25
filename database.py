@@ -172,9 +172,12 @@ def _migrate(c):
         c.execute("ALTER TABLE users ADD COLUMN email TEXT")
     # نظام الحساب (2026-09-15): الهاتف وتأكيده، تأكيد البريد، السن، نوع الكيان.
     # verify_required=1 للحسابات الجديدة وحدها — القديمة تبقى تعمل بلا تأكيد إجباري.
+    # فريق الحساب (2026-09-25): الموظف يعمل داخل حساب صاحب العمل، فـ`works_for` يحدّد
+    # «الحساب الفعّال» لكل استعلامات البوتات. NULL = يعمل في حسابه هو.
     for col, ddl in (("phone", "TEXT"), ("phone_verified_at", "INTEGER"),
                      ("email_verified_at", "INTEGER"), ("verify_required", "INTEGER NOT NULL DEFAULT 0"),
-                     ("age", "INTEGER"), ("entity_type", "TEXT")):
+                     ("age", "INTEGER"), ("entity_type", "TEXT"),
+                     ("works_for", "INTEGER"), ("team_role", "TEXT")):
         if col not in cols:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users(phone) WHERE phone IS NOT NULL")
@@ -771,6 +774,7 @@ def init_db():
         _email_tables(c)
         _auth_tables(c)
         _activation_tables(c)
+        _team_tables(c)
 
 def _hot_indexes(c):
     """فهارس الاستعلامات الساخنة. EXPLAIN QUERY PLAN كان يُظهر مسحاً كاملاً لـ events و
@@ -3992,3 +3996,215 @@ def mark_waiting_alerted(bot_id, peer):
     with get_conn() as c:
         c.execute("UPDATE conversations SET waiting_alert_at=? WHERE bot_id=? AND peer=?",
                   (int(time.time()), bot_id, peer))
+
+
+# ─────────────────────────────  فريق الحساب ومفاتيح الـAPI  ─────────────────────────────
+# «الحساب» ليس «المستخدم»: صاحب العمل يدعو موظفيه، فيعملون داخل حسابه هو على نفس البوتات.
+# `users.works_for` هو كل الفرق — و`account_of()` هي النقطة الوحيدة التي تترجم مستخدماً إلى
+# حساب، فلا يتسرّب هذا التفريق إلى بقية الكود.
+#
+# الأدوار: owner (صاحب الحساب) · admin (يرى الأسرار ويدير الفريق) · member (البوتات فقط).
+# الأسرار (توكن واتساب، مفاتيح الـAPI) لا يراها member إطلاقاً، ولا يراها admin إلا بعد
+# إعادة إدخال كلمة مروره (بوابة `app._sudo_ok`).
+TEAM_ROLES = ("admin", "member")
+
+
+def _team_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS team_invites(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            token_idx TEXT NOT NULL UNIQUE,      -- HMAC للرمز: لا نخزّن الرابط نفسه أبداً
+            role TEXT NOT NULL DEFAULT 'member',
+            email TEXT,                          -- اختياري: الدعوة مقصورة على هذا البريد
+            note TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            used_at INTEGER,
+            used_by INTEGER,
+            revoked_at INTEGER,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_team_inv_owner ON team_invites(owner_id);
+        CREATE TABLE IF NOT EXISTS api_keys(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,           -- الحساب لا المستخدم
+            bot_id INTEGER,                      -- NULL = كل بوتات الحساب
+            name TEXT NOT NULL DEFAULT '',
+            key_idx TEXT NOT NULL UNIQUE,        -- HMAC للمفتاح؛ المفتاح نفسه لا يُخزَّن
+            prefix TEXT NOT NULL,                -- أول محارف للعرض والتمييز
+            created_at INTEGER NOT NULL,
+            created_by INTEGER,
+            last_used_at INTEGER,
+            revoked_at INTEGER,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_api_keys_owner ON api_keys(owner_id);
+    """)
+
+
+def account_of(user_id):
+    """الحساب الذي يعمل فيه المستخدم: نفسه، أو صاحب العمل الذي انضمّ إلى فريقه."""
+    if not user_id:
+        return user_id
+    with get_conn() as c:
+        r = c.execute("SELECT works_for FROM users WHERE id=?", (user_id,)).fetchone()
+    return (r["works_for"] or user_id) if r else user_id
+
+
+def team_role(user_id):
+    """owner | admin | member — صاحب الحساب دائماً owner."""
+    with get_conn() as c:
+        r = c.execute("SELECT works_for, team_role FROM users WHERE id=?", (user_id,)).fetchone()
+    if not r or not r["works_for"]:
+        return "owner"
+    return r["team_role"] if r["team_role"] in TEAM_ROLES else "member"
+
+
+def team_members(owner_id):
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT id, username, email, team_role, created_at FROM users "
+            "WHERE works_for=? ORDER BY id", (owner_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def team_size(owner_id):
+    with get_conn() as c:
+        return c.execute("SELECT COUNT(*) n FROM users WHERE works_for=?",
+                         (owner_id,)).fetchone()["n"]
+
+
+def join_team(owner_id, member_id, role="member"):
+    """يُدخِل المستخدم في حساب صاحب العمل. يرفض حين يفقد المستخدم شيئاً يملكه.
+
+    الرفض مقصود: `works_for` يحوّل كل استعلامات البوتات إلى حساب آخر، فمن يملك بوتات
+    ستختفي من أمامه. ومن هو صاحب فريق بالفعل لا يصير موظفاً (لا سلسلة حسابات)."""
+    if not owner_id or not member_id or owner_id == member_id:
+        return "self"
+    with get_conn() as c:
+        if c.execute("SELECT 1 FROM bots WHERE owner_id=? LIMIT 1", (member_id,)).fetchone():
+            return "has_bots"
+        if c.execute("SELECT 1 FROM users WHERE works_for=? LIMIT 1", (member_id,)).fetchone():
+            return "has_team"
+        o = c.execute("SELECT works_for FROM users WHERE id=?", (owner_id,)).fetchone()
+        if not o or o["works_for"]:
+            return "bad_owner"
+        m = c.execute("SELECT role FROM users WHERE id=?", (member_id,)).fetchone()
+        if not m:
+            return "bad_member"
+        if m["role"] != "user":
+            return "staff"                        # أدمن المنصة لا ينضم لفريق عميل
+        c.execute("UPDATE users SET works_for=?, team_role=? WHERE id=?",
+                  (owner_id, role if role in TEAM_ROLES else "member", member_id))
+    return ""
+
+
+def set_team_role(owner_id, member_id, role):
+    if role not in TEAM_ROLES:
+        return False
+    with get_conn() as c:
+        return c.execute("UPDATE users SET team_role=? WHERE id=? AND works_for=?",
+                         (role, member_id, owner_id)).rowcount > 0
+
+
+def remove_team_member(owner_id, member_id):
+    """يخرج الموظف إلى حسابه هو — لا يُحذف حسابه ولا بوتات صاحب العمل."""
+    with get_conn() as c:
+        return c.execute("UPDATE users SET works_for=NULL, team_role=NULL "
+                         "WHERE id=? AND works_for=?", (member_id, owner_id)).rowcount > 0
+
+
+# ── دعوات الفريق: رابط تسجيل مخصّص لكل موظف ──────────────────────────────────
+def create_team_invite(owner_id, token, role="member", email="", days=7, note=""):
+    now = int(time.time())
+    with get_conn() as c:
+        cur = c.execute(
+            "INSERT INTO team_invites(owner_id, token_idx, role, email, note, created_at, expires_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (owner_id, _token_idx(token), role if role in TEAM_ROLES else "member",
+             (email or "").strip().lower() or None, (note or "")[:120], now,
+             now + max(1, int(days)) * 86400))
+        return cur.lastrowid
+
+
+def team_invite(token):
+    """صف الدعوة الصالحة (غير مستعملة ولا ملغاة ولا منتهية) أو None."""
+    if not token:
+        return None
+    with get_conn() as c:
+        r = c.execute("SELECT i.*, u.username AS owner_name FROM team_invites i "
+                      "JOIN users u ON u.id=i.owner_id "
+                      "WHERE i.token_idx=? AND i.used_at IS NULL AND i.revoked_at IS NULL "
+                      "AND i.expires_at > ?", (_token_idx(token), int(time.time()))).fetchone()
+    return dict(r) if r else None
+
+
+def use_team_invite(token, user_id):
+    """يستهلك الدعوة ويُدخِل المستخدم الفريق — خطوة واحدة فلا تُستعمل مرتين."""
+    inv = team_invite(token)
+    if not inv:
+        return "invalid"
+    err = join_team(inv["owner_id"], user_id, inv["role"])
+    if err:
+        return err
+    with get_conn() as c:
+        c.execute("UPDATE team_invites SET used_at=?, used_by=? WHERE id=? AND used_at IS NULL",
+                  (int(time.time()), user_id, inv["id"]))
+    return ""
+
+
+def list_team_invites(owner_id, limit=20):
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT id, role, email, note, created_at, expires_at, used_at, used_by, revoked_at "
+            "FROM team_invites WHERE owner_id=? ORDER BY id DESC LIMIT ?",
+            (owner_id, int(limit))).fetchall()
+    return [dict(r) for r in rows]
+
+
+def revoke_team_invite(owner_id, invite_id):
+    with get_conn() as c:
+        return c.execute("UPDATE team_invites SET revoked_at=? WHERE id=? AND owner_id=? "
+                         "AND used_at IS NULL AND revoked_at IS NULL",
+                         (int(time.time()), invite_id, owner_id)).rowcount > 0
+
+
+# ── مفاتيح الـAPI: يُعرض المفتاح مرة واحدة، ويُخزَّن HMAC له وحده ────────────────
+def create_api_key(owner_id, key, name="", bot_id=None, created_by=None):
+    with get_conn() as c:
+        cur = c.execute(
+            "INSERT INTO api_keys(owner_id, bot_id, name, key_idx, prefix, created_at, created_by) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (owner_id, bot_id or None, (name or "")[:60], _token_idx(key), key[:12],
+             int(time.time()), created_by))
+        return cur.lastrowid
+
+
+def list_api_keys(owner_id, include_revoked=False):
+    q = ("SELECT k.id, k.bot_id, k.name, k.prefix, k.created_at, k.last_used_at, k.revoked_at, "
+         "b.name AS bot_name FROM api_keys k LEFT JOIN bots b ON b.id=k.bot_id WHERE k.owner_id=?")
+    if not include_revoked:
+        q += " AND k.revoked_at IS NULL"
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(q + " ORDER BY k.id DESC", (owner_id,)).fetchall()]
+
+
+def revoke_api_key(owner_id, key_id):
+    with get_conn() as c:
+        return c.execute("UPDATE api_keys SET revoked_at=? WHERE id=? AND owner_id=? "
+                         "AND revoked_at IS NULL",
+                         (int(time.time()), key_id, owner_id)).rowcount > 0
+
+
+def api_key_row(key):
+    """صف المفتاح الصالح + تحديث آخر استعمال. None لمفتاح خاطئ أو ملغى."""
+    if not key or len(key) < 20:
+        return None
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM api_keys WHERE key_idx=? AND revoked_at IS NULL",
+                      (_token_idx(key),)).fetchone()
+        if not r:
+            return None
+        c.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (int(time.time()), r["id"]))
+        return dict(r)

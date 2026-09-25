@@ -66,6 +66,29 @@ def verify_credentials(phone_id, token):
             "quality": data.get("quality_rating", "")}
 
 
+def proxy_send(phone_id, token, payload):
+    """يمرّر حمولة الشريك كما هي إلى Cloud API ويعيد (الحالة، الرد) — نداء متزامن.
+
+    لا نُعيد تشكيل الحمولة عمداً: كل ما تقبله Meta (نص، قالب، وسائط، تفاعلي) يمرّ بلا
+    وسيط، فكود الشريك المكتوب أصلاً على Graph يعمل بتغيير عنوان الأساس وحده. وتوكن
+    Meta يبقى على خادمنا — الشريك يحمل مفتاحنا نحن، ونلغيه وحده متى شئنا."""
+    body = dict(payload or {})
+    body.setdefault("messaging_product", "whatsapp")
+    try:
+        with httpx.Client(timeout=TIMEOUT) as c:
+            r = c.post(f"{META_API}/{phone_id}/messages", json=body,
+                       headers={"Authorization": f"Bearer {token}"})
+        try:
+            data = r.json()
+        except ValueError:
+            data = {"error": {"message": (r.text or "")[:300], "code": r.status_code}}
+        return r.status_code, data
+    except httpx.HTTPError as e:
+        log.warning("proxy_send upstream error: %s", type(e).__name__)
+        return 502, {"error": {"message": f"upstream unreachable ({type(e).__name__})",
+                               "type": "upstream", "code": 502}}
+
+
 def _meta_err(r):
     try:
         return ((r.json() or {}).get("error") or {}).get("message") or f"HTTP {r.status_code}"
