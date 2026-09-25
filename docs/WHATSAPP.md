@@ -7,7 +7,8 @@
 > (`wa_signup.py` + `tests/test_wa_signup.py`): المنصة Tech Provider معتمد، والعميل يربط
 > رقمه بضغطة من داخل لوحته — الربط اليدوي بـPhone Number ID وAccess Token باقٍ كبديل.
 > ومنذ 2026-09-25 يوجد **مسار شريك تقني** كامل (مفتاح BotYalla + تمرير الوارد بتوقيع):
-> اقرأ [PARTNER_API.md](PARTNER_API.md). اقرأ القسم 6 قبل أول عميل.
+> اقرأ [PARTNER_API.md](PARTNER_API.md) (وبالإنجليزية للتسليم المباشر:
+> [PARTNER_API.en.md](PARTNER_API.en.md)). اقرأ القسم 6 قبل أول عميل.
 
 ---
 
