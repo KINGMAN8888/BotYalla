@@ -6734,8 +6734,24 @@ def _relay_targets(payload):
     return out
 
 
+def _relay_slice(payload, pid):
+    """التحديث مقصوراً على تغييرات هذا الرقم.
+
+    تطبيقنا كمزوّد تقني مشترك في حسابات عملاء كثيرين، وMeta قد تجمع تغييرات أكثر من
+    حساب في تسليم واحد. التمرير بالجسم الخام كما وصل كان سيُري شريكاً بيانات شريك
+    آخر — فنبني لكل رقم نسخته، ونوقّع ما نرسله بالفعل لا ما وصلنا."""
+    entries = []
+    for e in (payload.get("entry") or []):
+        mine = [c for c in (e.get("changes") or [])
+                if str((((c.get("value") or {}).get("metadata")) or {})
+                       .get("phone_number_id") or "") == pid]
+        if mine:
+            entries.append(dict(e, changes=mine))
+    return dict(payload, entry=entries)
+
+
 def _relay_post(url, secret, body, bot_id):
-    """نسخة حرفية من تحديث Meta + توقيعنا. لا يُسجَّل العنوان (قد يحمل رمزاً في مساره)."""
+    """نسخة الشريك + توقيعنا عليها. لا يُسجَّل العنوان (قد يحمل رمزاً في مساره)."""
     import httpx
     sig = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     try:
@@ -6749,14 +6765,19 @@ def _relay_post(url, secret, body, bot_id):
         log.warning("relay failed: bot=%s %s", bot_id, type(e).__name__)
 
 
-def _relay_webhook(body, payload):
+def _relay_webhook(_body, payload):
     """يمرّر التحديث في خيط منفصل: ردّنا لـMeta لا ينتظر خادم الشريك أبداً."""
     import threading
     try:
         targets = _relay_targets(payload)
     except (AttributeError, TypeError):
         return
-    for url, secret, bid in targets.values():
+    for pid, (url, secret, bid) in targets.items():
+        try:
+            body = json.dumps(_relay_slice(payload, pid), ensure_ascii=False,
+                              separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError):
+            continue
         threading.Thread(target=_relay_post, args=(url, secret, body, bid), daemon=True).start()
 
 

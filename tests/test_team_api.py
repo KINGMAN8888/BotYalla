@@ -345,6 +345,26 @@ class RelayTests(unittest.TestCase):
             "metadata": {"phone_number_id": "5550001"}}}]}]}
         self.assertNotIn("5550001", web._relay_targets(payload))
 
+    def test_a_partner_never_sees_another_partner_data(self):
+        """تسليم واحد من Meta قد يحمل حسابين — كلٌّ يرى رقمه وحده."""
+        payload = {"object": "whatsapp_business_account", "entry": [
+            {"id": "W1", "changes": [
+                {"value": {"metadata": {"phone_number_id": "5550777"},
+                           "messages": [{"from": "2010", "text": {"body": "لي"}}]}},
+                {"value": {"metadata": {"phone_number_id": "9990000"},
+                           "messages": [{"from": "2011", "text": {"body": "لغيري"}}]}}]}]}
+        mine = web._relay_slice(payload, "5550777")
+        changes = mine["entry"][0]["changes"]
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["value"]["metadata"]["phone_number_id"], "5550777")
+        self.assertNotIn("9990000", json.dumps(mine, ensure_ascii=False))
+        self.assertEqual(mine["object"], "whatsapp_business_account")   # الغلاف كما هو
+
+    def test_an_entry_with_nothing_of_mine_is_dropped(self):
+        payload = {"entry": [{"id": "W2", "changes": [
+            {"value": {"metadata": {"phone_number_id": "9990000"}}}]}]}
+        self.assertEqual(web._relay_slice(payload, "5550777")["entry"], [])
+
     def test_a_malformed_payload_is_survived(self):
         for bad in ({}, {"entry": None}, {"entry": [{}]}, {"entry": [{"changes": [{}]}]}):
             self.assertEqual(web._relay_targets(bad), {})

@@ -97,7 +97,12 @@ So we forward the traffic to you.
 **Bot → API & developers → Receiving (webhook)** → enter your server's URL. It must be
 `https` and publicly resolvable.
 
-We then `POST` you a **byte-for-byte copy of Meta's update**, carrying our signature:
+We then `POST` you **Meta's update in its original shape**, narrowed to your number —
+one delivery from Meta can carry changes for several of our customers, so we strip out
+everything that is not yours before signing and sending. The envelope (`object`, `entry[]`,
+`changes[]`) is unchanged, so a Cloud API parser reads it as-is.
+
+The request carries our signature:
 
 ```
 X-BotYalla-Signature-256: sha256=<HMAC-SHA256(raw_body, your_signing_secret)>
