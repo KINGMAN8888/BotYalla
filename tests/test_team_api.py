@@ -329,15 +329,16 @@ class RelayTests(unittest.TestCase):
 
     def test_targets_are_found_by_phone_number_id(self):
         bid = _wa_bot(OWNER, "5550777")
+        sec = secrets.token_urlsafe(24)
         db.update_bot_config(bid, dict(json.loads(db.get_bot(bid)["config_json"]),
                                        relay_url="https://api.partner.com/wa",
-                                       relay_secret="s3cr3t-relay-key"))
+                                       relay_secret=sec))
         payload = {"entry": [{"changes": [{"value": {
             "metadata": {"phone_number_id": "5550777"},
             "messages": [{"from": "2010", "text": {"body": "hi"}}]}}]}]}
         t = web._relay_targets(payload)
         self.assertEqual(t["5550777"][0], "https://api.partner.com/wa")
-        self.assertEqual(t["5550777"][1], "s3cr3t-relay-key")
+        self.assertEqual(t["5550777"][1], sec)
 
     def test_a_number_without_a_webhook_is_not_a_target(self):
         payload = {"entry": [{"changes": [{"value": {
