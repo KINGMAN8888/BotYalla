@@ -23,6 +23,7 @@ const inbox     = () => import("./app/views/Inbox.jsx");
 const media     = () => import("./app/media.jsx");
 const reports   = () => import("./app/views/Reports.jsx");
 const team      = () => import("./app/views/Team.jsx");
+const contacts  = () => import("./app/views/Contacts.jsx");
 const developer = () => import("./app/views/Developer.jsx");
 
 /* خريطة العرض ← [وحدته، اسم المكوّن المصدَّر]. Flask يحدّد العرض عبر data-view. */
@@ -63,6 +64,7 @@ const VIEWS = {
   inbox:            [inbox, "default"],
   media:            [media, "MediaLibrary"],
   team:             [team, "default"],
+  contacts:         [contacts, "default"],
   developer:        [developer, "default"],
 };
 

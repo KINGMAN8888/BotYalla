@@ -76,6 +76,21 @@ PLANS = {
     "wa_msgs": 10000, "media_files": 20000,
  },
 
+ # «Enterprise» — منصة تواصل واتساب كاملة (docs/ENTERPRISE_PLAN.md): جهات اتصال وشرائح،
+ # بثّ مجدول بتحليلات، استوديو قوالب، فلو مرئي، فرق وتوجيه. **لا تُباع من الموقع**: خارج
+ # ORDER، يمنحها الأدمن للحساب بعد الاتفاق (ALL_IDS)، والسعر يُضبط من «الأسعار».
+ "enterprise": {
+    "name_ar": "المؤسسات", "name_en": "Enterprise", "price": 4999, "max_bots": 9999,
+    "features_ar": ["كل مميزات الوكالة", "جهات اتصال وشرائح وحقول مخصّصة",
+                    "بثّ مجدول بتحليلات التسليم والقراءة", "استوديو قوالب واتساب",
+                    "فرق وتوجيه المحادثات", "مدير نجاح مخصّص"],
+    "features_en": ["Everything in Agency", "Contacts, segments and custom fields",
+                    "Scheduled broadcasts with delivery/read analytics", "WhatsApp template studio",
+                    "Teams and conversation routing", "Dedicated success manager"],
+    "ai": True, "broadcast": True, "whatsapp": True, "white_label": True,
+    "wa_msgs": 50000, "media_files": 50000, "by_call": True,
+ },
+
  # ---- باقات موروثة: لا تُباع، ولا تُحذف ----
  # المشترك دفع مقابل ما في يده. الباقة القديمة `pro` (199ج) كانت **تشمل
  # واتساب**، والجديدة `merchant` (299ج) لا تشمله — فترحيله إليها يرفع سعره
@@ -107,7 +122,7 @@ PLANS = {
 ORDER = ["free", "merchant", "whatsapp", "vip", "agency"]
 
 # ما يراه الأدمن في قائمة تغيير باقة مستخدم (يشمل الموروثة لدعم الحالات القائمة)
-ALL_IDS = ORDER + ["pro", "business"]
+ALL_IDS = ORDER + ["enterprise", "pro", "business"]
 
 
 def plan(pid):
@@ -188,11 +203,14 @@ def media_limit(pid):
 #   inbox_reply: الرد اليدوي من صندوق الوارد (المجانية ترى المحادثات فقط)
 #   asset_mb   : مساحة مكتبة الوسائط بالميجابايت
 FEATURES = {
-    "free":     {"ai_setups": 3,   "ai_replies": 0,     "inbox_reply": False, "asset_mb": 25},
+    # crm: جهات الاتصال والشرائح (Enterprise وحدها + حسابات الإدارة، §54) — False للبقية
+    "free":     {"ai_setups": 3,   "ai_replies": 0,     "inbox_reply": False, "asset_mb": 25, "crm": False},
     "merchant": {"ai_setups": 30,  "ai_replies": 500,   "inbox_reply": True,  "asset_mb": 300},
     "whatsapp": {"ai_setups": 60,  "ai_replies": 1500,  "inbox_reply": True,  "asset_mb": 1000},
     "vip":      {"ai_setups": 120, "ai_replies": 4000,  "inbox_reply": True,  "asset_mb": 2000},
     "agency":   {"ai_setups": 300, "ai_replies": 10000, "inbox_reply": True,  "asset_mb": 5000},
+    "enterprise": {"ai_setups": 1000, "ai_replies": 30000, "inbox_reply": True, "asset_mb": 20000,
+                   "crm": True},
     "pro":      {"ai_setups": 30,  "ai_replies": 500,   "inbox_reply": True,  "asset_mb": 300},
     "business": {"ai_setups": 60,  "ai_replies": 1500,  "inbox_reply": True,  "asset_mb": 1000},
 }

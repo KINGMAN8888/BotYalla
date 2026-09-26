@@ -775,6 +775,7 @@ def init_db():
         _auth_tables(c)
         _activation_tables(c)
         _team_tables(c)
+        _crm_tables(c)
 
 def _hot_indexes(c):
     """فهارس الاستعلامات الساخنة. EXPLAIN QUERY PLAN كان يُظهر مسحاً كاملاً لـ events و
@@ -1408,6 +1409,7 @@ def add_bot_user(bot_id, tg_user_id, first_name, peer=None):
                   " ON CONFLICT(bot_id,tg_user_id) DO UPDATE SET"
                   " peer=excluded.peer, last_in_at=excluded.last_in_at",
                   (bot_id, tg_user_id, first_name, now, peer, now))
+    link_contact(bot_id, peer, first_name)      # كل عميل لأي بوت = جهة اتصال للحساب (CRM)
 
 def bot_user_exists(bot_id, peer):
     with get_conn() as c:
@@ -1428,6 +1430,8 @@ def set_opt_out(bot_id, peer, out=True):
         # الإيقاف يسقط الموافقة على العروض أيضاً — لا يعود للقائمة إلا بموافقة جديدة
         c.execute("UPDATE bot_users SET opted_out=?, optin_at=CASE WHEN ? THEN NULL ELSE optin_at END"
                   " WHERE bot_id=? AND peer=?", (1 if out else 0, 1 if out else 0, bot_id, peer))
+    if out:                                     # الإيقاف يسقط موافقة الجهة؛ الاستئناف لا يمنحها
+        set_contact_optin_by_peer(bot_id, peer, 0)
 
 def set_optin(bot_id, peer, yes=True):
     """موافقة العميل الصريحة على استقبال العروض (أو سحبها)."""
@@ -1435,6 +1439,7 @@ def set_optin(bot_id, peer, yes=True):
         c.execute("UPDATE bot_users SET optin_at=?, opted_out=CASE WHEN ? THEN 0 ELSE opted_out END"
                   " WHERE bot_id=? AND peer=?",
                   (int(time.time()) if yes else None, 1 if yes else 0, bot_id, peer))
+    set_contact_optin_by_peer(bot_id, peer, 1 if yes else 0)
 
 def bot_user_optin(bot_id, peer):
     with get_conn() as c:
@@ -4208,3 +4213,708 @@ def api_key_row(key):
             return None
         c.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (int(time.time()), r["id"]))
         return dict(r)
+
+
+# ─────────────────────────────  جهات الاتصال (CRM)  ─────────────────────────────
+# المرحلة 1 من docs/ENTERPRISE_PLAN.md. الجهة ملك **الحساب** (`owner_id` = account_of) لا البوت:
+# العميل نفسه على بوتين للحساب = جهة واحدة، و`contact_peers` تربطها بكل (بوت، peer).
+# القيم المخصّصة في `fields_json` (JSON1: json_extract/json_each) بدل جدول EAV — الشرائح
+# تبحث فيها مباشرةً. المنطق النقي (أنواع، تحقّق، قواعد) في crm.py؛ هنا SQL وحده.
+import crm as CRM
+from datetime import datetime as _dt, timedelta as _td
+
+
+def _crm_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS companies(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            fields_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_companies_name ON companies(owner_id, name COLLATE NOCASE);
+        CREATE TABLE IF NOT EXISTS contacts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            phone TEXT,                      -- دولي «+9665…» — مفتاح المطابقة الأساسي
+            email TEXT,
+            bsuid TEXT,                      -- عميل واتساب باسم مستخدم (رقم مخفي)
+            tg_id INTEGER,
+            ig_id TEXT,
+            company_id INTEGER,
+            assignee_id INTEGER,             -- «مسؤول الجهة» من فريق الحساب
+            optin INTEGER,                   -- موافقة تسويقية: NULL غير معروف · 1 نعم · 0 لا
+            optin_at INTEGER,
+            fields_json TEXT NOT NULL DEFAULT '{}',
+            source TEXT NOT NULL DEFAULT 'chat',
+            created_by INTEGER,
+            created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+            last_seen_at INTEGER,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_contacts_owner ON contacts(owner_id, id);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_contacts_phone ON contacts(owner_id, phone) WHERE phone IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_contacts_bsuid ON contacts(owner_id, bsuid) WHERE bsuid IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_contacts_tg ON contacts(owner_id, tg_id) WHERE tg_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS contact_peers(
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            contact_id INTEGER NOT NULL,
+            PRIMARY KEY(bot_id, peer),
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE,
+            FOREIGN KEY(contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_contact_peers_c ON contact_peers(contact_id);
+        CREATE TABLE IF NOT EXISTS contact_fields(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            entity TEXT NOT NULL DEFAULT 'contact',
+            key TEXT NOT NULL,
+            label TEXT NOT NULL,
+            type TEXT NOT NULL,
+            options_json TEXT NOT NULL DEFAULT '[]',
+            active INTEGER NOT NULL DEFAULT 1,
+            required INTEGER NOT NULL DEFAULT 0,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            UNIQUE(owner_id, entity, key),
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS tags(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL DEFAULT 'cyan',
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_tags_name ON tags(owner_id, name COLLATE NOCASE);
+        CREATE TABLE IF NOT EXISTS contact_tags(
+            contact_id INTEGER NOT NULL,
+            tag_id INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY(contact_id, tag_id),
+            FOREIGN KEY(contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+            FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_contact_tags_tag ON contact_tags(tag_id);
+        CREATE TABLE IF NOT EXISTS segments(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            rules_json TEXT NOT NULL DEFAULT '[]',
+            created_by INTEGER,
+            created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_segments_owner ON segments(owner_id);
+    """)
+    _crm_backfill(c)
+
+
+def _peer_identity(peer):
+    """peer ⇒ {عمود: قيمة}: «wa:9665…» رقم · «wa:SA.123…» اسم مستخدم · «tg:123» تليجرام."""
+    kind, _, tail = (peer or "").partition(":")
+    if kind == "wa" and tail.isdigit():
+        return {"phone": "+" + tail}
+    if kind == "wa" and tail:
+        return {"bsuid": tail}
+    if kind == "tg" and tail.lstrip("-").isdigit():
+        return {"tg_id": int(tail)}
+    return {}
+
+
+# الأعمدة المسموح البحث بها من _peer_identity — اسم العمود من هنا لا من المدخل
+_PEER_COLS = {"phone": "phone", "bsuid": "bsuid", "tg_id": "tg_id"}
+
+
+def _contact_for_peer(c, bot_id, peer, name="", owner_id=None):
+    """يربط (بوت، peer) بجهة اتصال الحساب — ينشئها لو لم توجد. يعيد معرّفها أو None.
+    يُستدعى مع كل عميل للبوت، فالمسار الشائع استعلام واحد على المفتاح الأساسي."""
+    now = int(time.time())
+    name = (name or "")[:120]
+    r = c.execute("SELECT contact_id FROM contact_peers WHERE bot_id=? AND peer=?",
+                  (bot_id, peer)).fetchone()
+    if r:
+        c.execute("UPDATE contacts SET last_seen_at=?, name=CASE WHEN name='' THEN ? ELSE name END"
+                  " WHERE id=?", (now, name, r[0]))
+        return r[0]
+    ident = _peer_identity(peer)
+    if not ident:
+        return None
+    if owner_id is None:
+        b = c.execute("SELECT owner_id FROM bots WHERE id=?", (bot_id,)).fetchone()
+        if not b:
+            return None
+        owner_id = b[0]
+    (key, val), = ident.items()
+    col = _PEER_COLS[key]
+    row = c.execute(f"SELECT id FROM contacts WHERE owner_id=? AND {col}=?", (owner_id, val)).fetchone()
+    if row:
+        cid = row[0]
+        c.execute("UPDATE contacts SET last_seen_at=?, name=CASE WHEN name='' THEN ? ELSE name END"
+                  " WHERE id=?", (now, name, cid))
+    else:
+        cid = c.execute(f"INSERT INTO contacts(owner_id,name,{col},source,created_at,updated_at,last_seen_at)"
+                        " VALUES(?,?,?,'chat',?,?,?)", (owner_id, name, val, now, now, now)).lastrowid
+    c.execute("INSERT OR IGNORE INTO contact_peers(bot_id,peer,contact_id) VALUES(?,?,?)",
+              (bot_id, peer, cid))
+    return cid
+
+
+def _crm_backfill(c):
+    """مرة واحدة: كل عملاء البوتات القائمين يصبحون جهات اتصال لحساباتهم."""
+    if c.execute("SELECT 1 FROM platform WHERE key='crm_backfill_v1'").fetchone():
+        return
+    rows = c.execute("SELECT bu.bot_id, bu.peer, bu.first_name, b.owner_id FROM bot_users bu"
+                     " JOIN bots b ON b.id=bu.bot_id WHERE bu.peer IS NOT NULL").fetchall()
+    for r in rows:
+        _contact_for_peer(c, r["bot_id"], r["peer"], r["first_name"] or "", r["owner_id"])
+    c.execute("INSERT OR REPLACE INTO platform(key,value) VALUES('crm_backfill_v1',?)", (str(len(rows)),))
+
+
+def link_contact(bot_id, peer, name=""):
+    """أي عميل يراسل بوتاً يصبح جهة اتصال. لا يرمي أبداً — المحادثة أهم من السجل."""
+    try:
+        with get_conn() as c:
+            return _contact_for_peer(c, bot_id, peer, name)
+    except Exception:
+        log.exception("link_contact failed bot=%s", bot_id)
+        return None
+
+
+def contact_channels(contact_id):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT cp.bot_id, cp.peer, b.name AS bot_name, b.channel FROM contact_peers cp"
+            " JOIN bots b ON b.id=cp.bot_id WHERE cp.contact_id=?", (contact_id,))]
+
+
+def set_contact_optin_by_peer(bot_id, peer, value):
+    """STOP أو الموافقة من المحادثة تنعكس على جهة الاتصال (§55): 0 إيقاف · 1 موافقة."""
+    now = int(time.time())
+    try:
+        with get_conn() as c:
+            c.execute("UPDATE contacts SET optin=?, optin_at=CASE WHEN ?=1 THEN ? ELSE optin_at END,"
+                      " updated_at=? WHERE id=(SELECT contact_id FROM contact_peers WHERE bot_id=? AND peer=?)",
+                      (value, value, now, now, bot_id, peer))
+    except Exception:
+        log.exception("contact optin sync failed bot=%s", bot_id)
+
+
+# ---- الحقول المخصّصة ----
+def _field_row(r):
+    d = dict(r)
+    d["options"] = json.loads(d.pop("options_json") or "[]")
+    return d
+
+
+def list_fields(owner_id, entity="contact", active_only=False):
+    q = "SELECT * FROM contact_fields WHERE owner_id=? AND entity=?"
+    if active_only:
+        q += " AND active=1"
+    with get_conn() as c:
+        return [_field_row(r) for r in c.execute(q + " ORDER BY position, id", (owner_id, entity))]
+
+
+def fields_map(owner_id, entity="contact", active_only=True):
+    return {f["key"]: f for f in list_fields(owner_id, entity, active_only)}
+
+
+def save_field(owner_id, entity, d, field_id=None):
+    """d نظيف من crm.clean_field_def ⇒ (المعرّف, None) أو (None, رمز). المفتاح والنوع ثابتان
+    بعد الإنشاء: القيم المخزّنة والشرائح والمتغيّرات مبنية عليهما."""
+    now = int(time.time())
+    with get_conn() as c:
+        if field_id:
+            n = c.execute("UPDATE contact_fields SET label=?, options_json=?, active=?, required=?"
+                          " WHERE id=? AND owner_id=? AND entity=?",
+                          (d["label"], CRM.dumps(d["options"]), d["active"], d["required"],
+                           field_id, owner_id, entity)).rowcount
+            return (field_id, None) if n else (None, "not_found")
+        cnt = c.execute("SELECT COUNT(*) FROM contact_fields WHERE owner_id=? AND entity=?",
+                        (owner_id, entity)).fetchone()[0]
+        if cnt >= CRM.MAX_FIELDS:
+            return None, "limit"
+        try:
+            return c.execute("INSERT INTO contact_fields(owner_id,entity,key,label,type,options_json,"
+                             "active,required,position,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                             (owner_id, entity, d["key"], d["label"], d["type"], CRM.dumps(d["options"]),
+                              d["active"], d["required"], cnt, now)).lastrowid, None
+        except sqlite3.IntegrityError:
+            return None, "key_taken"
+
+
+def delete_field(owner_id, field_id):
+    """يحذف التعريف ويمسح قيمه من كل الجهات (أو الشركات) — لا بيانات يتيمة."""
+    with get_conn() as c:
+        r = c.execute("SELECT entity, key FROM contact_fields WHERE id=? AND owner_id=?",
+                      (field_id, owner_id)).fetchone()
+        if not r:
+            return False
+        path = '$."' + r["key"] + '"'
+        if r["entity"] == "company":
+            c.execute("UPDATE companies SET fields_json=json_remove(fields_json, ?) WHERE owner_id=?",
+                      (path, owner_id))
+        else:
+            c.execute("UPDATE contacts SET fields_json=json_remove(fields_json, ?) WHERE owner_id=?",
+                      (path, owner_id))
+        c.execute("DELETE FROM contact_fields WHERE id=?", (field_id,))
+        return True
+
+
+def reorder_fields(owner_id, entity, ids):
+    with get_conn() as c:
+        for pos, fid in enumerate(ids):
+            c.execute("UPDATE contact_fields SET position=? WHERE id=? AND owner_id=? AND entity=?",
+                      (pos, int(fid), owner_id, entity))
+
+
+# ---- الوسوم ----
+TAG_COLORS = ("cyan", "teal", "violet", "amber", "rose", "sky", "lime", "slate")
+
+
+def _tag_name(name):
+    return re.sub(r"\s+", " ", (name or "").strip())[:50]
+
+
+def list_tags(owner_id):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT t.id, t.name, t.color, t.created_at, COUNT(ct.contact_id) AS contacts"
+            " FROM tags t LEFT JOIN contact_tags ct ON ct.tag_id=t.id WHERE t.owner_id=?"
+            " GROUP BY t.id ORDER BY t.name COLLATE NOCASE", (owner_id,))]
+
+
+def _tag_id(c, owner_id, name):
+    name = _tag_name(name)
+    if not name:
+        return None
+    r = c.execute("SELECT id FROM tags WHERE owner_id=? AND name=? COLLATE NOCASE", (owner_id, name)).fetchone()
+    if r:
+        return r[0]
+    return c.execute("INSERT INTO tags(owner_id,name,created_at) VALUES(?,?,?)",
+                     (owner_id, name, int(time.time()))).lastrowid
+
+
+def save_tag(owner_id, name, color="cyan", tag_id=None):
+    color = color if color in TAG_COLORS else "cyan"
+    name = _tag_name(name)
+    if not name:
+        return None, "name"
+    with get_conn() as c:
+        try:
+            if tag_id:
+                n = c.execute("UPDATE tags SET name=?, color=? WHERE id=? AND owner_id=?",
+                              (name, color, tag_id, owner_id)).rowcount
+                return (tag_id, None) if n else (None, "not_found")
+            return c.execute("INSERT INTO tags(owner_id,name,color,created_at) VALUES(?,?,?,?)",
+                             (owner_id, name, color, int(time.time()))).lastrowid, None
+        except sqlite3.IntegrityError:
+            return None, "taken"
+
+
+def delete_tag(owner_id, tag_id):
+    with get_conn() as c:
+        return c.execute("DELETE FROM tags WHERE id=? AND owner_id=?", (tag_id, owner_id)).rowcount > 0
+
+
+def _owned_ids(c, table, owner_id, ids):
+    """من قائمة وصلت من المتصفح: المعرّفات التي يملكها الحساب فعلاً (الجدول اسم ثابت من الكود)."""
+    assert table in ("contacts", "tags", "companies")
+    try:
+        ids = [int(i) for i in ids][:5000]
+    except (TypeError, ValueError):
+        return []
+    out = []
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        out += [r[0] for r in c.execute(
+            f"SELECT id FROM {table} WHERE owner_id=? AND id IN ({','.join('?' * len(chunk))})",
+            (owner_id, *chunk))]
+    return out
+
+
+def tag_contacts(owner_id, contact_ids, tag_ids, add=True):
+    """وسم أو إزالة وسم جماعي. الملكية تُفحص للجهات وللوسوم معاً."""
+    now = int(time.time())
+    with get_conn() as c:
+        cids = _owned_ids(c, "contacts", owner_id, contact_ids)
+        tids = _owned_ids(c, "tags", owner_id, tag_ids)
+        for cid in cids:
+            for tid in tids:
+                if add:
+                    c.execute("INSERT OR IGNORE INTO contact_tags(contact_id,tag_id,created_at) VALUES(?,?,?)",
+                              (cid, tid, now))
+                else:
+                    c.execute("DELETE FROM contact_tags WHERE contact_id=? AND tag_id=?", (cid, tid))
+            if tids:
+                c.execute("UPDATE contacts SET updated_at=? WHERE id=?", (now, cid))
+        return len(cids) if tids else 0
+
+
+# ---- الشركات ----
+def _like(s):
+    return str(s).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def list_companies(owner_id, q=""):
+    sql = ("SELECT co.*, (SELECT COUNT(*) FROM contacts WHERE company_id=co.id) AS contacts"
+           " FROM companies co WHERE co.owner_id=?")
+    args = [owner_id]
+    if q:
+        sql += " AND co.name LIKE ? ESCAPE '\\'"
+        args.append("%" + _like(q) + "%")
+    with get_conn() as c:
+        out = []
+        for r in c.execute(sql + " ORDER BY co.name COLLATE NOCASE LIMIT 2000", args):
+            d = dict(r); d["fields"] = json.loads(d.pop("fields_json") or "{}"); out.append(d)
+        return out
+
+
+def save_company(owner_id, name, fields=None, company_id=None):
+    name = (name or "").strip()[:120]
+    if not name:
+        return None, "name"
+    now = int(time.time())
+    with get_conn() as c:
+        try:
+            if company_id:
+                cur = c.execute("SELECT fields_json FROM companies WHERE id=? AND owner_id=?",
+                                (company_id, owner_id)).fetchone()
+                if not cur:
+                    return None, "not_found"
+                merged = json.loads(cur[0] or "{}")
+                for k, v in (fields or {}).items():
+                    if v is None:
+                        merged.pop(k, None)
+                    else:
+                        merged[k] = v
+                c.execute("UPDATE companies SET name=?, fields_json=?, updated_at=? WHERE id=?",
+                          (name, CRM.dumps(merged), now, company_id))
+                return company_id, None
+            clean = {k: v for k, v in (fields or {}).items() if v is not None}
+            return c.execute("INSERT INTO companies(owner_id,name,fields_json,created_at,updated_at)"
+                             " VALUES(?,?,?,?,?)", (owner_id, name, CRM.dumps(clean), now, now)).lastrowid, None
+        except sqlite3.IntegrityError:
+            return None, "taken"
+
+
+def delete_company(owner_id, company_id):
+    with get_conn() as c:
+        return c.execute("DELETE FROM companies WHERE id=? AND owner_id=?", (company_id, owner_id)).rowcount > 0
+
+
+def company_owned(owner_id, company_id):
+    with get_conn() as c:
+        return c.execute("SELECT 1 FROM companies WHERE id=? AND owner_id=?", (company_id, owner_id)).fetchone() is not None
+
+
+def _company_id(c, owner_id, name):
+    name = (name or "").strip()[:120]
+    if not name:
+        return None
+    r = c.execute("SELECT id FROM companies WHERE owner_id=? AND name=? COLLATE NOCASE", (owner_id, name)).fetchone()
+    if r:
+        return r[0]
+    now = int(time.time())
+    return c.execute("INSERT INTO companies(owner_id,name,created_at,updated_at) VALUES(?,?,?,?)",
+                     (owner_id, name, now, now)).lastrowid
+
+
+# ---- الشرائح: قواعد منظَّفة (crm.clean_rules) ⇒ WHERE بمعاملات ----
+_SYS_COLS = {"name": "c.name", "phone": "c.phone", "email": "c.email", "optin": "c.optin",
+             "created_at": "c.created_at", "updated_at": "c.updated_at",
+             "last_seen_at": "c.last_seen_at", "assignee": "c.assignee_id",
+             "company": "c.company_id", "source": "c.source"}
+_JSON_COL = "json_extract(c.fields_json, ?)"
+
+
+def segment_where(rules, fields):
+    """(جملة WHERE، المعاملات) من قواعد **منظَّفة**. أسماء الأعمدة من `_SYS_COLS` ومسار JSON
+    معامل — لا شيء من المستخدم يدخل نص الاستعلام."""
+    parts, args = [], []
+    for r in rules:
+        f, op, v = r["field"], r["op"], r["value"]
+        if f == "tags":
+            ph = ",".join("?" * len(v))
+            if op == "has_any":
+                parts.append(f"EXISTS(SELECT 1 FROM contact_tags x WHERE x.contact_id=c.id AND x.tag_id IN ({ph}))")
+                args += v
+            elif op == "has_none":
+                parts.append(f"NOT EXISTS(SELECT 1 FROM contact_tags x WHERE x.contact_id=c.id AND x.tag_id IN ({ph}))")
+                args += v
+            else:
+                parts.append(f"(SELECT COUNT(DISTINCT x.tag_id) FROM contact_tags x WHERE x.contact_id=c.id"
+                             f" AND x.tag_id IN ({ph}))=?")
+                args += v + [len(set(v))]
+            continue
+        if f.startswith("f:"):
+            kind, path = fields[f[2:]]["type"], '$."' + f[2:] + '"'
+            col, cargs = _JSON_COL, [path]
+        else:
+            kind, path = CRM.SYSTEM_FIELDS[f], None
+            col, cargs = _SYS_COLS[f], []
+
+        def add(sql, *vals):
+            # كل ظهور للعمود في الجملة يحتاج معاملاته (مسار JSON) من جديد، بالترتيب
+            parts.append(sql.replace("{c}", col))
+            args.extend(cargs * sql.count("{c}"))
+            args.extend(vals)
+
+        if op == "empty":
+            add("{c} IS NULL" if kind == "ts" else "({c} IS NULL OR {c}='' OR {c}='[]')")
+        elif op == "not_empty":
+            add("{c} IS NOT NULL" if kind == "ts" else "({c} IS NOT NULL AND {c}!='' AND {c}!='[]')")
+        elif kind in ("text", "multi_text", "select", "source"):
+            if op == "is":
+                add("lower(COALESCE({c},''))=lower(?)", v)
+            elif op == "is_not":
+                add("lower(COALESCE({c},''))!=lower(?)", v)
+            elif op == "contains":
+                add("COALESCE({c},'') LIKE ? ESCAPE '\\'", "%" + _like(v) + "%")
+            elif op == "not_contains":
+                add("COALESCE({c},'') NOT LIKE ? ESCAPE '\\'", "%" + _like(v) + "%")
+            elif op == "starts_with":
+                add("COALESCE({c},'') LIKE ? ESCAPE '\\'", _like(v) + "%")
+            elif op == "any_of":
+                add("{c} IN (" + ",".join("?" * len(v)) + ")", *v)
+        elif kind == "number":
+            add("CAST({c} AS REAL)" + {"eq": "=", "neq": "!=", "gt": ">", "lt": "<"}[op] + "?", v)
+        elif kind == "switch":
+            add("COALESCE({c},0)=?", 1 if v else 0)
+        elif kind in ("user", "company"):
+            add("{c}=?" if op == "is" else "COALESCE({c},0)!=?", v)
+        elif kind == "multi_select":
+            ph = ",".join("?" * len(v))
+            each = "SELECT value FROM json_each(c.fields_json, ?)"
+            if op == "has_any":
+                parts.append(f"EXISTS({each} WHERE value IN ({ph}))"); args += [path] + v
+            elif op == "has_none":
+                parts.append(f"NOT EXISTS({each} WHERE value IN ({ph}))"); args += [path] + v
+            else:
+                parts.append(f"(SELECT COUNT(DISTINCT value) FROM json_each(c.fields_json, ?)"
+                             f" WHERE value IN ({ph}))=?")
+                args += [path] + v + [len(set(v))]
+        elif kind == "ts":
+            if op == "last_days":
+                add("{c}>=?", int(time.time()) - v * 86400)
+            else:
+                a, b = CRM.day_bounds(v)
+                if op == "on":
+                    add("({c}>=? AND {c}<?)", a, b)
+                elif op == "before":
+                    add("{c}<?", a)
+                else:
+                    add("{c}>=?", b)
+        elif kind == "date":
+            if op == "last_days":
+                add("{c}>=?", (_dt.now(CRM.TZ) - _td(days=v)).strftime("%Y-%m-%d"))
+            else:
+                add("{c}" + {"on": "=", "before": "<", "after": ">"}[op] + "?", v)
+    return (" AND ".join(parts) or "1=1"), args
+
+
+# ---- جهات الاتصال ----
+def _contact_row(r):
+    d = dict(r)
+    d["fields"] = json.loads(d.pop("fields_json") or "{}")
+    d["tags"] = [int(x) for x in (d.pop("tag_ids") or "").split(",") if x]
+    return d
+
+
+_CONTACT_SELECT = ("SELECT c.*, co.name AS company_name, u.username AS assignee_name,"
+                   " (SELECT group_concat(tag_id) FROM contact_tags WHERE contact_id=c.id) AS tag_ids"
+                   " FROM contacts c LEFT JOIN companies co ON co.id=c.company_id"
+                   " LEFT JOIN users u ON u.id=c.assignee_id")
+CONTACT_SORTS = {"new": "c.id DESC", "old": "c.id ASC", "name": "c.name COLLATE NOCASE, c.id",
+                 "seen": "COALESCE(c.last_seen_at,0) DESC, c.id DESC",
+                 "updated": "c.updated_at DESC, c.id DESC"}
+
+
+def query_contacts(owner_id, rules=(), fields=None, q="", limit=20, offset=0, sort="new"):
+    """(الصفوف، العدد الكلّي). `rules` منظَّفة مسبقاً. `limit=None` = الكل (للتصدير)."""
+    where, args = segment_where(list(rules), fields or {})
+    sql = f" WHERE c.owner_id=? AND ({where})"
+    args = [owner_id] + args
+    q = (q or "").strip()[:80]
+    if q:
+        like = "%" + _like(q) + "%"
+        sql += " AND (c.name LIKE ? ESCAPE '\\' OR c.phone LIKE ? ESCAPE '\\' OR c.email LIKE ? ESCAPE '\\')"
+        args += [like, like, like]
+    with get_conn() as c:
+        total = c.execute("SELECT COUNT(*) FROM contacts c" + sql, args).fetchone()[0]
+        tail, targs = " ORDER BY " + CONTACT_SORTS.get(sort, CONTACT_SORTS["new"]), list(args)
+        if limit is not None:
+            tail += " LIMIT ? OFFSET ?"
+            targs += [int(limit), int(offset)]
+        rows = [_contact_row(r) for r in c.execute(_CONTACT_SELECT + sql + tail, targs)]
+    return rows, total
+
+
+def count_contacts(owner_id, rules=(), fields=None):
+    where, args = segment_where(list(rules), fields or {})
+    with get_conn() as c:
+        return c.execute(f"SELECT COUNT(*) FROM contacts c WHERE c.owner_id=? AND ({where})",
+                         [owner_id] + args).fetchone()[0]
+
+
+def get_contact(owner_id, contact_id):
+    with get_conn() as c:
+        r = c.execute(_CONTACT_SELECT + " WHERE c.id=? AND c.owner_id=?", (contact_id, owner_id)).fetchone()
+    return _contact_row(r) if r else None
+
+
+def save_contact(owner_id, d, contact_id=None, by=None):
+    """d منظَّف في app ⇒ (المعرّف, None) أو (None, رمز). الحقول المخصّصة **تُدمج** مع المخزّن
+    (قيمة None تحذف مفتاحها)، و`tags` لو وُجد يستبدل وسوم الجهة كلها."""
+    now = int(time.time())
+    with get_conn() as c:
+        cur = None
+        if contact_id:
+            cur = c.execute("SELECT fields_json, optin FROM contacts WHERE id=? AND owner_id=?",
+                            (contact_id, owner_id)).fetchone()
+            if not cur:
+                return None, "not_found"
+        fields = json.loads(cur["fields_json"]) if cur else {}
+        for k, v in (d.get("fields") or {}).items():
+            if v is None:
+                fields.pop(k, None)
+            else:
+                fields[k] = v
+        optin = d.get("optin")
+        newly = optin == 1 and (cur is None or cur["optin"] != 1)
+        try:
+            if contact_id:
+                c.execute("UPDATE contacts SET name=?, phone=?, email=?, company_id=?, assignee_id=?, optin=?,"
+                          " fields_json=?, updated_at=?, optin_at=CASE WHEN ? THEN ? ELSE optin_at END"
+                          " WHERE id=? AND owner_id=?",
+                          ((d.get("name") or "")[:120], d.get("phone"), d.get("email"), d.get("company_id"),
+                           d.get("assignee_id"), optin, CRM.dumps(fields), now, 1 if newly else 0, now,
+                           contact_id, owner_id))
+                cid = contact_id
+            else:
+                cid = c.execute("INSERT INTO contacts(owner_id,name,phone,email,company_id,assignee_id,"
+                                "optin,optin_at,fields_json,source,created_by,created_at,updated_at)"
+                                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (owner_id, (d.get("name") or "")[:120], d.get("phone"), d.get("email"),
+                                 d.get("company_id"), d.get("assignee_id"), optin, now if newly else None,
+                                 CRM.dumps(fields), d.get("source") or "manual", by, now, now)).lastrowid
+        except sqlite3.IntegrityError:
+            return None, "phone_taken"
+        if "tags" in d:
+            tids = _owned_ids(c, "tags", owner_id, d["tags"])
+            c.execute("DELETE FROM contact_tags WHERE contact_id=?", (cid,))
+            for tid in tids:
+                c.execute("INSERT OR IGNORE INTO contact_tags(contact_id,tag_id,created_at) VALUES(?,?,?)",
+                          (cid, tid, now))
+        return cid, None
+
+
+def delete_contacts(owner_id, ids):
+    with get_conn() as c:
+        cids = _owned_ids(c, "contacts", owner_id, ids)
+        for i in range(0, len(cids), 500):
+            chunk = cids[i:i + 500]
+            c.execute(f"DELETE FROM contacts WHERE id IN ({','.join('?' * len(chunk))})", chunk)
+        return len(cids)
+
+
+def assign_contacts(owner_id, ids, assignee_id):
+    """مسؤول الجهة لجهات عدّة. `assignee_id` يُتحقَّق منه في app (عضو في الحساب) أو None."""
+    now = int(time.time())
+    with get_conn() as c:
+        cids = _owned_ids(c, "contacts", owner_id, ids)
+        for cid in cids:
+            c.execute("UPDATE contacts SET assignee_id=?, updated_at=? WHERE id=?", (assignee_id, now, cid))
+        return len(cids)
+
+
+def import_contacts(owner_id, records, update_existing=True, by=None):
+    """سجلات crm.build_records في معاملة واحدة. المطابقة بالهاتف: القائم يُحدَّث (الحقول تُدمج،
+    الوسوم تُضاف ولا تُمسح، القيمة الفارغة لا تمحو القائمة) أو يُتخطّى؛ الجديد يُنشأ."""
+    now = int(time.time())
+    stats = {"created": 0, "updated": 0, "skipped": 0}
+    with get_conn() as c:
+        tag_cache, company_cache = {}, {}
+        for rec in records:
+            row = c.execute("SELECT id, fields_json, name, email, optin FROM contacts"
+                            " WHERE owner_id=? AND phone=?", (owner_id, rec["phone"])).fetchone()
+            if row and not update_existing:
+                stats["skipped"] += 1
+                continue
+            company_id = None
+            if rec.get("company"):
+                ck = rec["company"].lower()
+                if ck not in company_cache:
+                    company_cache[ck] = _company_id(c, owner_id, rec["company"])
+                company_id = company_cache[ck]
+            optin = rec.get("optin")
+            if row:
+                fields = json.loads(row["fields_json"] or "{}")
+                fields.update(rec["fields"])
+                keep = row["optin"] if optin is None else optin
+                c.execute("UPDATE contacts SET name=?, email=?, optin=?, fields_json=?,"
+                          " company_id=COALESCE(?, company_id), updated_at=?,"
+                          " optin_at=CASE WHEN ?=1 AND COALESCE(optin,0)!=1 THEN ? ELSE optin_at END"
+                          " WHERE id=?",
+                          (rec.get("name") or row["name"], rec.get("email") or row["email"], keep,
+                           CRM.dumps(fields), company_id, now, keep, now, row["id"]))
+                cid = row["id"]
+                stats["updated"] += 1
+            else:
+                cid = c.execute("INSERT INTO contacts(owner_id,name,phone,email,company_id,optin,optin_at,"
+                                "fields_json,source,created_by,created_at,updated_at)"
+                                " VALUES(?,?,?,?,?,?,?,?,'import',?,?,?)",
+                                (owner_id, rec.get("name") or "", rec["phone"], rec.get("email"), company_id,
+                                 optin, now if optin == 1 else None, CRM.dumps(rec["fields"]), by, now, now)).lastrowid
+                stats["created"] += 1
+            for name in rec.get("tags") or []:
+                k = _tag_name(name).lower()
+                if k and k not in tag_cache:
+                    tag_cache[k] = _tag_id(c, owner_id, name)
+                if k and tag_cache.get(k):
+                    c.execute("INSERT OR IGNORE INTO contact_tags(contact_id,tag_id,created_at) VALUES(?,?,?)",
+                              (cid, tag_cache[k], now))
+    return stats
+
+
+# ---- الشرائح المحفوظة ----
+def _segment_row(r):
+    d = dict(r); d["rules"] = json.loads(d.pop("rules_json") or "[]")
+    return d
+
+
+def list_segments(owner_id):
+    with get_conn() as c:
+        return [_segment_row(r) for r in c.execute(
+            "SELECT * FROM segments WHERE owner_id=? ORDER BY name COLLATE NOCASE", (owner_id,))]
+
+
+def get_segment(owner_id, seg_id):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM segments WHERE id=? AND owner_id=?", (seg_id, owner_id)).fetchone()
+    return _segment_row(r) if r else None
+
+
+def save_segment(owner_id, name, rules, seg_id=None, by=None):
+    name = (name or "").strip()[:80]
+    if not name:
+        return None, "name"
+    now = int(time.time())
+    with get_conn() as c:
+        if seg_id:
+            n = c.execute("UPDATE segments SET name=?, rules_json=?, updated_at=? WHERE id=? AND owner_id=?",
+                          (name, CRM.dumps(rules), now, seg_id, owner_id)).rowcount
+            return (seg_id, None) if n else (None, "not_found")
+        return c.execute("INSERT INTO segments(owner_id,name,rules_json,created_by,created_at,updated_at)"
+                         " VALUES(?,?,?,?,?,?)", (owner_id, name, CRM.dumps(rules), by, now, now)).lastrowid, None
+
+
+def delete_segment(owner_id, seg_id):
+    with get_conn() as c:
+        return c.execute("DELETE FROM segments WHERE id=? AND owner_id=?", (seg_id, owner_id)).rowcount > 0

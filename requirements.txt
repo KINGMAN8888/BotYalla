@@ -12,3 +12,5 @@ Pillow>=10.0
 Flask==3.0.3
 Werkzeug==3.0.6
 gunicorn==23.0.0
+# استيراد جهات الاتصال من Excel (.xlsx) — Python خالص بلا تبعيات نظام.
+openpyxl==3.1.5

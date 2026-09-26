@@ -5097,6 +5097,10 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
         {"k": "support",     "u": url_for("support"),      "i": "help",     "l": i18n.t("nav_support", lang)},
         {"k": "affiliate",   "u": url_for("affiliate"),    "i": "crown",    "l": i18n.t("aff_title", lang)},
     ]
+    # «جهات الاتصال» لباقة فيها CRM (Enterprise) أو حساب الإدارة — بعد «بوتاتي» مباشرةً
+    if uid() and _crm_on():
+        nav.insert(1, {"k": "contacts", "u": url_for("contacts_page"), "i": "users",
+                       "l": i18n.t("contacts_nav", lang)})
     # «الفريق» لصاحب الحساب ومن يديره معه — لا يراه الموظف العادي
     if uid() and my_team_role() in ("owner", "admin"):
         nav.insert(6, {"k": "team", "u": url_for("team_page"), "i": "users",
@@ -6854,6 +6858,494 @@ def bootstrap():
     tok = db.get_platform("platform_bot_token", "")
     if tok and db.get_platform("admin_chat_id", ""):
         manager.start_platform_bot(tok)
+
+# ============================================================================
+# جهات الاتصال (CRM) — المرحلة 1 من docs/ENTERPRISE_PLAN.md
+# الصفحة React واحدة (/contacts بتبويبات) والبيانات عبر /api/crm/* بـ JSON و X-CSRF-Token.
+# كل شيء على **الحساب** (`acct()`) لا المستخدم: الفريق يرى نفس الجهات.
+# الإدارة (حقول · وسوم · شرائح · استيراد · حذف جماعي) لـ owner/admin، والموظف يعمل على الجهات.
+# ============================================================================
+import crm as CRM
+
+
+def _acct_plan():
+    sub = db.get_subscription(acct())
+    return sub["plan"] if sub and sub.get("status") == "active" else "free"
+
+
+def _crm_on():
+    """جهات الاتصال: باقة فيها `crm`، أو حساب إدارة المنصة (§54) — بالمتصفّح أو بصاحب الحساب."""
+    if current_role() in ("admin", "support"):
+        return True
+    owner = db.get_user(acct()) or {}
+    if owner.get("role") in ("admin", "support"):
+        return True
+    return bool(plans.feature(_acct_plan(), "crm"))
+
+
+def _crm_admin():
+    return my_team_role() in ("owner", "admin")
+
+
+def require_crm(manage=False):
+    """حارس مسارات CRM. `manage`: للمالك ومديري الفريق وحدهم (الحقول والوسوم والشرائح والاستيراد)."""
+    def deco(f):
+        @functools.wraps(f)
+        def w(*a, **k):
+            api = request.path.startswith("/api/")
+            if not uid():
+                return (jsonify({"ok": False, "error": "login"}), 401) if api else redirect(url_for("login"))
+            if not _crm_on():
+                if api:
+                    return jsonify({"ok": False, "error": "plan"}), 403
+                flash(i18n.t("crm_locked", session.get("lang", i18n.DEFAULT)), "error")
+                return redirect(url_for("pricing"))
+            if manage and not _crm_admin():
+                return (jsonify({"ok": False, "error": "role"}), 403) if api else abort(403)
+            return f(*a, **k)
+        return w
+    return deco
+
+
+def _crm_err(code, status=400):
+    return jsonify({"ok": False, "error": code}), status
+
+
+def _crm_members():
+    """مَن يجوز إسناده «مسؤولاً» عن جهة: صاحب الحساب وفريقه."""
+    owner = acct()
+    o = db.get_user(owner) or {}
+    return [{"id": owner, "username": o.get("username", "")}] + \
+        [{"id": m["id"], "username": m["username"]} for m in db.team_members(owner)]
+
+
+def _crm_meta():
+    owner = acct()
+    return {
+        "fields": db.list_fields(owner, "contact"),
+        "companyFields": db.list_fields(owner, "company"),
+        "tags": db.list_tags(owner),
+        "segments": db.list_segments(owner),
+        "companies": [{"id": x["id"], "name": x["name"]} for x in db.list_companies(owner)],
+        "members": _crm_members(),
+    }
+
+
+def _json_body():
+    d = request.get_json(silent=True)
+    return d if isinstance(d, dict) else {}
+
+
+def _int_or_none(v):
+    try:
+        return int(v) if v not in (None, "", "null") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _rules_from(raw, fields):
+    """قواعد من المتصفح (قائمة أو JSON) ⇒ منظَّفة، أو ValueError."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "[]")
+        except ValueError:
+            raise ValueError("rules")
+    rules, err = CRM.clean_rules(raw or [], fields)
+    if err:
+        raise ValueError(err)
+    return rules
+
+
+@app.route("/contacts")
+@require_crm()
+def contacts_page():
+    return react_page("contacts", "contacts_title", dict(_crm_meta(), **{
+        "canManage": _crm_admin(),
+        "me": uid(),
+        "countries": [list(c) for c in ACC.COUNTRIES],
+        "types": list(CRM.FIELD_TYPES),
+        "ops": {k: list(v) for k, v in CRM.OPS.items()},
+        "systemFields": CRM.SYSTEM_FIELDS,
+        "tagColors": list(db.TAG_COLORS),
+        "exportUrl": url_for("contacts_export"),
+        "tab": request.args.get("tab", "contacts"),
+    }))
+
+
+@app.route("/api/crm/meta")
+@require_crm()
+def crm_meta():
+    return jsonify(dict(_crm_meta(), ok=True))
+
+
+@app.route("/api/crm/contacts")
+@require_crm()
+def crm_contacts():
+    owner = acct()
+    fields = db.fields_map(owner, "contact", active_only=False)
+    try:
+        rules = _rules_from(request.args.get("rules", "[]"), fields)
+    except ValueError as e:
+        return _crm_err(str(e))
+    seg = _int_or_none(request.args.get("segment"))
+    if seg:
+        s = db.get_segment(owner, seg)
+        if not s:
+            return _crm_err("segment", 404)
+        try:
+            rules = _rules_from(s["rules"], fields) + rules
+        except ValueError:
+            return _crm_err("segment_stale")            # حقل حُذف بعد حفظ الشريحة
+    per = min(max(_int_or_none(request.args.get("per")) or 20, 1), 100)
+    page = max(_int_or_none(request.args.get("page")) or 1, 1)
+    rows, total = db.query_contacts(owner, rules, fields, request.args.get("q", ""),
+                                    limit=per, offset=(page - 1) * per, sort=request.args.get("sort", "new"))
+    return jsonify({"ok": True, "rows": rows, "total": total, "page": page, "per": per})
+
+
+@app.route("/api/crm/contacts/<int:cid>")
+@require_crm()
+def crm_contact_get(cid):
+    c = db.get_contact(acct(), cid)
+    if not c:
+        return _crm_err("not_found", 404)
+    return jsonify({"ok": True, "contact": c, "channels": db.contact_channels(cid)})
+
+
+def _clean_contact(d, existing=None):
+    """حمولة نموذج الجهة ⇒ (dict نظيف, None) أو (None, {الحقل: الرمز})."""
+    owner, errs = acct(), {}
+    out = {"name": (d.get("name") or "").strip()[:120]}
+    raw_phone = (d.get("phone") or "").strip()
+    if raw_phone:
+        out["phone"] = CRM.norm_phone(raw_phone, d.get("cc") or "+966")
+        if not out["phone"]:
+            errs["phone"] = "phone"
+    else:
+        out["phone"] = existing.get("phone") if existing and not existing.get("phone") else None
+        if not existing:
+            errs["phone"] = "required"                 # الإضافة اليدوية بلا رقم لا فائدة منها للحملات
+    email = (d.get("email") or "").strip()
+    out["email"] = CRM.norm_email(email) if email else None
+    if email and not out["email"]:
+        errs["email"] = "email"
+    comp = _int_or_none(d.get("company_id"))
+    if comp and not db.company_owned(owner, comp):
+        errs["company_id"] = "company"
+    out["company_id"] = comp
+    members = {m["id"] for m in _crm_members()}
+    asg = _int_or_none(d.get("assignee_id"))
+    if asg and asg not in members:
+        errs["assignee_id"] = "user"
+    out["assignee_id"] = asg
+    o = d.get("optin")
+    out["optin"] = 1 if o in (1, True, "1", "true") else (0 if o in (0, False, "0", "false") else None)
+    if "tags" in d:
+        out["tags"] = [t for t in (_int_or_none(x) for x in (d.get("tags") or [])) if t]
+    fields, vals = db.fields_map(owner, "contact"), {}
+    sent = d.get("fields") or {}
+    for key, fd in fields.items():
+        if key not in sent and not existing:
+            if fd["required"]:
+                errs["f:" + key] = "required"
+            continue
+        if key not in sent:
+            continue
+        v, err = CRM.clean_value(fd, sent[key], members)
+        if err:
+            errs["f:" + key] = err
+        else:
+            vals[key] = v
+    out["fields"] = vals
+    return (None, errs) if errs else (out, None)
+
+
+@app.route("/api/crm/contacts", methods=["POST"])
+@require_crm()
+def crm_contact_save():
+    d = _json_body()
+    cid = _int_or_none(d.get("id"))
+    existing = db.get_contact(acct(), cid) if cid else None
+    if cid and not existing:
+        return _crm_err("not_found", 404)
+    clean, errs = _clean_contact(d, existing)
+    if errs:
+        return jsonify({"ok": False, "error": "invalid", "fields": errs}), 400
+    new_id, err = db.save_contact(acct(), clean, cid, by=uid())
+    if err:
+        return jsonify({"ok": False, "error": err, "fields": {"phone": err} if err == "phone_taken" else {}}), 400
+    return jsonify({"ok": True, "contact": db.get_contact(acct(), new_id)})
+
+
+@app.route("/api/crm/contacts/bulk", methods=["POST"])
+@require_crm()
+def crm_contacts_bulk():
+    d = _json_body()
+    ids, action = d.get("ids") or [], d.get("action")
+    if not isinstance(ids, list) or not ids:
+        return _crm_err("ids")
+    owner = acct()
+    if action in ("tag", "untag"):
+        n = db.tag_contacts(owner, ids, d.get("tags") or [], add=action == "tag")
+    elif action == "assign":
+        asg = _int_or_none(d.get("assignee_id"))
+        if asg and asg not in {m["id"] for m in _crm_members()}:
+            return _crm_err("user")
+        n = db.assign_contacts(owner, ids, asg)
+    elif action == "delete":
+        if not _crm_admin():
+            return _crm_err("role", 403)
+        n = db.delete_contacts(owner, ids)
+        log.info("crm bulk delete acct=%s by=%s n=%s", owner, uid(), n)
+    else:
+        return _crm_err("action")
+    return jsonify({"ok": True, "count": n})
+
+
+@app.route("/api/crm/fields", methods=["POST"])
+@require_crm(manage=True)
+def crm_field_save():
+    d = _json_body()
+    entity = d.get("entity") if d.get("entity") in CRM.ENTITIES else "contact"
+    fid = _int_or_none(d.get("id"))
+    if fid:
+        cur = next((f for f in db.list_fields(acct(), entity) if f["id"] == fid), None)
+        if not cur:
+            return _crm_err("not_found", 404)
+        d = dict(d, key=cur["key"], type=cur["type"])      # المفتاح والنوع ثابتان بعد الإنشاء
+    clean, err = CRM.clean_field_def(d)
+    if err:
+        return _crm_err(err)
+    new_id, err = db.save_field(acct(), entity, clean, fid)
+    if err:
+        return _crm_err(err)
+    return jsonify(dict(_crm_meta(), ok=True, id=new_id))
+
+
+@app.route("/api/crm/fields/<int:fid>/delete", methods=["POST"])
+@require_crm(manage=True)
+def crm_field_delete(fid):
+    if not db.delete_field(acct(), fid):
+        return _crm_err("not_found", 404)
+    return jsonify(dict(_crm_meta(), ok=True))
+
+
+@app.route("/api/crm/fields/reorder", methods=["POST"])
+@require_crm(manage=True)
+def crm_field_reorder():
+    d = _json_body()
+    entity = d.get("entity") if d.get("entity") in CRM.ENTITIES else "contact"
+    ids = [i for i in (_int_or_none(x) for x in (d.get("ids") or [])) if i][:CRM.MAX_FIELDS]
+    db.reorder_fields(acct(), entity, ids)
+    return jsonify(dict(_crm_meta(), ok=True))
+
+
+@app.route("/api/crm/tags", methods=["POST"])
+@require_crm()
+def crm_tag_save():
+    """إنشاء وسم متاح للموظف (يسم أثناء العمل)، وتعديله للإدارة وحدها."""
+    d = _json_body()
+    tid = _int_or_none(d.get("id"))
+    if tid and not _crm_admin():
+        return _crm_err("role", 403)
+    new_id, err = db.save_tag(acct(), d.get("name"), d.get("color") or "cyan", tid)
+    if err:
+        return _crm_err(err)
+    return jsonify(dict(_crm_meta(), ok=True, id=new_id))
+
+
+@app.route("/api/crm/tags/<int:tid>/delete", methods=["POST"])
+@require_crm(manage=True)
+def crm_tag_delete(tid):
+    if not db.delete_tag(acct(), tid):
+        return _crm_err("not_found", 404)
+    return jsonify(dict(_crm_meta(), ok=True))
+
+
+@app.route("/api/crm/companies", methods=["GET", "POST"])
+@require_crm()
+def crm_companies():
+    owner = acct()
+    if request.method == "GET":
+        return jsonify({"ok": True, "rows": db.list_companies(owner, request.args.get("q", ""))})
+    d = _json_body()
+    fields, vals = db.fields_map(owner, "company"), {}
+    for key, v in (d.get("fields") or {}).items():
+        fd = fields.get(key)
+        if not fd:
+            continue
+        cv, err = CRM.clean_value(fd, v, {m["id"] for m in _crm_members()})
+        if err:
+            return jsonify({"ok": False, "error": "invalid", "fields": {"f:" + key: err}}), 400
+        vals[key] = cv
+    new_id, err = db.save_company(owner, d.get("name"), vals, _int_or_none(d.get("id")))
+    if err:
+        return _crm_err(err)
+    return jsonify(dict(_crm_meta(), ok=True, id=new_id))
+
+
+@app.route("/api/crm/companies/<int:co_id>/delete", methods=["POST"])
+@require_crm(manage=True)
+def crm_company_delete(co_id):
+    if not db.delete_company(acct(), co_id):
+        return _crm_err("not_found", 404)
+    return jsonify(dict(_crm_meta(), ok=True))
+
+
+@app.route("/api/crm/segments/count", methods=["POST"])
+@require_crm()
+def crm_segment_count():
+    """«View count» — العدد الحالي لقواعد لم تُحفظ بعد."""
+    if _rate_limited(f"u{uid()}", limit=120, window=300, bucket="crm_count"):
+        return _crm_err("rate", 429)
+    fields = db.fields_map(acct(), "contact", active_only=False)
+    try:
+        rules = _rules_from(_json_body().get("rules") or [], fields)
+    except ValueError as e:
+        return _crm_err(str(e))
+    return jsonify({"ok": True, "count": db.count_contacts(acct(), rules, fields)})
+
+
+@app.route("/api/crm/segments", methods=["POST"])
+@require_crm(manage=True)
+def crm_segment_save():
+    d = _json_body()
+    fields = db.fields_map(acct(), "contact", active_only=False)
+    try:
+        rules = _rules_from(d.get("rules") or [], fields)
+    except ValueError as e:
+        return _crm_err(str(e))
+    new_id, err = db.save_segment(acct(), d.get("name"), rules, _int_or_none(d.get("id")), by=uid())
+    if err:
+        return _crm_err(err)
+    return jsonify(dict(_crm_meta(), ok=True, id=new_id, count=db.count_contacts(acct(), rules, fields)))
+
+
+@app.route("/api/crm/segments/<int:sid>/delete", methods=["POST"])
+@require_crm(manage=True)
+def crm_segment_delete(sid):
+    if not db.delete_segment(acct(), sid):
+        return _crm_err("not_found", 404)
+    return jsonify(dict(_crm_meta(), ok=True))
+
+
+# ---- الاستيراد: رفع ⇒ معاينة وتخمين الربط ⇒ تشغيل ----
+# الملف يُحفظ مؤقتاً خارج static باسم عشوائي، ورمزه في الجلسة فقط — لا يشغّل أحد ملف غيره.
+_IMPORT_DIR = os.path.join(UPLOAD_DIR, "imports")
+_IMPORT_TTL = 3600
+
+
+def _import_path(token):
+    return os.path.join(_IMPORT_DIR, f"{acct()}_{token}.bin")
+
+
+def _prune_imports():
+    try:
+        now = _time.time()
+        for n in os.listdir(_IMPORT_DIR):
+            p = os.path.join(_IMPORT_DIR, n)
+            if now - os.path.getmtime(p) > _IMPORT_TTL:
+                os.remove(p)
+    except OSError:
+        pass
+
+
+@app.route("/api/crm/import/preview", methods=["POST"])
+@require_crm(manage=True)
+def crm_import_preview():
+    if _rate_limited(f"u{uid()}", limit=30, window=3600, bucket="crm_import"):
+        return _crm_err("rate", 429)
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return _crm_err("file")
+    name = f.filename.lower()
+    if not name.endswith((".csv", ".xlsx", ".txt")):
+        return _crm_err("ext")
+    data = f.read(CRM.MAX_IMPORT_BYTES + 1)
+    try:
+        head, body = CRM.read_table(data, name)
+    except ValueError as e:
+        return _crm_err(str(e))
+    os.makedirs(_IMPORT_DIR, exist_ok=True)
+    _prune_imports()
+    token = _secrets.token_urlsafe(12)
+    with open(_import_path(token), "wb") as fh:
+        fh.write(data)
+    session["crm_import"] = {"token": token, "name": name}
+    fields = db.fields_map(acct(), "contact")
+    # الرمز يعود للواجهة لتعيده مع «تشغيل» — والخادم يطابقه بالجلسة، فلا يفيد أحداً غير صاحبها
+    return jsonify({"ok": True, "token": token, "headers": head, "sample": body[:5], "rows": len(body),
+                    "guess": {str(i): CRM.guess_target(h, fields) for i, h in enumerate(head)}})
+
+
+@app.route("/api/crm/import/run", methods=["POST"])
+@require_crm(manage=True)
+def crm_import_run():
+    d = _json_body()
+    meta = session.get("crm_import") or {}
+    if not meta or d.get("token") != meta.get("token"):
+        return _crm_err("expired")
+    path = _import_path(meta["token"])
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return _crm_err("expired")
+    owner = acct()
+    fields = db.fields_map(owner, "contact")
+    try:
+        head, body = CRM.read_table(data, meta["name"])
+        recs, errs = CRM.build_records(head, body, d.get("mapping") or {}, fields,
+                                       d.get("cc") or "+966", {m["id"] for m in _crm_members()})
+    except ValueError as e:
+        return _crm_err(str(e))
+    stats = db.import_contacts(owner, recs, update_existing=bool(d.get("update", True)), by=uid())
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    session.pop("crm_import", None)
+    log.info("crm import acct=%s by=%s created=%s updated=%s skipped=%s errors=%s",
+             owner, uid(), stats["created"], stats["updated"], stats["skipped"], len(errs))
+    return jsonify(dict(_crm_meta(), ok=True, stats=dict(stats, errors=len(errs)),
+                        errors=[{"row": n, "reason": r} for n, r in errs[:100]]))
+
+
+@app.route("/contacts/export.csv")
+@require_crm()
+def contacts_export():
+    if _rate_limited(f"u{uid()}", limit=20, window=3600, bucket="crm_export"):
+        abort(429)
+    owner = acct()
+    fields = db.fields_map(owner, "contact", active_only=False)
+    rules = []
+    seg = _int_or_none(request.args.get("segment"))
+    try:
+        if seg:
+            s = db.get_segment(owner, seg)
+            if not s:
+                abort(404)
+            rules = _rules_from(s["rules"], fields)
+        rules += _rules_from(request.args.get("rules", "[]"), fields)
+    except ValueError:
+        abort(400)
+    rows, _ = db.query_contacts(owner, rules, fields, request.args.get("q", ""), limit=None)
+    tags = {t["id"]: t["name"] for t in db.list_tags(owner)}
+    out = io.StringIO(); w = csv.writer(out)
+    put = lambda cells: w.writerow([_csv_cell(x) for x in cells])
+    fl = list(fields.values())
+    put(["name", "phone", "email", "tags", "marketing_optin", "company", "contact_owner", "source",
+         "created_at"] + [f["key"] for f in fl])
+    for r in rows:
+        cf = r["fields"]
+        put([r["name"], r["phone"] or "", r["email"] or "", ", ".join(tags.get(t, "") for t in r["tags"]),
+             {1: "yes", 0: "no"}.get(r["optin"], ""), r.get("company_name") or "", r.get("assignee_name") or "",
+             r["source"], _time.strftime("%Y-%m-%d", _time.localtime(r["created_at"]))]
+            + [", ".join(map(str, cf[f["key"]])) if isinstance(cf.get(f["key"]), list)
+               else ("" if cf.get(f["key"]) is None else cf[f["key"]]) for f in fl])
+    return Response("﻿" + out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=contacts.csv"})
+
 
 if __name__ == "__main__":
     bootstrap()

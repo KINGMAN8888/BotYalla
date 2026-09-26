@@ -277,6 +277,12 @@ CSRF شامل (باستثناء `/wh/whatsapp` — التوقيع هو الحا�
 - الواجهة: `Team.jsx` و`Developer.jsx`. الاختبارات: `tests/test_team_api.py` (38).
   دليل الشريك للتسليم المباشر: [docs/PARTNER_API.md](docs/PARTNER_API.md).
 
+### Enterprise — المرحلة 1: جهات الاتصال (2026-09-26)
+- أول عميل مؤسسات (فنادق الفرسان) يطلب تكافؤاً كاملاً مع منصة منافسة: الخطة [docs/ENTERPRISE_PLAN.md](docs/ENTERPRISE_PLAN.md) وقائمة القبول [docs/COMPETITOR_PARITY.md](docs/COMPETITOR_PARITY.md) (مراجعة 172 صفحة من توثيقهم).
+- باقة `enterprise` (خارج ORDER — يمنحها الأدمن، `by_call`) وميزة `crm` في `plans.FEATURES`.
+- `crm.py` منطق نقي · جداول `contacts` `companies` `contact_fields` `tags` `contact_tags` `contact_peers` `segments` (ملء أولي مرة واحدة من `bot_users`، علم `crm_backfill_v1`) · `/contacts` بخمسة تبويبات (`Contacts.jsx`) · استيراد CSV/XLSX (`openpyxl`) بتخمين الأعمدة · تصدير آمن لـ Excel. الاختبارات: `tests/test_crm.py` (31).
+- **التالي:** مبدّل فاتح/داكن ← المرحلة 2 (تتبّع حالات الرسائل) ← البث 2.0.
+
 ### التوثيق والنشر
 `docs/` (USER_GUIDE / ARCHITECTURE / SECURITY / DEPLOYMENT / HOSTINGER / PRODUCTION / **WHATSAPP**) · `deploy/` (`hostinger_deploy.sh`, `deploy_hostinger.bat`, `backup.sh`, systemd, nginx, gunicorn, Dockerfile) · خطة تسويق (PDF) + دليل هوية (PDF).
 

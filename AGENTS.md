@@ -125,6 +125,8 @@
 
 58. **CAPTCHA (Turnstile) عبر `captcha.py` وحده، والتحقق في الخادم.** مطفأ بلا `TURNSTILE_SITE_KEY`+`TURNSTILE_SECRET_KEY` (لا ودجت ولا مصدر في CSP). مفعّلاً: التسجيل و`/forgot` دائماً، والدخول بعد `LOGIN_AFTER_FAILS` فشلات للـIP **أو** للحساب (`_login_needs_captcha`) — ويُفحص **قبل** كلمة المرور. `verify` يفشل مغلقاً (رمز مفقود/مرفوض/Cloudflare لا يرد = رفض) ويطابق `action`. تفعيل الزر في الواجهة راحة لا أمان. والدخول: حدّ فشل لكل حساب (`login_acct`) فوق حدّ الـIP، وتجزئة وهمية لاسم غير موجود (توقيت متساوٍ)، ورسالة «محظور» بعد صحة كلمة المرور فقط — `tests/test_captcha.py` · `tests/test_hardening.py::LoginBruteForceTests`.
 
+59. **جهات الاتصال (CRM) ملك الحساب وعبر `database` وحده.** الجهة على `owner_id = acct()` لا البوت، و`contact_peers` تربطها بكل (بوت، peer). أي عميل جديد لبوت يمرّ بـ`add_bot_user` ← `link_contact` (لا يرمي أبداً — المحادثة أهم)، وSTOP ينعكس على `contacts.optin` (§55). القيم المخصّصة في `fields_json`، ومفتاح الحقل ونوعه **ثابتان بعد الإنشاء**. الشرائح: `crm.clean_rules` تنظّف (حقل/عامل من قائمة بيضاء) ثم `db.segment_where` تبني SQL بمعاملات — لا تمرّر قواعد غير منظَّفة أبداً. المسارات `/api/crm/*` بحارس `require_crm` (باقة فيها `crm` أو حساب إدارة §54)، والإدارة (حقول · وسوم · شرائح · استيراد · حذف) لـowner/admin. الاستيراد: الملف خارج static ورمزه مربوط بالجلسة — `tests/test_crm.py`.
+
 ---
 
 ## 4) أنماط يجب اتّباعها حرفياً
