@@ -8,6 +8,11 @@ ADMIN_PASS = os.environ.setdefault("ADMIN_PASS", f"tst_adm_{secrets.token_hex(8)
 CLIENT_PW = f"Tst#cli{secrets.token_hex(8)}"      # سياسة كلمة المرور: كبير وصغير ورقم ورمز
 # bootstrap() يفعّل سجل الملف — لا يُكتب في logs/ الحقيقي (على الخادم = سجل الإنتاج)
 os.environ.setdefault("BOTYALLA_LOGS", tempfile.mkdtemp(prefix="botyalla-e2e-logs-"))
+# قاعدة خاصة بهذه العملية في مجلد مؤقت — كانت test_e2e.db في جذر المستودع، فتشغيلان
+# متزامنان يحذف كلٌّ منهما قاعدة الآخر (setUpClass/tearDownClass) وتفشل الرحلة عشوائياً.
+_E2E_DIR = tempfile.mkdtemp(prefix="botyalla-e2e-")
+os.environ["BOTYALLA_DB"] = os.path.join(_E2E_DIR, "test_e2e.db")
+os.environ["BOTYALLA_DOTENV"] = "0"   # لا .env المطوّر — SMTP فيه يفرض تأكيد البريد
 
 import database as db
 import app as A
@@ -25,7 +30,7 @@ class BotYallaE2ETest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # استخدام قاعدة بيانات منفصلة للاختبار
-        cls.db_path = "test_e2e.db"
+        cls.db_path = os.environ["BOTYALLA_DB"]
         if os.path.exists(cls.db_path):
             os.remove(cls.db_path)
         
@@ -81,8 +86,7 @@ class BotYallaE2ETest(unittest.TestCase):
         A.UPLOAD_DIR = cls.orig_uploads
         shutil.rmtree(cls._tmp_uploads, ignore_errors=True)
         tg.urllib.request.urlopen = cls.orig_urlopen
-        if os.path.exists(cls.db_path):
-            os.remove(cls.db_path)
+        shutil.rmtree(_E2E_DIR, ignore_errors=True)
 
     def _tk(self):
         """يجلب CSRF Token للتصفح"""

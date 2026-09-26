@@ -5,7 +5,7 @@ import {
   Grid, Stat, Pill, Empty, PageHead, SectionTitle, num,
 } from "../kit.jsx";
 import { Flashes } from "../AppShell.jsx";
-import { PasswordField } from "../auth.jsx";
+import { PasswordField, Captcha } from "../auth.jsx";
 import { AssetPicker } from "../media.jsx";
 
 /* ---------------------------------------------------------- باني الفلو */
@@ -514,6 +514,8 @@ export function Analytics() {
    نموذج POST عادي إلى نفس المسار — Flask يتحقق ويحوّل ويعرض flash. */
 export function Recover({ mode }) {
   const isReset = mode === "reset";
+  const [human, setHuman] = useState(false);
+  const captchaOk = isReset || !P.captcha || human;
   return (
     <div className="mx-auto flex min-h-screen max-w-[440px] flex-col justify-center px-5 py-16">
       <Flashes />
@@ -535,8 +537,9 @@ export function Recover({ mode }) {
               <Input type="email" name="email" required autoFocus autoComplete="email" dir="ltr" />
             </Field>
           )}
+          {!isReset && <Captcha siteKey={P.captcha} action="forgot" onChange={setHuman} />}
           <div className="mt-6">
-            <Btn block icon={isReset ? "lock" : "link"} type="submit">
+            <Btn block icon={isReset ? "lock" : "link"} type="submit" disabled={!captchaOk}>
               {isReset ? t("reset_save") : t("forgot_send")}
             </Btn>
           </div>

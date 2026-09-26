@@ -7,6 +7,7 @@ import json, os, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMP = tempfile.mkdtemp(prefix="botyalla-agent-")
+os.environ["BOTYALLA_DOTENV"] = "0"   # لا .env المطوّر — SMTP فيه يفرض تأكيد البريد
 os.environ["BOTYALLA_DB"] = os.path.join(_TMP, "t.db")        # قبل أي استيراد
 os.environ["BOTYALLA_UPLOADS"] = _TMP
 os.environ["BOTYALLA_LOGS"] = _TMP

@@ -14,9 +14,11 @@ from flask import (Flask, request, redirect, url_for, render_template,
                    session, flash, abort, jsonify, Response, send_from_directory, g,
                    get_flashed_messages, make_response)
 
-# تحميل متغيرات .env تلقائياً إذا وُجد الملف
+# تحميل متغيرات .env تلقائياً إذا وُجد الملف.
+# BOTYALLA_DOTENV=0 يتخطّاه — للاختبارات: وإلا ورثت SMTP/GTM من .env المطوّر فتغيّر
+# سلوكها (تأكيد بريد إجباري · سكربتات قياس) حسب الجهاز لا حسب الكود.
 _env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-if os.path.isfile(_env_file):
+if os.environ.get("BOTYALLA_DOTENV") != "0" and os.path.isfile(_env_file):
     try:
         with open(_env_file, "r", encoding="utf-8") as _f:
             for _line in _f:
@@ -58,6 +60,7 @@ import analytics as AN
 import weekly_report as WR
 import conv_insights as CI
 import wa_signup as WAS
+import captcha as CAP
 from xml.sax.saxutils import escape as _xesc
 import time as _time
 import logging
@@ -336,7 +339,7 @@ def _build_csp():
     كل سكربتاتنا (وGTM) تحمل nonce، وفتح inline يُبطل حماية REVIEW.md §3.1."""
     d = {k: list(v) for k, v in _CSP_BASE.items()}
     extra = {}
-    for part in (AN.csp_sources(), WAS.csp_sources()):
+    for part in (AN.csp_sources(), WAS.csp_sources(), CAP.csp_sources()):
         for directive, srcs in part.items():
             extra.setdefault(directive, []).extend(srcs)
     for directive, srcs in extra.items():
@@ -520,6 +523,19 @@ def _rate_limited(ip, limit=8, window=300, bucket="login"):
     _login_attempts[key] = (cnt, first)
     return cnt > limit
 
+def _rate_peek(ip, limit, window, bucket):
+    """نفس عدّاد `_rate_limited` لكن قراءة فقط — لحدّ يُحتسب على الفشل وحده."""
+    cnt, first = _login_attempts.get((bucket, ip), (0, 0))
+    return int(_time.time()) - first <= window and cnt >= limit
+
+# حدّ الفشل لكل حساب: حدّ الـIP وحده لا يوقف تخمين كلمة مرور حساب واحد من
+# عناوين كثيرة. يُحتسب على المحاولات **الفاشلة** فقط، فلا يُقفل صاحب الحساب
+# بدخوله الصحيح، والنافذة قصيرة حتى لا يصبح قفل الحساب نفسه سلاحاً.
+_ACCT_FAIL_LIMIT, _ACCT_FAIL_WINDOW = 10, 900
+# تجزئة ثابتة يُتحقَّق منها حين لا يوجد الحساب — حتى يتساوى زمن الرد فلا يكشف
+# التوقيت أيّ الأسماء مسجّلة.
+_DUMMY_PW_HASH = auth.hash_password(_secrets.token_urlsafe(16))
+
 # حدّ التسجيل لكل IP في 10 دقائق — مكان واحد لأنه مطبَّق على مسارين (النموذج
 # العادي ومسار جوجل/فيسبوك).
 #
@@ -641,10 +657,34 @@ def _oauth_on(provider):
                 and _public_url("home"))
 
 def _auth_props(**kw):
-    """حمولة صفحات الدخول والتسجيل: أزرار جوجل/فيسبوك (المفعّلة فقط) وقائمة الدول."""
+    """حمولة صفحات الدخول والتسجيل: أزرار جوجل/فيسبوك (المفعّلة فقط) وقائمة الدول،
+    ومفتاح CAPTCHA العام (`captcha`) لو مفعّل — الدخول يأخذه فقط حين يلزم (`_login_needs_captcha`)."""
     return dict({"oauth": {p: _oauth_on(p) for p in _OAUTH},
                  "countries": [list(c) for c in ACC.COUNTRIES],
-                 "invite": bool(db.invite_valid(session.get("invite")))}, **kw)
+                 "invite": bool(db.invite_valid(session.get("invite"))),
+                 "captcha": CAP.site_key() if CAP.configured() else None}, **kw)
+
+def _captcha_ok(action):
+    """يفحص رمز Turnstile المرسَل مع النموذج في الخادم. مطفأ = True دائماً."""
+    return CAP.verify(request.form.get(CAP.FIELD), request.remote_addr, action)
+
+def _captcha_msg(lang):
+    return i18n.t("captcha_failed", lang)
+
+def _login_needs_captcha(acct=None):
+    """الدخول يطلب CAPTCHA بعد فشل متكرر من هذا الـIP أو على هذا الحساب — لا قبل."""
+    if not CAP.configured():
+        return False
+    n, w = CAP.LOGIN_AFTER_FAILS, CAP.LOGIN_FAIL_WINDOW
+    return (_rate_peek(request.remote_addr or "?", n, w, "login_fail_ip")
+            or bool(acct and _rate_peek(acct, n, w, "login_fail_acct")))
+
+def _login_props(acct=None, **kw):
+    """حمولة صفحة الدخول: الودجت يظهر فقط لو الطلب التالي سيحتاجه."""
+    p = _auth_props(**kw)
+    if not _login_needs_captcha(acct):
+        p["captcha"] = None
+    return p
 
 _SIGNUP_FIELDS = ("username", "email", "phone", "phone_cc", "age", "entity_type")
 
@@ -729,6 +769,8 @@ def register():
         if _rate_limited(request.remote_addr or "?", limit=_REG_LIMIT, window=_REG_WINDOW, bucket="register"):
             flash("محاولات كثيرة. انتظر قليلاً." if lang != "en" else "Too many attempts. Please wait.", "error")
             return react_page("register", "register", _auth_props())
+        if not _captcha_ok("register"):
+            return _signup_failed("register", "register", {"captcha": _captcha_msg(lang)})
         d, errs = _signup_check(request.form, lang)
         if not errs:
             # التأكيد إجباري للحسابات الجديدة — إلا لو SMTP غير مضبوط: لا كود سيصل،
@@ -777,19 +819,34 @@ def login():
     if request.method == "POST":
         if _rate_limited(request.remote_addr or "?"):
             flash("محاولات كثيرة. انتظر قليلاً." if session.get("lang")!="en" else "Too many attempts. Please wait.", "error")
-            return react_page("login", "login", _auth_props())
+            return react_page("login", "login", _login_props())
         u = request.form.get("username", "").strip()
         p = request.form.get("password", "")
+        acct = u.lower()[:254]
+        if _rate_peek(acct, _ACCT_FAIL_LIMIT, _ACCT_FAIL_WINDOW, "login_acct"):
+            flash("محاولات كثيرة. انتظر قليلاً." if session.get("lang")!="en" else "Too many attempts. Please wait.", "error")
+            return react_page("login", "login", _login_props())
+        # CAPTCHA قبل فحص كلمة المرور — فلا يعرف البوت هل كانت صحيحة
+        if _login_needs_captcha(acct) and not _captcha_ok("login"):
+            flash(_captcha_msg(session.get("lang", i18n.DEFAULT)), "error")
+            return react_page("login", "login", _login_props(acct, values={"username": u}))
         row = db.get_user_by_login(u)            # اسم المستخدم أو البريد
-        if row and row.get("is_blocked"):
+        ok = auth.verify_password(p, row["pw_hash"] if row else _DUMMY_PW_HASH) and bool(row)
+        # الحظر يُعلَن بعد صحة كلمة المرور فقط — وإلا عرف أي زائر أن الاسم مسجّل ومحظور
+        if ok and row.get("is_blocked"):
             flash("تم حظر هذا الحساب." if session.get("lang")!="en" else "This account is blocked.", "error")
-            return react_page("login", "login", _auth_props())
-        if row and auth.verify_password(p, row["pw_hash"]):
+            return react_page("login", "login", _login_props())
+        if ok:
             session["uid"] = row["id"]; session["uname"] = row["username"]; session["role"] = row.get("role","user")
             session["pwv"] = _pw_stamp(row["pw_hash"])
             return redirect(url_for("dashboard"))
+        _rate_limited(acct, limit=_ACCT_FAIL_LIMIT, window=_ACCT_FAIL_WINDOW, bucket="login_acct")
+        _rate_limited(acct, limit=CAP.LOGIN_AFTER_FAILS, window=CAP.LOGIN_FAIL_WINDOW, bucket="login_fail_acct")
+        _rate_limited(request.remote_addr or "?", limit=CAP.LOGIN_AFTER_FAILS,
+                      window=CAP.LOGIN_FAIL_WINDOW, bucket="login_fail_ip")
         flash("بيانات دخول غير صحيحة." if session.get("lang") != "en" else "Wrong login details.", "error")
-    return react_page("login", "login", _auth_props())
+        return react_page("login", "login", _login_props(acct, values={"username": u}))
+    return react_page("login", "login", _login_props())
 
 @app.route("/logout", methods=["POST"])
 def logout():
@@ -1139,6 +1196,10 @@ def _send_reset(email, lang):
 def forgot():
     lang = session.get("lang", i18n.DEFAULT)
     if request.method == "POST":
+        # CAPTCHA قبل أي شيء: رسالة الرفض لا تكشف شيئاً عن الإيميل، والإرسال لا يحدث
+        if not _captcha_ok("forgot"):
+            flash(_captcha_msg(lang), "error")
+            return redirect(url_for("forgot"))
         email = _norm_email(request.form.get("email", ""))
         # كل الفروع تنتهي بنفس الرسالة ونفس التحويل: المسار لا يكشف أبداً هل
         # الإيميل مسجّل (منع تعداد الحسابات). الحدّان: 3 لكل إيميل و10 لكل IP
@@ -1149,7 +1210,8 @@ def forgot():
             _send_reset(email, lang)
         flash(i18n.t("forgot_sent", lang), "ok")
         return redirect(url_for("forgot"))
-    return react_page("forgot", "forgot_title")
+    return react_page("forgot", "forgot_title",
+                      {"captcha": CAP.site_key() if CAP.configured() else None})
 
 @app.route("/reset/<token>", methods=["GET", "POST"])
 def reset_password(token):
@@ -5265,8 +5327,10 @@ def healthz():
     try:
         db.count_users()
         return jsonify({"ok": True}), 200
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)[:120]}), 503
+    except Exception:
+        # التفاصيل في السجل لا في الرد — المسار عام ونص الاستثناء قد يحمل مسارات الخادم
+        log.exception("healthz failed")
+        return jsonify({"ok": False}), 503
 
 
 # ============================================================================

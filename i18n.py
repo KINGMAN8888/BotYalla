@@ -40,6 +40,8 @@ T = {
  "forgot_sub":       {"ar": "اكتب البريد المسجّل في حسابك وسنرسل لك رابطاً لضبط كلمة مرور جديدة.",
                       "en": "Enter the email on your account and we'll send you a link to set a new password."},
  "forgot_send":      {"ar": "أرسل الرابط", "en": "Send link"},
+ "captcha_failed":   {"ar": "تعذّر التأكد أنك لست روبوتاً. أكمل خطوة التحقق ثم حاول مرة أخرى.",
+                      "en": "We couldn't confirm you're not a robot. Complete the check and try again."},
  "forgot_sent":      {"ar": "لو كان البريد مسجّلاً لدينا فسيصلك رابط الاسترجاع خلال دقائق. الرابط صالح ساعة واحدة.",
                       "en": "If that email is registered, a reset link is on its way. It's valid for one hour."},
  "forgot_no_email":  {"ar": "لا يوجد بريد في حسابك؟ تواصل مع الدعم وسنساعدك.",

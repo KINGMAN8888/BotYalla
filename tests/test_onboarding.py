@@ -11,6 +11,7 @@ import json, os, secrets, sys, tempfile, time, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMPDIR = tempfile.mkdtemp(prefix="botyalla-onboard-")
+os.environ["BOTYALLA_DOTENV"] = "0"   # لا .env المطوّر — SMTP فيه يفرض تأكيد البريد
 os.environ["BOTYALLA_DB"] = os.path.join(_TMPDIR, "test.db")   # قبل استيراد database
 os.environ["BOTYALLA_UPLOADS"] = _TMPDIR
 ADMIN_PW = os.environ.setdefault("ADMIN_PASS", f"tst_adm_{secrets.token_hex(8)}")

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BY, P, t, bi, AR, Icon, Card, Btn, Field, Input, Select, Form } from "./kit.jsx";
 import { Flashes } from "./AppShell.jsx";
 
@@ -253,6 +253,53 @@ export function EntityPicker({ name = "entity_type", defaultValue = "", error, o
   );
 }
 
+/* ------------------------------------------------------------ CAPTCHA (Cloudflare Turnstile)
+   يظهر فقط حين يرسل الخادم مفتاحه العام (`P.captcha`) — بلا مفاتيح في .env لا شيء هنا.
+   الودجت يحقن حقل `cf-turnstile-response` داخل النموذج نفسه، والخادم وحده يتحقق منه
+   (captcha.py) — حالة `onChange` هنا لتفعيل الزر فقط، لا أمان فيها. */
+let tsLoading = null;
+function loadTurnstile() {
+  if (window.turnstile) return Promise.resolve(window.turnstile);
+  return (tsLoading ||= new Promise((ok, fail) => {
+    const s = document.createElement("script");
+    s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    s.async = true;
+    s.onload = () => (window.turnstile ? ok(window.turnstile) : fail());
+    s.onerror = () => { tsLoading = null; s.remove(); fail(); };
+    document.head.appendChild(s);
+  }));
+}
+
+export function Captcha({ siteKey, action, onChange }) {
+  const box = useRef(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!siteKey) return undefined;
+    let id, gone = false;
+    const set = (v) => { if (!gone) onChange?.(v); };
+    loadTurnstile().then((ts) => {
+      if (gone || !box.current) return;
+      id = ts.render(box.current, {
+        sitekey: siteKey, action, theme: "auto", size: "flexible",
+        language: AR ? "ar-eg" : "en",
+        "refresh-expired": "auto",
+        callback: () => { setFailed(false); set(true); },
+        "expired-callback": () => set(false),
+        "error-callback": () => { set(false); setFailed(true); },
+      });
+    }).catch(() => setFailed(true));
+    return () => { gone = true; if (id !== undefined) window.turnstile?.remove(id); };
+  }, [siteKey, action]);
+  if (!siteKey) return null;
+  return (
+    <div className="mt-5">
+      <div ref={box} className="min-h-[65px]" />
+      {failed && <ErrLine>{bi("تعذّر تحميل خطوة التحقق — حدّث الصفحة أو جرّب شبكة أخرى.",
+                              "The verification check didn't load — refresh the page or try another network.")}</ErrLine>}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------ موافقات */
 export function Consent({ error, onChange }) {
   return (
@@ -351,7 +398,9 @@ export function Auth({ mode }) {
   const [uname, setUname] = useState(v.username || "");
   const [email, setEmail] = useState(v.email || "");
   const [show, setShow] = useState(false);
-  const ready = uOk && pwOk && ent && terms;
+  const [human, setHuman] = useState(false);
+  const captchaOk = !P.captcha || human;
+  const ready = uOk && pwOk && ent && terms && captchaOk;
 
   if (isLogin) {
     return (
@@ -362,7 +411,7 @@ export function Auth({ mode }) {
           <SocialButtons mode="login" />
           <Form action="">
             <Field label={bi("اسم المستخدم أو البريد الإلكتروني", "Username or email")} className="mb-4">
-              <Input name="username" required autoFocus autoComplete="username" dir="auto" />
+              <Input name="username" required autoFocus autoComplete="username" dir="auto" defaultValue={v.username || ""} />
             </Field>
             <Field label={
               <span className="flex items-center justify-between gap-2">
@@ -371,7 +420,8 @@ export function Auth({ mode }) {
               </span>}>
               <SecretInput name="password" required autoComplete="current-password" show={show} onToggle={() => setShow(!show)} />
             </Field>
-            <div className="mt-6"><Btn block icon="lock" type="submit">{t("login")}</Btn></div>
+            <Captcha siteKey={P.captcha} action="login" onChange={setHuman} />
+            <div className="mt-6"><Btn block icon="lock" type="submit" disabled={!captchaOk}>{t("login")}</Btn></div>
           </Form>
           <p className="mt-6 text-center text-[13px] text-ink-3">
             {t("no_account")}{" "}
@@ -421,6 +471,7 @@ export function Auth({ mode }) {
             <PasswordField username={uname} email={email} onValid={setPwOk} error={e.password} error2={e.password2} />
             <Consent error={e.terms} onChange={setTerms} />
           </div>
+          <Captcha siteKey={P.captcha} action="register" onChange={setHuman} />
           <div className="mt-6">
             <Btn block icon="rocket" type="submit" disabled={!ready}>{t("register")}</Btn>
             {!ready && (

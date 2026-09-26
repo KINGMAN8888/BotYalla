@@ -7,6 +7,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 os.chdir(_ROOT)
 _TMP = tempfile.mkdtemp(prefix="botyalla-media-")
+os.environ["BOTYALLA_DOTENV"] = "0"   # لا .env المطوّر — SMTP فيه يفرض تأكيد البريد
 os.environ["BOTYALLA_DB"] = os.path.join(_TMP, "t.db")
 os.environ["BOTYALLA_UPLOADS"] = _TMP
 os.environ.setdefault("SECRET_KEY", "media-test")

@@ -144,6 +144,55 @@ class RateLimitTests(unittest.TestCase):
                         "العدّاد باقٍ فالمحاولة السادسة تُحجب")
 
 
+class LoginBruteForceTests(unittest.TestCase):
+    """حدّ الفشل لكل حساب (لا لكل IP وحده) · الحظر لا يُكشف بلا كلمة المرور."""
+
+    @classmethod
+    def setUpClass(cls):
+        _boot()
+        db.create_user("victim", auth.hash_password(TEST_PW))
+        cls.blocked = db.create_user("banned", auth.hash_password(TEST_PW))
+        with db.get_conn() as c:
+            c.execute("UPDATE users SET is_blocked=1 WHERE id=?", (cls.blocked,))
+
+    def setUp(self):
+        web._login_attempts.clear()
+
+    def _login(self, u, p, ip):
+        c = _client()
+        return c, c.post("/login", data={"username": u, "password": p, "csrf_token": "tk"},
+                         environ_base={"REMOTE_ADDR": ip})
+
+    def test_failures_from_many_ips_lock_the_account(self):
+        for i in range(web._ACCT_FAIL_LIMIT):
+            self._login("victim", "wrong", f"10.0.0.{i}")
+        _, r = self._login("Victim", TEST_PW, "10.9.9.9")        # IP جديد وحالة أحرف مختلفة
+        self.assertEqual(r.status_code, 200, "الصحيحة تُرفض ما دام الحساب تحت الحدّ")
+        self.assertIn("محاولات كثيرة", r.get_data(as_text=True))
+
+    def test_successful_logins_never_count_toward_the_lock(self):
+        for i in range(web._ACCT_FAIL_LIMIT + 2):
+            _, r = self._login("victim", TEST_PW, f"10.1.0.{i}")
+            self.assertEqual(r.status_code, 302)
+
+    def test_blocked_status_hidden_without_the_password(self):
+        _, r = self._login("banned", "wrong", "10.2.0.1")
+        msg = "تم حظر هذا الحساب"
+        self.assertNotIn(msg, r.get_data(as_text=True))
+        _, r = self._login("banned", TEST_PW, "10.2.0.2")
+        self.assertIn(msg, r.get_data(as_text=True))
+
+    def test_healthz_does_not_leak_exception_text(self):
+        orig = db.count_users
+        db.count_users = lambda: (_ for _ in ()).throw(RuntimeError("/secret/path/botyalla.db"))
+        try:
+            r = web.app.test_client().get("/healthz")
+        finally:
+            db.count_users = orig
+        self.assertEqual(r.status_code, 503)
+        self.assertNotIn("secret", r.get_data(as_text=True))
+
+
 class UsernameRuleTests(unittest.TestCase):
     """§4.2 — الاسم محصور في محارف آمنة، لا الطول وحده."""
 

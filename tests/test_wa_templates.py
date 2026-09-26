@@ -8,6 +8,7 @@ from unittest import mock
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 os.chdir(_ROOT)
+os.environ["BOTYALLA_DOTENV"] = "0"   # لا .env المطوّر — SMTP فيه يفرض تأكيد البريد
 os.environ["BOTYALLA_DB"] = os.path.join(tempfile.mkdtemp(prefix="wa-tpl-"), "t.db")
 os.environ.setdefault("SECRET_KEY", "tpl-test")
 
