@@ -38,7 +38,7 @@ function ConvItem({ c, active, onOpen }) {
             className={"flex w-full cursor-pointer items-center gap-3 rounded-2xl border-0 px-3 py-3 text-start " +
                        "transition-colors duration-200 " +
                        (active ? "bg-au-violet/20 shadow-[inset_0_0_0_1px_rgb(124_108_246/0.5)]"
-                               : "bg-transparent hover:bg-white/[0.05]")}>
+                               : "bg-transparent hover:bg-ov/[0.05]")}>
       <span className="grid size-10 shrink-0 place-items-center rounded-full text-[15px] font-extrabold text-[#07090F]
                        bg-[linear-gradient(140deg,#8FE9FF,#B9AFFF)]">
         {(name || "?").trim().charAt(0).toUpperCase()}
@@ -65,13 +65,21 @@ function ConvItem({ c, active, onOpen }) {
 }
 
 function Bubble({ m, botId }) {
+  if (m.direction === "note") {       // ملاحظة داخلية من الصندوق المشترك — لم تُرسل للعميل
+    return (
+      <div className="mx-auto w-full max-w-[88%] rounded-2xl bg-yellow-400/10 px-3.5 py-2 text-[13px] text-ink shadow-[inset_0_0_0_1px_rgb(250_204_21/0.25)]">
+        <span className="me-1.5 inline-flex items-center gap-1 text-[11px] font-extrabold text-yellow-300"><Icon name="lock" size={11} />{bi("ملاحظة داخلية", "Internal note")}</span>
+        <span className="whitespace-pre-wrap break-words" dir="auto">{m.text}</span>
+      </div>
+    );
+  }
   const mine = m.direction === "out";
   const who = m.sender === "human" ? t("inbox_you") : m.sender === "ai" ? t("inbox_ai")
             : m.sender === "bot" ? t("inbox_bot") : "";
-  const skin = !mine ? "bg-white/[0.07] text-ink rounded-es-md"
+  const skin = !mine ? "bg-ov/[0.07] text-ink rounded-es-md"
     : m.sender === "human" ? "text-[#07090F] bg-[linear-gradient(120deg,#8FE9FF,#B9AFFF)] rounded-ee-md"
     : m.sender === "ai" ? "bg-au-violet/25 text-ink shadow-[inset_0_0_0_1px_rgb(124_108_246/0.45)] rounded-ee-md"
-    : "bg-white/[0.035] text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] rounded-ee-md";
+    : "bg-ov/[0.035] text-ink-2 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)] rounded-ee-md";
   return (
     <div className={"flex " + (mine ? "justify-end" : "justify-start")}>
       <div className={"max-w-[82%] rounded-2xl px-3.5 py-2.5 " + skin}>
@@ -193,7 +201,7 @@ export default function Inbox() {
           ) : (
             <>
               <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5
-                              shadow-[inset_0_-1px_0_rgb(255_255_255/0.08)]">
+                              shadow-[inset_0_-1px_0_rgb(var(--ov-rgb)/0.08)]">
                 <div className="flex min-w-0 items-center gap-2.5">
                   <Btn sm variant="ghost" type="button" icon="back" className="lg:hidden"
                        onClick={() => setPeer("")} aria-label={t("inbox_back")} />
@@ -216,7 +224,7 @@ export default function Inbox() {
                 {!msgs.length && <div className="m-auto text-[13px] text-ink-3">…</div>}
               </div>
 
-              <div className="px-4 pb-4 pt-3 shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]">
+              <div className="px-4 pb-4 pt-3 shadow-[inset_0_1px_0_rgb(var(--ov-rgb)/0.08)]">
                 {legacy ? (
                   /* محادثة قديمة بلا هوية: سطر واحد بدل مربع الرد — لا يُقتطع من مساحة الرسائل */
                   <p className="m-0 flex items-center gap-2 text-[12.5px] leading-relaxed text-ink-3">
@@ -243,8 +251,8 @@ export default function Inbox() {
                       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2}
                                 disabled={busy || windowClosed} placeholder={t("inbox_ph")}
                                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                                className="min-h-[46px] w-full flex-1 resize-none rounded-xl bg-black/25 px-3.5 py-2.5 text-[14px]
-                                           text-ink outline-none shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
+                                className="min-h-[46px] w-full flex-1 resize-none rounded-xl bg-sink/25 px-3.5 py-2.5 text-[14px]
+                                           text-ink outline-none shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
                                            focus:shadow-[inset_0_0_0_1px_rgb(124_108_246/0.8)]" />
                       <Btn type="submit" icon="rocket" disabled={busy || windowClosed || (!text.trim() && !asset)}>
                         {t("inbox_send")}

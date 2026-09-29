@@ -47,6 +47,13 @@ function useAssets(initial) {
 export function AssetThumb({ a, className = "" }) {
   if (!a) return null;
   const cls = "size-full object-cover " + className;
+  if (a.kind === "audio") {
+    return (
+      <span className={"grid size-full place-items-center bg-[linear-gradient(150deg,rgb(124_108_246/0.3),rgb(34_211_238/0.12))] text-au-cyan " + className}>
+        <Icon name="phone" size={26} />
+      </span>
+    );
+  }
   return a.kind === "video"
     ? <video src={a.url} muted playsInline preload="metadata" className={cls} />
     : <img src={a.url} alt={a.name || ""} loading="lazy" className={cls} />;
@@ -90,7 +97,7 @@ function Uploader({ onAdded, compact = false }) {
               className={"flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-0 " +
                          "text-center transition-colors duration-300 " + (compact ? "px-4 py-5 " : "px-6 py-9 ") +
                          (over ? "bg-au-violet/20 shadow-[inset_0_0_0_2px_rgb(124_108_246/0.8)]"
-                               : "bg-white/[0.03] shadow-[inset_0_0_0_1.5px_rgb(255_255_255/0.14)] hover:bg-white/[0.06]")}>
+                               : "bg-ov/[0.03] shadow-[inset_0_0_0_1.5px_rgb(var(--ov-rgb)/0.14)] hover:bg-ov/[0.06]")}>
         <span className="grid size-11 place-items-center rounded-xl bg-au-violet/20 text-au-cyan">
           <Icon name="upload" size={22} />
         </span>
@@ -99,7 +106,7 @@ function Uploader({ onAdded, compact = false }) {
         </span>
         <span className="text-[12px] text-ink-3">{t("media_drop")}</span>
       </button>
-      <input ref={input} type="file" hidden multiple accept="image/jpeg,image/png,video/mp4"
+      <input ref={input} type="file" hidden multiple accept="image/jpeg,image/png,video/mp4,audio/mpeg,audio/ogg,audio/mp4,audio/aac,.m4a,.aac,.ogg,.mp3"
              onChange={(e) => files(e.target.files)} />
 
       <form onSubmit={fromUrl} className="mt-3 flex gap-2">
@@ -124,9 +131,10 @@ function PickerModal({ open, onClose, onPick, kinds }) {
     return () => window.removeEventListener("keydown", k);
   }, [open, onClose]);
   if (!open) return null;
-  const list = (data?.assets || []).filter((a) => !kinds || kinds.includes(a.kind));
+  // بلا `kinds` صريح: صور وفيديو فقط كما كانت كل الحقول — الصوت لمن يطلبه (بطاقة الوسائط في الفلو)
+  const list = (data?.assets || []).filter((a) => (kinds || ["image", "video"]).includes(a.kind));
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
+    <div className="fixed inset-0 z-50 grid place-items-center bg-sink/70 p-4 backdrop-blur-sm"
          onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div role="dialog" aria-modal="true" aria-label={t("media_pick")}
            className="glass relative max-h-[88vh] w-full max-w-[720px] overflow-y-auto rounded-[22px] p-5 sm:p-6">
@@ -141,7 +149,7 @@ function PickerModal({ open, onClose, onPick, kinds }) {
           {list.map((a) => (
             <button key={a.id} type="button" onClick={() => onPick(a)}
                     className="group relative aspect-square cursor-pointer overflow-hidden rounded-xl border-0 p-0
-                               shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)] outline-offset-2
+                               shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.12)] outline-offset-2
                                focus-visible:outline-2 focus-visible:outline-au-cyan">
               <AssetThumb a={a} className="transition-transform duration-500 group-hover:scale-105" />
               {a.kind === "video" && (
@@ -185,7 +193,7 @@ export function AssetPicker({ name, value, onChange, kinds, compact = false }) {
     <div className="flex flex-wrap items-center gap-3">
       {name && <input type="hidden" name={name} value={id} />}
       {id && asset && (
-        <span className={"relative block shrink-0 overflow-hidden rounded-xl shadow-[inset_0_0_0_1px_rgb(255_255_255/0.14)] " +
+        <span className={"relative block shrink-0 overflow-hidden rounded-xl shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.14)] " +
                          (compact ? "size-11" : "size-16")}>
           <AssetThumb a={asset} />
           {asset.kind === "video" && (
@@ -232,7 +240,7 @@ export function MediaLibrary() {
                 {q.limit ? <span className="tnum">{pct}%</span> : null}
               </div>
               {q.limit ? (
-                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-ov/10">
                   <div className={"h-full rounded-full " + (pct > 85 ? "bg-red-400" : "bg-au-teal")}
                        style={{ width: pct + "%" }} />
                 </div>
@@ -247,17 +255,20 @@ export function MediaLibrary() {
           {data.assets.length ? (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
               {data.assets.map((a) => (
-                <figure key={a.id} className="group m-0 overflow-hidden rounded-2xl bg-black/25
-                                               shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]">
+                <figure key={a.id} className="group m-0 overflow-hidden rounded-2xl bg-sink/25
+                                               shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.09)]">
                   <div className="relative aspect-square overflow-hidden">
                     {a.kind === "video"
                       ? <video src={a.url} controls preload="metadata" playsInline className="size-full object-cover" />
-                      : <a href={a.url} target="_blank" rel="noopener"><AssetThumb a={a} /></a>}
+                      : a.kind === "audio"
+                        ? <span className="relative block size-full"><AssetThumb a={a} />
+                            <audio src={a.url} controls preload="none" className="absolute inset-x-2 bottom-2 h-9 w-[calc(100%-16px)]" /></span>
+                        : <a href={a.url} target="_blank" rel="noopener"><AssetThumb a={a} /></a>}
                   </div>
                   <figcaption className="flex items-center justify-between gap-2 px-3 py-2.5">
                     <span className="min-w-0">
                       <span className="block truncate text-[12.5px] font-bold text-ink">{a.name || "—"}</span>
-                      <span className="text-[11px] text-ink-3">{a.kind === "video" ? "MP4" : a.mime.split("/")[1].toUpperCase()} · {fmtSize(a.size)}</span>
+                      <span className="text-[11px] text-ink-3">{a.kind === "video" ? "MP4" : a.mime === "audio/mp4" ? "M4A" : a.mime === "audio/mpeg" ? "MP3" : a.mime.split("/")[1].toUpperCase()} · {fmtSize(a.size)}</span>
                     </span>
                     <Btn sm variant="ghost" type="button" icon="trash" disabled={busyId === a.id}
                          onClick={() => del(a)} aria-label={t("media_delete")} />

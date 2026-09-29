@@ -24,6 +24,14 @@ const media     = () => import("./app/media.jsx");
 const reports   = () => import("./app/views/Reports.jsx");
 const team      = () => import("./app/views/Team.jsx");
 const contacts  = () => import("./app/views/Contacts.jsx");
+const broadcasts = () => import("./app/views/Broadcasts.jsx");
+const tplStudio  = () => import("./app/views/TemplateStudio.jsx");
+const flows      = () => import("./app/views/Flows.jsx");
+const hub        = () => import("./app/views/SharedInbox.jsx");
+const seqs       = () => import("./app/views/Sequences.jsx");
+const growthV    = () => import("./app/views/Growth.jsx");
+const chatPay    = () => import("./app/views/ChatPayments.jsx");
+const integ      = () => import("./app/views/Integrations.jsx");
 const developer = () => import("./app/views/Developer.jsx");
 
 /* خريطة العرض ← [وحدته، اسم المكوّن المصدَّر]. Flask يحدّد العرض عبر data-view. */
@@ -65,6 +73,14 @@ const VIEWS = {
   media:            [media, "MediaLibrary"],
   team:             [team, "default"],
   contacts:         [contacts, "default"],
+  broadcasts:       [broadcasts, "default"],
+  tpl_studio:       [tplStudio, "default"],
+  flows:            [flows, "default"],
+  shared_inbox:     [hub, "default"],
+  sequences:        [seqs, "default"],
+  growth:           [growthV, "default"],
+  chat_payments:    [chatPay, "default"],
+  integrations:     [integ, "default"],
   developer:        [developer, "default"],
 };
 

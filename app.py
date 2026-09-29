@@ -61,6 +61,8 @@ import weekly_report as WR
 import conv_insights as CI
 import wa_signup as WAS
 import captcha as CAP
+import msg_status as MS
+import tpl_studio as TS
 from xml.sax.saxutils import escape as _xesc
 import time as _time
 import logging
@@ -172,6 +174,17 @@ def _csrf_protect():
         # إلغاء اشتراك البريد بضغطة (RFC 8058): Gmail/Yahoo يرسلان POST من خوادمهما بلا
         # جلسة. الحارس هنا توكن HMAC في الرابط نفسه (mailer.check_unsub) + حدّ للطلبات.
         if request.path.startswith("/email/unsubscribe/"):
+            return
+        # ودجت الموقع (محادثة الويب): تعمل على موقع العميل بلا جلسة ولا كوكي. الحارس توقيع HMAC
+        # لهوية الزائر (`_wg_sig`) مع حدود للطلبات — لا شيء في /wg/ يغيّر حساباً أو إعداداً.
+        if request.path.startswith("/wg/"):
+            return
+        # إشعار بوابة الدفع: مسار موقَّع لكل حساب، والتسوية بسؤال البوابة نفسها (chat_pay.confirm)
+        if request.path.startswith("/pay/wh/"):
+            return
+        # أحداث المتاجر والأنظمة (سلة · زد · Shopify · Woo · Webhook): مسار سرّي 128 بت لكل تكامل +
+        # توقيع المزوّد HMAC حين يُضبط سرّه (integrations.verify) — خادم المتجر لا جلسة له
+        if request.path.startswith("/in/"):
             return
         token = session.get("_csrf")
         sent = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
@@ -1467,7 +1480,7 @@ def _owned(bot_id):
     return b
 
 # أسرار تشغيلية داخل إعداد البوت — لا تصل للمتصفح أبداً (قائمة واحدة للنسختين تحت)
-_SECRET_CFG = ("wa_token", "wa_pin", "page_token", "relay_secret")
+_SECRET_CFG = ("wa_token", "wa_pin", "page_token", "relay_secret", "capi_token")
 
 
 def _public_bot(b):
@@ -1619,6 +1632,7 @@ def bot_detail(bot_id):
                        "meta": _meta_panel(b),
                        "isNew": bool(request.args.get("new")),
                        "unread": db.unread_total(bot_id),
+                       "flowsOn": _crm_on(),
                        "versions": db.list_config_versions(bot_id),
                        "canReply": staff or plans.inbox_reply(plan_id),
                        "ai": {
@@ -4466,7 +4480,7 @@ def sync_telegram(bot_id):
 # ============================================================================
 _QR_SOURCES = ("qr", "poster", "share")
 # wa:<BSUID> — عميل واتساب أخفى رقمه (اسم مستخدم)، انظر channels/whatsapp.BSUID_RE
-_PEER_RE = _re.compile(r"^(?:(tg|wa|fb|ig):\d{1,20}|wa:[A-Z]{2}\.[A-Za-z0-9]{1,128})\Z")
+_PEER_RE = _re.compile(r"^(?:(tg|wa|fb|ig|wb):\d{1,20}|wa:[A-Z]{2}\.[A-Za-z0-9]{1,128})\Z")   # wb: زائر محادثة الويب
 # محادثة قديمة بلا هوية («wa:» فارغة — قبل دعم الأرقام المخفية): تُقرأ ولا يُرد عليها
 _LEGACY_PEER = "wa:"
 
@@ -4478,13 +4492,16 @@ def _uses_engine(b):
         b.get("template") in ai.FLOW_TEMPLATES
 
 
-def _own_asset_id(v):
-    """معرّف ملف من مكتبة المستخدم الحالي أو None — لا يُحفظ مرجع لملف غيره."""
+def _own_asset_id(v, kinds=("image", "video")):
+    """معرّف ملف من مكتبة المستخدم الحالي أو None — لا يُحفظ مرجع لملف غيره.
+    `kinds`: الصوت مقبول حيث يُطلب صراحةً فقط (بطاقة الوسائط في الفلو المرئي) — كل مكان
+    آخر (ترحيب · منتجات · خطوات · حملات) يرسل الملف صورةً أو فيديو."""
     try:
         aid = int(str(v or "").strip())
     except ValueError:
         return None
-    return aid if aid > 0 and db.get_asset(aid, owner_id=uid()) else None
+    a = db.get_asset(aid, owner_id=uid()) if aid > 0 else None
+    return aid if a and a.get("kind") in kinds else None
 
 
 def _meta_panel(b):
@@ -4723,7 +4740,12 @@ def bot_brain(bot_id):
 #  صندوق الوارد والتدخّل اليدوي  (TESTER_FEEDBACK_PLAN §5)
 # ============================================================================
 def _can_reply():
-    return current_role() in ("admin", "support") or plans.inbox_reply(_plan_id())
+    """الرد اليدوي بباقة **الحساب** — الموظف في الفريق يرد باسم صاحب العمل، وباقته هو (غالباً
+    مجانية) لا تخصّ محادثات الحساب."""
+    if current_role() in ("admin", "support"):
+        return True
+    sub = db.get_subscription(acct())
+    return plans.inbox_reply(sub["plan"] if sub and sub["status"] == "active" else "free")
 
 
 def _inbox_peer(bot_id, peer, read_only=False):
@@ -4735,6 +4757,28 @@ def _inbox_peer(bot_id, peer, read_only=False):
     return peer
 
 
+def _inbox_scope():
+    """(يرى ما يخصّه فقط؟, فِرقه). «ما يخصّه» إعداد للحساب يطبَّق على الموظف العادي وحده:
+    المسندة إليه + غير المسندة + محادثات فِرقه. المالك والمدير يريان كل شيء."""
+    own = my_team_role() == "member" and db.get_setting(acct(), "inbox_scope", "all") == "own"
+    return own, db.user_team_ids(uid())
+
+
+def _inbox_guard(bot_id, peer):
+    """محادثة لا يحقّ للموظف رؤيتها = 404 (لا نكشف وجودها) — في صندوق البوت والمشترك معاً."""
+    own, teams = _inbox_scope()
+    if not db.conv_visible(bot_id, peer, uid(), own, teams):
+        abort(404)
+
+
+def _visible_convs(bot_id):
+    own, teams = _inbox_scope()
+    rows = db.list_conversations(bot_id)
+    if not own:
+        return rows
+    return [c for c in rows if not c.get("assignee_id") or c["assignee_id"] == uid() or c.get("team_id") in teams]
+
+
 @app.route("/bot/<int:bot_id>/inbox")
 @login_required
 def inbox(bot_id):
@@ -4744,7 +4788,7 @@ def inbox(bot_id):
     lang = session.get("lang", i18n.DEFAULT)
     return react_page("inbox", "inbox_title",
                       {"bot": {"id": b["id"], "name": b["name"], "channel": b.get("channel") or "telegram"},
-                       "conversations": db.list_conversations(bot_id),
+                       "conversations": _visible_convs(bot_id),
                        "peer": peer if (_PEER_RE.match(peer) or peer == _LEGACY_PEER) else "",
                        "canReply": _can_reply(), "isWa": is_wa, "windowSec": WA_WINDOW},
                       title=i18n.t("inbox_title", lang) + " · " + b["name"])
@@ -4754,7 +4798,7 @@ def inbox(bot_id):
 @login_required
 def api_inbox(bot_id):
     _owned(bot_id)
-    return jsonify({"conversations": db.list_conversations(bot_id),
+    return jsonify({"conversations": _visible_convs(bot_id),
                     "unread": db.unread_total(bot_id)})
 
 
@@ -4763,6 +4807,7 @@ def api_inbox(bot_id):
 def api_inbox_thread(bot_id):
     _owned(bot_id)
     peer = _inbox_peer(bot_id, request.args.get("peer"), read_only=True)
+    _inbox_guard(bot_id, peer)
     try:
         after = max(0, int(request.args.get("after") or 0))
     except ValueError:
@@ -4778,9 +4823,16 @@ def api_inbox_thread(bot_id):
 @login_required
 def inbox_send(bot_id):
     b = _owned(bot_id)
-    lang = session.get("lang", i18n.DEFAULT)
     data = request.get_json(silent=True) or {}
     peer = _inbox_peer(bot_id, data.get("peer"))
+    _inbox_guard(bot_id, peer)
+    return _inbox_send(b, peer, data)
+
+
+def _inbox_send(b, peer, data):
+    """الرد اليدوي — مسار واحد لصندوق البوت والصندوق المشترك."""
+    bot_id = b["id"]
+    lang = session.get("lang", i18n.DEFAULT)
     if not _can_reply():
         return jsonify({"ok": False, "upgrade": True, "error": i18n.t("inbox_readonly", lang)}), 403
     text = str(data.get("text") or "").strip()[:4000]
@@ -4801,9 +4853,15 @@ def inbox_send(bot_id):
     ok, err = manager.send_to_peer(bot_id, peer, text=text or None, asset=asset)
     if not ok:
         return jsonify({"ok": False, "error": i18n.t(f"inbox_err_{err}", lang)})
-    db.log_message(bot_id, peer, "out", "human", text, kind="media" if asset else "text")
+    db.log_message(bot_id, peer, "out", "human", text, kind="media" if asset else "text", user_id=uid())
     # الرد اليدوي يعني التولّي — لا يقاطعه البوت ولا الذكاء الاصطناعي
     db.set_conversation_mode(bot_id, peer, "human")
+    # الصندوق المشترك: من يرد على محادثة بلا مسؤول يصير مسؤولها (ولا يُنتزع إسناد قائم)
+    conv = db.get_conversation(bot_id, peer) or {}
+    if not conv.get("assignee_id"):
+        db.assign_conversation(bot_id, peer, uid(), conv.get("team_id"))
+    if conv.get("status") != "open":
+        db.set_conversation_status(bot_id, peer, "open")
     return jsonify({"ok": True, "conv": db.get_conversation(bot_id, peer)})
 
 
@@ -4813,6 +4871,7 @@ def inbox_mode(bot_id):
     _owned(bot_id)
     data = request.get_json(silent=True) or {}
     peer = _inbox_peer(bot_id, data.get("peer"))
+    _inbox_guard(bot_id, peer)
     mode = data.get("mode")
     if mode not in ("bot", "human"):
         abort(400)
@@ -5083,6 +5142,32 @@ def _js_json(payload):
             .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
 
 
+# ---------- مظهر اللوحة (فاتح/داكن) — تفضيل لكل مستخدم في `settings.theme` ----------
+# يُرسم في <html data-theme> من الخادم، فلا وميض للمظهر الخطأ قبل تحميل React. الزائر
+# وصفحات الدخول داكنة دائماً (هوية العلامة)، والموقع العام لا يقرأ هذا التفضيل أصلاً.
+THEMES = ("dark", "light")
+
+
+def _theme():
+    if not uid():
+        return "dark"
+    if not hasattr(g, "_theme"):
+        v = db.get_setting(uid(), "theme", "dark")
+        g._theme = v if v in THEMES else "dark"
+    return g._theme
+
+
+@app.route("/account/theme", methods=["POST"])
+@login_required
+def set_theme():
+    d = request.get_json(silent=True) or {}
+    v = d.get("theme") or request.form.get("theme")
+    if v not in THEMES:
+        return jsonify({"ok": False}), 400
+    db.set_setting(uid(), "theme", v)
+    return jsonify({"ok": True, "theme": v})
+
+
 def react_page(view, title_key, props=None, needs_chart=False, title=None):
     """يرسم صفحة React مع قشرة اللوحة وبياناتها."""
     lang = session.get("lang", i18n.DEFAULT)
@@ -5099,11 +5184,25 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
     ]
     # «جهات الاتصال» لباقة فيها CRM (Enterprise) أو حساب الإدارة — بعد «بوتاتي» مباشرةً
     if uid() and _crm_on():
-        nav.insert(1, {"k": "contacts", "u": url_for("contacts_page"), "i": "users",
+        nav.insert(1, {"k": "shared_inbox", "u": url_for("shared_inbox"), "i": "inbox",
+                       "l": i18n.t("hub_nav", lang)})
+        nav.insert(2, {"k": "contacts", "u": url_for("contacts_page"), "i": "users",
                        "l": i18n.t("contacts_nav", lang)})
+        nav.insert(3, {"k": "broadcasts", "u": url_for("broadcasts_page"), "i": "megaphone",
+                       "l": i18n.t("bc_nav", lang)})
+        nav.insert(4, {"k": "tpl_studio", "u": url_for("templates_studio"), "i": "mail",
+                       "l": i18n.t("tpl_studio_nav", lang)})
+        nav.insert(5, {"k": "sequences", "u": url_for("sequences_page"), "i": "clock",
+                       "l": i18n.t("seq_title", lang)})
+        nav.insert(6, {"k": "growth", "u": url_for("growth_page"), "i": "rocket",
+                       "l": i18n.t("growth_title", lang)})
+        nav.insert(7, {"k": "chat_payments", "u": url_for("payments_page"), "i": "card",
+                       "l": i18n.t("cpay_title", lang)})
+        nav.insert(8, {"k": "integrations", "u": url_for("integrations_page"), "i": "link",
+                       "l": i18n.t("integ_title", lang)})
     # «الفريق» لصاحب الحساب ومن يديره معه — لا يراه الموظف العادي
     if uid() and my_team_role() in ("owner", "admin"):
-        nav.insert(6, {"k": "team", "u": url_for("team_page"), "i": "users",
+        nav.insert(11 if _crm_on() else 6, {"k": "team", "u": url_for("team_page"), "i": "users",
                        "l": i18n.t("team_nav", lang)})
     admin_nav = []
     if role in ("admin", "support"):
@@ -5156,6 +5255,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
             "botCreateManaged": url_for("bot_create_managed"),
             "media": url_for("media_page"), "assets": url_for("api_assets"),
             "logo": url_for("static", filename="logo.svg"),
+            "logoLight": url_for("static", filename="logo-light.svg"),
             "lang": url_for("set_lang", code="en" if lang == "ar" else "ar"),
             "terms": url_for("terms"), "privacy": url_for("privacy"),
         },
@@ -5166,7 +5266,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
     return render_template("react_app.html", view=view,
                            page_title=title or i18n.t(title_key, lang), brand="BotYalla",
                            lang=lang, dir=i18n.dir_for(lang), needs_chart=needs_chart,
-                           by_json=_js_json(payload))
+                           theme=_theme(), by_json=_js_json(payload))
 
 def _icon_svg(name):
     """SVG خام (يملأ حاويته) لحقنه داخل مكوّنات React."""
@@ -6428,6 +6528,20 @@ def whatsapp_webhook():
 
     payload = request.get_json(silent=True)
     if payload:
+        # حالات التسليم أولاً (كتابة محلية سريعة) — لا يجوز أن يعطّل فشلها معالجة الوارد
+        try:
+            db.apply_wa_statuses(MS.parse_statuses(payload))
+        except Exception:
+            app.logger.exception("delivery status update failed")
+        # نماذج Lead Ads (field=leadgen): حجز مرة واحدة الآن، والجلب والإرسال في الخلفية (AGENTS §68)
+        try:
+            INTEG.leadgen(payload)
+        except Exception:
+            app.logger.exception("leadgen dispatch failed")
+        try:                                              # مكالمات واتساب (field=calls): كتابة محلية سريعة
+            CALLS.on_webhook(payload)
+        except Exception:
+            app.logger.exception("calls webhook failed")
         manager.process_wa_webhook(payload)
         _relay_webhook(body, payload)      # نسخة لخادم الشريك إن سجّل ويبهوك
     return "OK", 200
@@ -7074,7 +7188,23 @@ def crm_contact_save():
     new_id, err = db.save_contact(acct(), clean, cid, by=uid())
     if err:
         return jsonify({"ok": False, "error": err, "fields": {"phone": err} if err == "phone_taken" else {}}), 400
-    return jsonify({"ok": True, "contact": db.get_contact(acct(), new_id)})
+    contact = db.get_contact(acct(), new_id)
+    added = set((contact or {}).get("tags") or []) - set((existing or {}).get("tags") or [])
+    if added:
+        _seq_on_tags([new_id], added)
+    return jsonify({"ok": True, "contact": contact})
+
+
+def _seq_on_tags(contact_ids, tag_ids):
+    """وسوم أُضيفت لجهات اتصال ⇒ التسلسلات التي يشغّلها أيٌّ منها (المرحلة 6). فشلها لا يُفشل الحفظ."""
+    try:
+        names = {t["id"]: t["name"] for t in db.list_tags(acct())}
+        tags = [names[int(t)] for t in tag_ids if str(t).isdigit() and int(t) in names]
+        if tags:
+            for cid in contact_ids:
+                SQ.on_tags(acct(), int(cid), tags)
+    except Exception:
+        log.exception("sequence tag trigger failed")
 
 
 @app.route("/api/crm/contacts/bulk", methods=["POST"])
@@ -7087,6 +7217,8 @@ def crm_contacts_bulk():
     owner = acct()
     if action in ("tag", "untag"):
         n = db.tag_contacts(owner, ids, d.get("tags") or [], add=action == "tag")
+        if action == "tag" and n:
+            _seq_on_tags([i for i in ids if str(i).isdigit()], d.get("tags") or [])
     elif action == "assign":
         asg = _int_or_none(d.get("assignee_id"))
         if asg and asg not in {m["id"] for m in _crm_members()}:
@@ -7345,6 +7477,2124 @@ def contacts_export():
                else ("" if cf.get(f["key"]) is None else cf[f["key"]]) for f in fl])
     return Response("﻿" + out.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": "attachment; filename=contacts.csv"})
+
+
+# ============================================================================
+# البث 2.0 — المرحلة 3 (broadcasts.py هو المسار الوحيد للإطلاق والمال)
+# ============================================================================
+import broadcasts as BC
+
+BC.configure(category=_template_category, quote=_campaign_quote, manager=manager)
+
+BC_ERR = {
+    "category": ("تعذّر التأكد من فئة القالب لدى Meta الآن — لا نرسل قبل أن نعرف التكلفة. أعد المحاولة بعد قليل.",
+                 "Couldn't confirm the template category with Meta — we never send before knowing the cost. Retry shortly."),
+    "empty": ("لا أحد في هذا الجمهور يمكن مراسلته (بعد استبعاد من طلب الإيقاف وغير الموافقين).",
+              "Nobody in this audience can be messaged (after excluding opt-outs and non-consenting contacts)."),
+    "balance": ("رصيد الرسائل التسويقية لا يكفي لهذه الحملة — اشحن الرصيد أولاً.",
+                "Not enough marketing credit for this campaign — top up first."),
+    "busy": ("هناك حملة تُرسل من هذا الرقم الآن — ستُرسل هذه بعد انتهائها لو جدولتها، أو أعد المحاولة.",
+             "Another campaign is sending from this number — schedule this one or retry when it finishes."),
+    "charge": ("تعذّر حجز الرصيد — أعد المحاولة.", "Could not reserve credit — please retry."),
+    "state": ("هذه الحملة أُطلقت أو أُلغيت بالفعل.", "This campaign was already launched or cancelled."),
+    "bot": ("قناة واتساب غير صالحة.", "Invalid WhatsApp channel."),
+}
+
+
+def _bc_msg(code):
+    ar = session.get("lang", i18n.DEFAULT) != "en"
+    m = BC_ERR.get(code)
+    return (m[0] if ar else m[1]) if m else code
+
+
+def _acct_wa_bots():
+    return [b for b in db.list_bots(acct()) if (b.get("channel") or "") == "whatsapp"]
+
+
+def _acct_wa_bot(bot_id):
+    b = db.get_bot(_int_or_none(bot_id) or 0)
+    if not b or b.get("owner_id") != acct() or (b.get("channel") or "") != "whatsapp":
+        return None
+    return b
+
+
+def _tpl_meta(bot, name, lang):
+    """القالب المعتمد كما تعرّفه Meta الآن (المتغيّرات وصيغة الترويسة) — أو None."""
+    waba, _ = _waba_of(bot)
+    cfg = json.loads(bot["config_json"] or "{}")
+    if not waba or not cfg.get("wa_token"):
+        return None
+    res = WT.list_templates(waba, cfg.get("wa_token", ""))
+    for t in (res.get("items") or []) if res.get("ok") else []:
+        if t.get("name") == name and t.get("language") == lang and t.get("status") == "APPROVED":
+            return t
+    return None
+
+
+def _clean_audience(d):
+    a = d.get("audience") or {}
+    kind = a.get("type")
+    if kind not in BC.AUDIENCE_TYPES:
+        raise ValueError("audience")
+    if kind == "segment":
+        sid = _int_or_none(a.get("id"))
+        if not sid or not db.get_segment(acct(), sid):
+            raise ValueError("audience")
+        return {"type": "segment", "id": sid}
+    if kind == "retarget":
+        src = _int_or_none(a.get("campaign_id"))
+        if not src or not db.get_campaign(src, acct()) or a.get("state") not in BC.RETARGET_STATES:
+            raise ValueError("audience")
+        return {"type": "retarget", "campaign_id": src, "state": a["state"]}
+    return {"type": kind}
+
+
+def _clean_campaign(d, audience=None):
+    """حمولة المعالج ⇒ dict جاهز لـ db.create_campaign، أو ValueError برمز.
+    `audience`: جمهور جاهز من الخادم (إرسال تجريبي لأرقام) بدل جمهور المتصفح."""
+    bot = _acct_wa_bot(d.get("bot_id"))
+    if not bot:
+        raise ValueError("bot")
+    name, lang = str(d.get("template") or "").strip(), str(d.get("lang") or "").strip()
+    tpl = _tpl_meta(bot, name, lang) if name and lang else None
+    if not tpl:
+        raise ValueError("template")
+    fields = db.fields_map(acct(), "contact")
+    vars_ = BC.clean_vars(d.get("vars") or [], fields)
+    if len(vars_) != len(tpl.get("vars") or []):
+        raise ValueError("vars_count")               # Meta ترفض عدداً مختلفاً (132000)
+    header = {}
+    fmt = (tpl.get("header_format") or "").upper()
+    if fmt in ("IMAGE", "VIDEO", "DOCUMENT"):
+        aid = _own_asset_id((d.get("header") or {}).get("asset_id"))
+        asset = db.get_asset(aid, owner_id=acct()) if aid else None
+        if not asset or asset["kind"] != ("video" if fmt == "VIDEO" else "image") or fmt == "DOCUMENT":
+            raise ValueError("header_media")
+        header = {"format": fmt, "asset_id": aid}
+    elif fmt == "TEXT" and tpl.get("header_vars"):
+        hv = BC.clean_vars((d.get("header") or {}).get("vars") or [], fields)
+        if len(hv) != len(tpl["header_vars"]):
+            raise ValueError("vars_count")
+        header = {"format": "TEXT", "vars": hv}
+    elif fmt == "LOCATION":
+        header = {"format": "LOCATION"}
+    now = int(_time.time())
+    when = d.get("scheduled_at")
+    scheduled = None
+    if when not in (None, "", "now"):
+        try:
+            scheduled = int(when)
+        except (TypeError, ValueError):
+            raise ValueError("schedule")
+        if not now + 60 <= scheduled <= now + 60 * 86400:
+            raise ValueError("schedule")
+    extra = _clean_extra(bot, tpl, d, fields, scheduled or now)
+    retry_until = None
+    if d.get("retry"):
+        h = _int_or_none(d.get("retry_hours")) or 24
+        retry_until = (scheduled or now) + max(1, min(BC.RETRY_MAX_HOURS, h)) * 3600
+    asg = _int_or_none(d.get("assign_to"))
+    if asg and asg not in {m["id"] for m in _crm_members()}:
+        raise ValueError("user")
+    title = str(d.get("name") or "").strip()[:80] or \
+        f"{_time.strftime('%d %b %y, %I:%M%p', _time.localtime(scheduled or now))} · {name}"
+    return {"bot_id": bot["id"], "name": title, "template": name, "lang": lang,
+            "category": (tpl.get("category") or "").upper(), "header": header, "vars": vars_,
+            "extra": extra,
+            "audience": audience or _clean_audience(d), "policy_optin": bool(d.get("policy_optin", True)),
+            "status": "scheduled" if scheduled else "draft", "scheduled_at": scheduled,
+            "retry_until": retry_until, "assign_to": asg}
+
+
+COUPON_RE = _re.compile(r"^[A-Za-z0-9_-]{1,15}$")
+
+
+def _one_var(v, fields):
+    """قيمة متغيّر واحد (زر رابط) بنفس قواعد متغيّرات الجسم."""
+    return BC.clean_vars([v] if isinstance(v, dict) else [], fields)[0] if isinstance(v, dict) else None
+
+
+def _clean_extra(bot, tpl, d, fields, send_at):
+    """قيم الإرسال التي تتطلّبها مواصفة القالب (المرحلة 4) — كل واحدة مطابقة لما في القالب عند Meta:
+    متغيّر زر الرابط · الكوبون الحيّ · موعد انتهاء العرض · الموقع · بطاقات الكاروسيل."""
+    spec = tpl.get("spec") or {}
+    if spec.get("kind") == "auth":
+        raise ValueError("template_auth")             # رموز التحقق تُرسل من نظامك عبر الـAPI لا بالبث
+    extra = {"spec": spec}
+
+    def urls(buttons, raw):
+        out = {}
+        for b in buttons or []:
+            if b.get("url_var"):
+                v = _one_var((raw or {}).get(str(b["index"])), fields)
+                if not v:
+                    raise ValueError("url_var")
+                out[str(b["index"])] = v
+        return out
+
+    extra["url"] = urls(spec.get("buttons"), d.get("url"))
+    if any(b.get("type") == "COPY_CODE" for b in spec.get("buttons") or []):
+        code = str(d.get("coupon") or "").strip()
+        if not COUPON_RE.match(code):
+            raise ValueError("coupon")
+        extra["coupon"] = code
+    if (spec.get("lto") or {}).get("has_expiration"):
+        exp = _int_or_none(d.get("expire_at"))
+        # Meta: الانتهاء بعد الإرسال بربع ساعة على الأقل — وإلا يصل العرض منتهياً
+        if not exp or not send_at + 900 <= exp <= send_at + 90 * 86400:
+            raise ValueError("expire_at")
+        extra["expire_at"] = exp
+    if spec.get("header_format") == "LOCATION":
+        try:
+            extra["location"] = TS.location_of((d.get("header") or {}).get("location")) \
+                if (d.get("header") or {}).get("location") else \
+                (db.get_template_meta(bot["id"], tpl["name"], tpl["language"]).get("location") or None)
+        except TS.Invalid:
+            raise ValueError("location")
+        if not extra["location"]:
+            raise ValueError("location")
+    if spec.get("kind") == "carousel":
+        raw = d.get("cards") or []
+        if len(raw) != len(spec.get("cards") or []):
+            raise ValueError("cards")
+        cards = []
+        for cs, cv in zip(spec["cards"], raw):
+            aid = _own_asset_id((cv or {}).get("asset_id"))
+            asset = db.get_asset(aid, owner_id=acct()) if aid else None
+            if not asset or asset["kind"] != ("video" if cs.get("format") == "VIDEO" else "image"):
+                raise ValueError("card_media")
+            cvars = BC.clean_vars((cv or {}).get("vars") or [], fields)
+            if len(cvars) != cs.get("body_vars", 0):
+                raise ValueError("vars_count")
+            cards.append({"asset_id": aid, "vars": cvars, "url": urls(cs.get("buttons"), (cv or {}).get("url"))})
+        extra["cards"] = cards
+    return extra
+
+
+def _campaign_out(cp, stats=True):
+    out = {k: cp.get(k) for k in ("id", "name", "template", "lang", "category", "status", "error", "bot_id",
+                                  "bot_name", "creator", "scheduled_at", "started_at", "finished_at", "total",
+                                  "charged", "refunded", "retries", "retry_until", "next_retry_at",
+                                  "created_at", "policy_optin", "audience")}
+    if stats and cp["status"] not in ("draft", "scheduled", "cancelled"):
+        out["stats"] = db.campaign_stats(cp["id"])
+    return out
+
+
+@app.route("/broadcasts")
+@require_crm()
+def broadcasts_page():
+    owner = acct()
+    return react_page("broadcasts", "bc_title", {
+        "bots": [{"id": b["id"], "name": b["name"]} for b in _acct_wa_bots()],
+        "segments": [{"id": s["id"], "name": s["name"]} for s in db.list_segments(owner)],
+        "fields": [{"key": f["key"], "label": f["label"]} for f in db.list_fields(owner, "contact", True)],
+        "members": _crm_members(),
+        "wallet": {"balance": db.wallet_balance(owner), "price": mkt_price(), "topupUrl": url_for("wallet_page")},
+        "canManage": _crm_admin(),
+        "retryMaxHours": BC.RETRY_MAX_HOURS,
+        "contactsUrl": url_for("contacts_page"),
+    })
+
+
+@app.route("/api/broadcasts")
+@require_crm()
+def api_broadcasts():
+    owner = acct()
+    per = min(max(_int_or_none(request.args.get("per")) or 20, 1), 100)
+    page = max(_int_or_none(request.args.get("page")) or 1, 1)
+    days = min(max(_int_or_none(request.args.get("days")) or 7, 1), 365)
+    rows, total = db.list_campaigns(owner, per, (page - 1) * per)
+    return jsonify({"ok": True, "rows": [_campaign_out(r) for r in rows], "total": total, "page": page,
+                    "per": per, "overview": db.campaigns_overview(owner, int(_time.time()) - days * 86400),
+                    "balance": db.wallet_balance(owner)})
+
+
+@app.route("/api/broadcasts/<int:cid>")
+@require_crm()
+def api_broadcast_detail(cid):
+    cp = db.get_campaign(cid, acct())
+    if not cp:
+        return _crm_err("not_found", 404)
+    out = _campaign_out(dict(cp, bot_name=(db.get_bot(cp["bot_id"]) or {}).get("name")))
+    return jsonify({"ok": True, "campaign": out})
+
+
+@app.route("/api/broadcasts/estimate", methods=["POST"])
+@require_crm(manage=True)
+def api_broadcast_estimate():
+    """عدد الجمهور وتكلفته قبل الإرسال. الفئة من Meta (§20) — والخادم يعيد الحساب عند الإطلاق."""
+    if _rate_limited(f"u{uid()}", limit=60, window=600, bucket="bc_estimate"):
+        return _crm_err("rate", 429)
+    d = _json_body()
+    bot = _acct_wa_bot(d.get("bot_id"))
+    if not bot:
+        return _crm_err("bot")
+    try:
+        audience = _clean_audience(d)
+    except ValueError as e:
+        return _crm_err(str(e))
+    n = len(db.campaign_audience(acct(), bot["id"], audience, bool(d.get("policy_optin", True))))
+    out = {"ok": True, "count": n}
+    if d.get("template") and d.get("lang"):
+        cat = _template_category(bot, str(d["template"]), str(d["lang"]))
+        if cat is None:
+            out.update(category=None)
+        else:
+            q = _campaign_quote(acct(), n, cat)
+            out.update(category=cat, billable=q["billable"], cost=q["cost"], price=q["price"],
+                       balance=q["balance"], enough=q["enough"], short=q["short"])
+    return jsonify(out)
+
+
+@app.route("/api/broadcasts", methods=["POST"])
+@require_crm(manage=True)
+def api_broadcast_create():
+    """إنشاء حملة: فورية تُطلق الآن (خصم ذرّي قبل الإرسال)، أو مجدولة تُخصم عند وقتها."""
+    if _rate_limited(f"u{uid()}", limit=20, window=600, bucket="bc_create"):
+        return _crm_err("rate", 429)
+    try:
+        d = _clean_campaign(_json_body())
+    except ValueError as e:
+        return _crm_err(str(e))
+    cid = db.create_campaign(acct(), d, by=uid())
+    log.info("campaign %s created acct=%s by=%s status=%s", cid, acct(), uid(), d["status"])
+    if d["status"] == "scheduled":
+        return jsonify({"ok": True, "id": cid, "status": "scheduled"})
+    try:
+        res = BC.launch(cid)
+    except BC.LaunchError as e:
+        db.update_campaign(cid, status="failed", error=str(e), finished_at=int(_time.time()))
+        return jsonify({"ok": False, "error": str(e), "message": _bc_msg(str(e)), "id": cid}), 400
+    return jsonify({"ok": True, "id": cid, "status": "running", **res})
+
+
+@app.route("/api/broadcasts/<int:cid>/cancel", methods=["POST"])
+@require_crm(manage=True)
+def api_broadcast_cancel(cid):
+    if not db.cancel_campaign(acct(), cid):
+        return _crm_err("state")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/broadcasts/<int:cid>/stop-retry", methods=["POST"])
+@require_crm(manage=True)
+def api_broadcast_stop_retry(cid):
+    if not db.stop_campaign_retries(acct(), cid):
+        return _crm_err("not_found", 404)
+    return jsonify({"ok": True})
+
+
+@app.route("/broadcasts/<int:cid>/export.csv")
+@require_crm()
+def broadcast_export(cid):
+    cp = db.get_campaign(cid, acct())
+    if not cp:
+        abort(404)
+    names = {}
+    with db.get_conn() as c:
+        for r in c.execute("SELECT id, name FROM contacts WHERE owner_id=?", (acct(),)):
+            names[r["id"]] = r["name"]
+    out = io.StringIO(); w = csv.writer(out)
+    put = lambda cells: w.writerow([_csv_cell(x) for x in cells])
+    put(["name", "phone", "state", "replied", "failure", "error_code"])
+    for r in db.campaign_recipient_states(cid):
+        put([names.get(r["contact_id"], ""), r["peer"].split(":", 1)[-1], r["state"],
+             "yes" if r["replied"] else "no", r["bucket"] or "", r["code"] or ""])
+    return Response("﻿" + out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename=campaign_{cid}.csv"})
+
+
+# ============================================================================
+# Template Studio — المرحلة 4 (المنطق في tpl_studio.py)
+# ============================================================================
+TPL_LANGS = [("ar", "العربية"), ("en", "English"), ("en_US", "English (US)"), ("ur", "اردو"),
+             ("fr", "Français"), ("id", "Bahasa Indonesia"), ("tr", "Türkçe"), ("hi", "हिन्दी")]
+
+
+@app.route("/templates")
+@require_crm()
+def templates_studio():
+    return react_page("tpl_studio", "tpl_studio_title", {
+        "bots": [{"id": b["id"], "name": b["name"]} for b in _acct_wa_bots()],
+        "langs": TPL_LANGS, "stop": TS.STOP_FOOTER, "limits": TS.LIM, "canManage": _crm_admin(),
+        "broadcastsUrl": url_for("broadcasts_page"),
+    })
+
+
+def _bot_waba(bot):
+    waba, _ = _waba_of(bot)
+    cfg = json.loads(bot["config_json"] or "{}")
+    return waba, cfg.get("wa_token", ""), cfg
+
+
+@app.route("/api/templates")
+@require_crm()
+def api_templates():
+    if _rate_limited(f"u{uid()}", limit=60, window=600, bucket="tpl_list"):      # نداء Meta
+        return _crm_err("rate", 429)
+    bot = _acct_wa_bot(request.args.get("bot"))
+    if not bot:
+        return _crm_err("bot")
+    waba, token, _ = _bot_waba(bot)
+    if not waba:
+        return jsonify({"ok": False, "error": "no_waba"})
+    res = WT.list_templates(waba, token)
+    if not res.get("ok"):
+        return jsonify({"ok": False, "error": "meta", "message": res.get("error")}), 502
+    return jsonify({"ok": True, "items": res["items"]})
+
+
+def _sample_handle(bot, cfg, token, asset_id, kind):
+    """ملف من مكتبة الحساب ⇒ handle عيّنة لدى Meta. النوع من البايتات المحفوظة (asset_store) لا من المتصفح."""
+    aid = _own_asset_id(asset_id)
+    asset = db.get_asset(aid, owner_id=acct()) if aid else None
+    if not asset or asset["kind"] != kind:
+        return None
+    with open(asset_store.path_of(asset["fname"]), "rb") as f:
+        data = f.read()
+    h, err, app_id = WAC.upload_handle(token, data, asset["mime"], f"sample.{asset['mime'].split('/')[-1]}",
+                                       cfg.get("wa_app_id"))
+    if app_id and app_id != cfg.get("wa_app_id"):
+        # update_bot_config **يستبدل** الإعداد كله — نحفظ الإعداد الكامل بعد تعديل مفتاح واحد
+        # (كل المسارات الأخرى)، وإلا مُسح توكن واتساب ورقم الـWABA
+        cfg["wa_app_id"] = app_id
+        db.update_bot_config(bot["id"], cfg)
+    if not h:
+        log.warning("template sample upload failed bot=%s: %s", bot["id"], err)
+    return h
+
+
+@app.route("/api/templates", methods=["POST"])
+@require_crm(manage=True)
+def api_template_create():
+    if _rate_limited(f"u{uid()}", limit=20, window=3600, bucket="tpl_create"):
+        return _crm_err("rate", 429)
+    d = _json_body()
+    bot = _acct_wa_bot(d.get("bot_id"))
+    if not bot:
+        return _crm_err("bot")
+    waba, token, cfg = _bot_waba(bot)
+    if not waba:
+        return _crm_err("no_waba")
+    # فحص كامل **قبل** رفع أي عيّنة: بمقبض وهمي، ثم الرفع ثم البناء الحقيقي
+    kind = d.get("kind")
+    fake = {"header": "x", **{f"card{i}": "x" for i in range(10)}}
+    try:
+        TS.build_create(d, fake)
+    except TS.Invalid as e:
+        return _crm_err(str(e))
+    handles = {}
+    fmt = ((d.get("header") or {}).get("format") or "NONE").upper()
+    if kind in ("custom", "lto") and fmt in ("IMAGE", "VIDEO"):
+        handles["header"] = _sample_handle(bot, cfg, token, (d.get("header") or {}).get("asset_id"), fmt.lower())
+        if not handles["header"]:
+            return _crm_err("header:media")
+    if kind == "carousel":
+        k = (d.get("card_format") or "IMAGE").lower()
+        for i, c in enumerate(d.get("cards") or []):
+            handles[f"card{i}"] = _sample_handle(bot, cfg, token, (c or {}).get("asset_id"), k)
+            if not handles[f"card{i}"]:
+                return _crm_err(f"cards:{i}:media")
+    try:
+        payload, local = TS.build_create(d, handles)
+    except TS.Invalid as e:
+        return _crm_err(str(e))
+    res = WT.create_raw(waba, token, payload)
+    if not res.get("ok"):
+        return jsonify({"ok": False, "error": "meta", "message": res.get("error")}), 400
+    if local:
+        db.set_template_meta(bot["id"], payload["name"], payload["language"], local, by=uid())
+    log.info("template %s created bot=%s by=%s kind=%s status=%s", payload["name"], bot["id"], uid(),
+             kind, res.get("status"))
+    return jsonify({"ok": True, "status": res.get("status"), "category": res.get("category") or payload["category"],
+                    "name": payload["name"]})
+
+
+@app.route("/api/templates/delete", methods=["POST"])
+@require_crm(manage=True)
+def api_template_delete():
+    d = _json_body()
+    bot = _acct_wa_bot(d.get("bot_id"))
+    name = str(d.get("name") or "")
+    if not bot or not TS.NAME_RE.match(name):
+        return _crm_err("bot")
+    waba, token, _ = _bot_waba(bot)
+    res = WT.delete_template(waba, token, name)
+    if not res.get("ok"):
+        return jsonify({"ok": False, "error": "meta", "message": res.get("error")}), 400
+    db.delete_template_meta(bot["id"], name)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/templates/test", methods=["POST"])
+@require_crm(manage=True)
+def api_template_test():
+    """إرسال تجريبي لقالب معتمد إلى حتى 5 أرقام — حملة صغيرة عبر broadcasts.launch نفسها،
+    فتنطبق قواعد المال كلها (الفئة من Meta، خصم ذرّي، ردّ ما لم يُقبل) ولا مسار جانبي."""
+    if _rate_limited(f"u{uid()}", limit=10, window=600, bucket="tpl_test"):
+        return _crm_err("rate", 429)
+    d = _json_body()
+    phones = []
+    for p in (d.get("phones") or [])[:5]:
+        n = CRM.norm_phone(p, d.get("cc") or "+966")
+        if not n:
+            return _crm_err("phone")
+        phones.append(n)
+    if not phones:
+        return _crm_err("phone")
+    try:
+        c = _clean_campaign(dict(d, scheduled_at=None, retry=False, policy_optin=False,
+                                 name=f"Test · {d.get('template') or ''}"),
+                            audience={"type": "numbers", "phones": phones})
+    except ValueError as e:
+        return _crm_err(str(e))
+    cid = db.create_campaign(acct(), c, by=uid())
+    try:
+        res = BC.launch(cid)
+    except BC.LaunchError as e:
+        db.update_campaign(cid, status="failed", error=str(e), finished_at=int(_time.time()))
+        return jsonify({"ok": False, "error": str(e), "message": _bc_msg(str(e))}), 400
+    return jsonify({"ok": True, "id": cid, **res})
+
+
+# ============================================================================
+# باني الفلو المرئي — المرحلة 5 (المحرك والتحقق في flow_graph.py)
+# الفلوهات في config["flows"] للبوت: المسودة يحرّرها الكانفس بحرية، والنشر وحده يمرّ بالتحقق
+# الكامل (clean_graph) فيصير ما يشغّله المحرك. المحرك يقرأ الإعداد مع كل رسالة — لا إعادة تشغيل.
+# ============================================================================
+import flow_graph as FG
+
+FLOW_DRAFT_MAX = 400_000          # بايت — مسودة الكانفس قبل التحقق
+MAX_FLOWS = 30
+
+
+def _flows_of(b):
+    cfg = json.loads(b["config_json"] or "{}")
+    return cfg, cfg.setdefault("flows", [])
+
+
+def _flow_or_404(flows, fid):
+    f = next((x for x in flows if x.get("id") == fid), None)
+    if not f:
+        abort(404)
+    return f
+
+
+def _flow_brief(b, f):
+    st = db.flow_stats(b["id"], f["id"], FG.DROP_AFTER)
+    return {"id": f["id"], "name": f.get("name", ""), "trigger": f.get("trigger") or {"type": "any"},
+            "active": bool(f.get("active")), "published_at": f.get("published_at"),
+            "updated_at": f.get("updated_at"), "dirty": f.get("draft") != f.get("published"),
+            "stats": {k: st[k] for k in ("sessions", "completed", "handoff", "dropped", "active")}}
+
+
+def _trigger_clash(flows, f, trig):
+    """«أي رسالة» و«البداية»: فلو نشط واحد لكل منهما في البوت — وإلا لا يُعرف أيهما يرد."""
+    if trig["type"] in FG.SPECIFIC:                  # كلمات · إعلان · رابط: تتعدّد بلا تعارض
+        return None
+    other = next((x for x in flows if x is not f and x.get("active")
+                  and (x.get("trigger") or {}).get("type", "any") == trig["type"]), None)
+    return other.get("name") if other else None
+
+
+def _starter_draft():
+    return {"start": "n1", "nodes": {"n1": {"type": "text", "x": 80, "y": 80,
+                                            "text": "أهلاً بك 👋 كيف نقدر نساعدك؟", "next": None}}}
+
+
+@app.route("/bot/<int:bot_id>/flows")
+@require_crm()
+def flows_page(bot_id):
+    b = _owned(bot_id)
+    _, flows = _flows_of(b)
+    return react_page("flows", "flows_title", {
+        "bot": _public_bot(b), "flows": [_flow_brief(b, f) for f in flows],
+        "canManage": _crm_admin(), "limits": {"nodes": FG.MAX_NODES, "delay": FG.MAX_DELAY},
+        "fields": [{"key": f["key"], "label": f["label"]} for f in db.list_fields(acct(), "contact", True)],
+        "members": _crm_members(), "channel": b.get("channel") or "telegram",
+        "teams": [{"id": t["id"], "name": t["name"]} for t in db.list_inbox_teams(acct())],
+        "sequences": [{"id": s["id"], "name": s["name"], "active": s["active"]} for s in db.list_sequences(acct(), bot_id)],
+        "links": [{"code": l["code"], "name": l["name"]} for l in db.list_growth_links(acct()) if l["bot_id"] == bot_id],
+        "capi": GR.capi_ready(json.loads(b.get("config_json") or "{}")), "capiEvents": list(GR.CAPI_EVENTS),
+        "pay": _pay_public(acct()),
+    }, title=i18n.t("flows_title", session.get("lang", i18n.DEFAULT)) + " · " + b["name"])
+
+
+@app.route("/api/bot/<int:bot_id>/flows/<fid>")
+@require_crm()
+def api_flow_get(bot_id, fid):
+    b = _owned(bot_id)
+    _, flows = _flows_of(b)
+    f = _flow_or_404(flows, fid)
+    return jsonify({"ok": True, "flow": dict(f, draft=f.get("draft") or f.get("published") or _starter_draft()),
+                    "stats": db.flow_stats(bot_id, fid, FG.DROP_AFTER),
+                    "others": [{"id": x["id"], "name": x.get("name", "")} for x in flows if x["id"] != fid]})
+
+
+@app.route("/api/bot/<int:bot_id>/flows", methods=["POST"])
+@require_crm(manage=True)
+def api_flow_create(bot_id):
+    b = _owned(bot_id)
+    cfg, flows = _flows_of(b)
+    if len(flows) >= MAX_FLOWS:
+        return _crm_err("limit")
+    d = _json_body()
+    name = str(d.get("name") or "").strip()[:80]
+    if not name:
+        return _crm_err("name")
+    try:
+        trig = FG.clean_trigger(d.get("trigger"))
+    except FG.Invalid as e:
+        return _crm_err(str(e))
+    f = {"id": FG.new_id(), "name": name, "trigger": trig, "active": False, "draft": _starter_draft(),
+         "published": None, "created_at": int(_time.time()), "updated_at": int(_time.time())}
+    flows.append(f)
+    db.update_bot_config(bot_id, cfg)            # الإعداد الكامل — update_bot_config يستبدل
+    return jsonify({"ok": True, "flow": _flow_brief(b, f)})
+
+
+@app.route("/api/bot/<int:bot_id>/flows/<fid>/save", methods=["POST"])
+@require_crm(manage=True)
+def api_flow_save(bot_id, fid):
+    """حفظ المسودة كما هي في الكانفس (قد تكون ناقصة). التحقق الكامل عند النشر."""
+    b = _owned(bot_id)
+    cfg, flows = _flows_of(b)
+    f = _flow_or_404(flows, fid)
+    d = _json_body()
+    draft = d.get("draft")
+    if not isinstance(draft, dict) or not isinstance(draft.get("nodes"), dict) \
+            or len(draft["nodes"]) > FG.MAX_NODES or len(json.dumps(draft)) > FLOW_DRAFT_MAX:
+        return _crm_err("flow:size")
+    try:
+        trig = FG.clean_trigger(d.get("trigger", f.get("trigger")))
+        timeout = FG.clean_timeout(d.get("timeout", f.get("timeout")))
+    except FG.Invalid as e:
+        return _crm_err(str(e))
+    f.update(name=str(d.get("name") or f.get("name") or "").strip()[:80] or f["name"], trigger=trig,
+             timeout=timeout, draft=draft, updated_at=int(_time.time()))
+    db.update_bot_config(bot_id, cfg)
+    return jsonify({"ok": True, "dirty": f["draft"] != f.get("published")})
+
+
+def _flow_graph_of(flows, f, bot_id):
+    """المسودة بعد التحقق الكامل (النشر والتجربة معاً) — يرمي FG.Invalid."""
+    return FG.clean_graph(f.get("draft"), asset_ok=lambda a: bool(_own_asset_id(a, ("image", "video", "audio"))),
+                          flow_ids=[x["id"] for x in flows if x["id"] != f["id"]],
+                          fields=list(db.fields_map(acct(), "contact").keys()),
+                          members=[m["id"] for m in _crm_members()],
+                          teams=[t["id"] for t in db.list_inbox_teams(acct())],
+                          seqs=[s["id"] for s in db.list_sequences(acct(), bot_id)])
+
+
+@app.route("/api/bot/<int:bot_id>/flows/<fid>/test", methods=["POST"])
+@require_crm(manage=True)
+def api_flow_test(bot_id, fid):
+    """«جرّب على واتساب»: رمز لمسودة مُتحقَّق منها يفتح الفلو لمن يرسله فقط، نصف ساعة، بلا إحصاءات."""
+    b = _owned(bot_id)
+    cfg, flows = _flows_of(b)
+    f = _flow_or_404(flows, fid)
+    try:
+        graph = _flow_graph_of(flows, f, bot_id)
+    except FG.Invalid as e:
+        return _crm_err(str(e))
+    code = FG.add_test(cfg, f, graph)
+    db.update_bot_config(bot_id, cfg)              # الإعداد الكامل — update_bot_config يستبدل
+    links = _bot_links(b) or {}
+    kind = links.get("kind")
+    link = (links["plain"] + ("?text=" if kind == "whatsapp" else "?start=" if kind == "telegram" else "?ref=")
+            + _up.quote(code)) if links.get("plain") else None
+    return jsonify({"ok": True, "code": code, "link": link, "minutes": FG.TEST_TTL // 60,
+                    "running": bool(b.get("active"))})
+
+
+@app.route("/api/bot/<int:bot_id>/flows/<fid>/publish", methods=["POST"])
+@require_crm(manage=True)
+def api_flow_publish(bot_id, fid):
+    b = _owned(bot_id)
+    cfg, flows = _flows_of(b)
+    f = _flow_or_404(flows, fid)
+    try:
+        graph = _flow_graph_of(flows, f, bot_id)
+    except FG.Invalid as e:
+        return _crm_err(str(e))
+    clash = _trigger_clash(flows, f, f.get("trigger") or {"type": "any"}) if f.get("active") else None
+    if clash:
+        return jsonify({"ok": False, "error": "trigger_taken", "other": clash}), 400
+    f.update(published=graph, draft=graph, published_at=int(_time.time()))
+    db.update_bot_config(bot_id, cfg)
+    log.info("flow %s published bot=%s by=%s nodes=%s", fid, bot_id, uid(), len(graph["nodes"]))
+    return jsonify({"ok": True, "flow": _flow_brief(b, f)})
+
+
+@app.route("/api/bot/<int:bot_id>/flows/<fid>/toggle", methods=["POST"])
+@require_crm(manage=True)
+def api_flow_toggle(bot_id, fid):
+    b = _owned(bot_id)
+    cfg, flows = _flows_of(b)
+    f = _flow_or_404(flows, fid)
+    on = bool(_json_body().get("active"))
+    if on and not (f.get("published") or {}).get("nodes"):
+        return _crm_err("not_published")
+    if on:
+        clash = _trigger_clash(flows, f, f.get("trigger") or {"type": "any"})
+        if clash:
+            return jsonify({"ok": False, "error": "trigger_taken", "other": clash}), 400
+    f["active"] = on
+    db.update_bot_config(bot_id, cfg)
+    return jsonify({"ok": True, "flow": _flow_brief(b, f)})
+
+
+@app.route("/api/bot/<int:bot_id>/flows/<fid>/delete", methods=["POST"])
+@require_crm(manage=True)
+def api_flow_delete(bot_id, fid):
+    b = _owned(bot_id)
+    cfg, flows = _flows_of(b)
+    _flow_or_404(flows, fid)
+    if any(n.get("type") == "jump" and n.get("flow") == fid
+           for x in flows if x["id"] != fid for n in ((x.get("published") or {}).get("nodes") or {}).values()):
+        return _crm_err("in_use")                 # فلو آخر منشور ينتقل إليه
+    cfg["flows"] = [x for x in flows if x["id"] != fid]
+    db.update_bot_config(bot_id, cfg)
+    db.delete_flow_stats(bot_id, fid)
+    return jsonify({"ok": True})
+
+
+# ============================================================================
+# الصندوق المشترك — المرحلة 6: كل محادثات الحساب (كل البوتات والقنوات) في مكان واحد، بحالة
+# ومسؤول وفريق وملاحظات داخلية وردود جاهزة. الإرسال والتولّي يمرّان بمسارات صندوق البوت
+# نفسها (`_inbox_send`)، والرؤية بـ`_inbox_guard` في الصندوقين معاً.
+# ============================================================================
+MENTION_RE = _re.compile(r"@([\w.\-]{2,40})")
+
+
+def _hub_bots():
+    return [{"id": b["id"], "name": b["name"], "channel": b.get("channel") or "telegram"}
+            for b in db.list_bots(acct())]
+
+
+def _hub_teams_for_me():
+    """الفِرق الظاهرة كعروض: كل فِرق الحساب للمالك والمدير، وفِرقه هو للموظف."""
+    teams = db.list_inbox_teams(acct())
+    if my_team_role() in ("owner", "admin"):
+        return teams
+    mine = set(db.user_team_ids(uid()))
+    return [t for t in teams if t["id"] in mine]
+
+
+def _hub_conv(bot_id, peer, write=False):
+    b = _owned(_int_or_none(bot_id) or 0)
+    peer = _inbox_peer(b["id"], peer, read_only=not write)
+    _inbox_guard(b["id"], peer)
+    return b, peer
+
+
+@app.route("/inbox")
+@require_crm()
+def shared_inbox():
+    owner = acct()
+    own, _ = _inbox_scope()
+    return react_page("shared_inbox", "hub_title", {
+        "bots": _hub_bots(), "teams": _hub_teams_for_me(), "allTeams": db.list_inbox_teams(owner),
+        "members": _crm_members(), "canned": db.list_canned(owner),
+        "me": {"id": uid(), "username": session.get("uname", ""), "role": my_team_role()},
+        "canManage": _crm_admin(), "canReply": _can_reply(), "windowSec": WA_WINDOW,
+        "scope": db.get_setting(owner, "inbox_scope", "all"), "ownOnly": own,
+        "routes": {str(b["id"]): json.loads(b.get("config_json") or "{}").get("route_team")
+                   for b in db.list_bots(owner)},
+        "channelCfg": {str(b["id"]): json.loads(b.get("config_json") or "{}").get("inbox") or {}
+                       for b in db.list_bots(owner)},
+        "pay": _pay_public(owner),
+        "callCfg": {str(b["id"]): json.loads(b.get("config_json") or "{}").get("calls") or {}
+                    for b in db.list_bots(owner) if (b.get("channel") or "") == "whatsapp"},
+        "callsOn": any((json.loads(b.get("config_json") or "{}").get("calls") or {}).get("enabled")
+                       for b in db.list_bots(owner) if (b.get("channel") or "") == "whatsapp"),
+    })
+
+
+@app.route("/api/inbox")
+@require_crm()
+def api_hub_list():
+    own, teams = _inbox_scope()
+    view = str(request.args.get("view") or "open")[:20]
+    if view.startswith("team:") and my_team_role() == "member" and _int_or_none(view[5:]) not in teams:
+        view = "open"                                   # فريق ليس فيه — لا يستعرضه
+    try:
+        page = max(1, int(request.args.get("page") or 1))
+    except ValueError:
+        page = 1
+    bot = _int_or_none(request.args.get("bot"))
+    if bot:
+        _owned(bot)
+    team_views = [t["id"] for t in _hub_teams_for_me()]
+    rows = db.inbox_list(acct(), uid(), view, bot, (request.args.get("q") or "").strip() or None,
+                         own, teams, limit=50, offset=(page - 1) * 50)
+    return jsonify({"ok": True, "rows": rows, "counts": db.inbox_counts(acct(), uid(), own, team_views),
+                    "now": int(_time.time())})
+
+
+@app.route("/api/inbox/thread")
+@require_crm()
+def api_hub_thread():
+    b, peer = _hub_conv(request.args.get("bot"), request.args.get("peer"))
+    after = _int_or_none(request.args.get("after")) or 0
+    msgs = db.list_messages(b["id"], peer, after)
+    if msgs or not after:
+        db.mark_conversation_read(b["id"], peer)
+        db.mentions_seen(uid(), b["id"], peer)
+    contact = None
+    if not after:
+        cid = db.contact_id_for_peer(b["id"], peer)
+        c = db.get_contact_by_id(cid) if cid else None
+        if c and c.get("owner_id") == acct():
+            names = {t["id"]: t["name"] for t in db.list_tags(acct())}
+            contact = {"id": c["id"], "name": c.get("name") or "", "phone": c.get("phone") or "",
+                       "email": c.get("email") or "", "tags": [names[t] for t in c.get("tags") or [] if t in names],
+                       "fields": c.get("fields") or {}, "optin": c.get("optin"), "assignee_id": c.get("assignee_id")}
+    return jsonify({"ok": True, "messages": msgs, "conv": db.get_conversation(b["id"], peer) or {},
+                    "lastIn": db.peer_last_in(b["id"], peer), "now": int(_time.time()), "contact": contact,
+                    "source": db.peer_source(b["id"], peer) if not after else None})
+
+
+@app.route("/api/inbox/send", methods=["POST"])
+@require_crm()
+def api_hub_send():
+    d = _json_body()
+    b, peer = _hub_conv(d.get("bot"), d.get("peer"), write=True)
+    return _inbox_send(b, peer, d)
+
+
+@app.route("/api/inbox/mode", methods=["POST"])
+@require_crm()
+def api_hub_mode():
+    d = _json_body()
+    b, peer = _hub_conv(d.get("bot"), d.get("peer"), write=True)
+    if d.get("mode") not in ("bot", "human"):
+        return _crm_err("mode")
+    if d["mode"] == "human" and not _can_reply():
+        return _crm_err("readonly", 403)
+    db.set_conversation_mode(b["id"], peer, d["mode"])
+    return jsonify({"ok": True, "conv": db.get_conversation(b["id"], peer)})
+
+
+@app.route("/api/inbox/assign", methods=["POST"])
+@require_crm()
+def api_hub_assign():
+    """أي عضو يسند ويستلم (كصناديق الفرق المعتادة). الفريق وحده بلا موظف = التالي بالتناوب."""
+    d = _json_body()
+    b, peer = _hub_conv(d.get("bot"), d.get("peer"), write=True)
+    user, team = _int_or_none(d.get("user")), _int_or_none(d.get("team"))
+    if user and user not in db.account_user_ids(acct()):
+        return _crm_err("user")
+    if team and not db.get_inbox_team(acct(), team):
+        return _crm_err("team")
+    if team and not user and d.get("route"):
+        db.assign_conversation(b["id"], peer, None, team, takeover=False)
+        user = db.next_in_team(acct(), team)
+    db.assign_conversation(b["id"], peer, user, team, takeover=bool(user) and _can_reply())
+    log.info("conversation %s/%s assigned to user=%s team=%s by=%s", b["id"], peer, user, team, uid())
+    return jsonify({"ok": True, "conv": db.get_conversation(b["id"], peer)})
+
+
+@app.route("/api/inbox/status", methods=["POST"])
+@require_crm()
+def api_hub_status():
+    d = _json_body()
+    b, peer = _hub_conv(d.get("bot"), d.get("peer"), write=True)
+    if not db.set_conversation_status(b["id"], peer, d.get("status")):
+        return _crm_err("status")
+    return jsonify({"ok": True, "conv": db.get_conversation(b["id"], peer)})
+
+
+@app.route("/api/inbox/note", methods=["POST"])
+@require_crm()
+def api_hub_note():
+    """ملاحظة داخلية لا يراها العميل. @اسم_المستخدم يشير لزميل فيراها في «إشاراتي»."""
+    d = _json_body()
+    b, peer = _hub_conv(d.get("bot"), d.get("peer"), write=True)
+    text = str(d.get("text") or "").strip()[:4000]
+    if not text:
+        return _crm_err("empty")
+    if _rate_limited(f"u{uid()}:note", limit=60, window=60, bucket="inbox_note"):
+        return _crm_err("rate", 429)
+    by_name = {m["username"].lower(): m["id"] for m in _crm_members() if m.get("username")}
+    mentions = [by_name[n.lower()] for n in MENTION_RE.findall(text) if n.lower() in by_name]
+    mid = db.add_note(b["id"], peer, uid(), text, mentions)
+    return jsonify({"ok": True, "id": mid, "mentioned": len(set(mentions) - {uid()})})
+
+
+@app.route("/api/canned")
+@require_crm()
+def api_canned_list():
+    return jsonify({"ok": True, "items": db.list_canned(acct())})
+
+
+@app.route("/api/canned/save", methods=["POST"])
+@require_crm(manage=True)
+def api_canned_save():
+    d = _json_body()
+    cid, err = db.save_canned(acct(), _int_or_none(d.get("id")), d.get("shortcut"), d.get("title"), d.get("body"), uid())
+    if err:
+        return _crm_err(err)
+    return jsonify({"ok": True, "id": cid, "items": db.list_canned(acct())})
+
+
+@app.route("/api/canned/delete", methods=["POST"])
+@require_crm(manage=True)
+def api_canned_delete():
+    if not db.delete_canned(acct(), _int_or_none(_json_body().get("id")) or 0):
+        return _crm_err("not_found", 404)
+    return jsonify({"ok": True, "items": db.list_canned(acct())})
+
+
+@app.route("/api/inbox/teams/save", methods=["POST"])
+@require_crm(manage=True)
+def api_hub_team_save():
+    d = _json_body()
+    tid, err = db.save_inbox_team(acct(), _int_or_none(d.get("id")), d.get("name"), d.get("rule"), d.get("members") or [])
+    if err:
+        return _crm_err(err)
+    return jsonify({"ok": True, "id": tid, "teams": db.list_inbox_teams(acct())})
+
+
+@app.route("/api/inbox/teams/delete", methods=["POST"])
+@require_crm(manage=True)
+def api_hub_team_delete():
+    tid = _int_or_none(_json_body().get("id")) or 0
+    if not db.delete_inbox_team(acct(), tid):
+        return _crm_err("not_found", 404)
+    for b in db.list_bots(acct()):                     # فريق القناة الافتراضي المحذوف لا يبقى مرجعاً ميتاً
+        cfg = json.loads(b.get("config_json") or "{}")
+        if cfg.get("route_team") == tid:
+            cfg.pop("route_team")
+            db.update_bot_config(b["id"], cfg)          # الإعداد الكامل — update_bot_config يستبدل
+    return jsonify({"ok": True, "teams": db.list_inbox_teams(acct())})
+
+
+@app.route("/sequences")
+@require_crm()
+def sequences_page():
+    owner = acct()
+    return react_page("sequences", "seq_title", {
+        "items": [_seq_brief(s) for s in db.list_sequences(owner)],
+        "bots": _hub_bots(), "tags": [t["name"] for t in db.list_tags(owner)],
+        "canManage": _crm_admin(), "limits": {"steps": SQ.MAX_STEPS, "delay": SQ.MAX_DELAY},
+    })
+
+
+def _seq_brief(s):
+    return dict(s, stats=db.sequence_stats(s["id"]))
+
+
+@app.route("/api/sequences")
+@require_crm()
+def api_sequences():
+    bot = _int_or_none(request.args.get("bot"))
+    return jsonify({"ok": True, "items": [_seq_brief(s) for s in db.list_sequences(acct(), bot)]})
+
+
+@app.route("/api/sequences/save", methods=["POST"])
+@require_crm(manage=True)
+def api_sequence_save():
+    d = _json_body()
+    name = str(d.get("name") or "").strip()[:80]
+    if not name:
+        return _crm_err("name")
+    b = _owned(_int_or_none(d.get("bot")) or 0)
+    try:
+        spec = SQ.clean_spec(d.get("spec"), {t["name"].lower() for t in db.list_tags(acct())})
+    except SQ.Invalid as e:
+        return _crm_err(str(e))
+    if (b.get("channel") or "") != "whatsapp" and any(st["kind"] == "template" for st in spec["steps"]):
+        return _crm_err("template_channel")               # القوالب لواتساب وحده
+    sid = _int_or_none(d.get("id"))
+    if sid and not db.get_sequence(sid, acct()):
+        return _crm_err("not_found", 404)
+    if len(db.list_sequences(acct())) >= 50 and not sid:
+        return _crm_err("limit")
+    sid = db.save_sequence(acct(), sid, b["id"], name, spec, bool(d.get("active")))
+    return jsonify({"ok": True, "item": _seq_brief(db.get_sequence(sid, acct()))})
+
+
+@app.route("/api/sequences/toggle", methods=["POST"])
+@require_crm(manage=True)
+def api_sequence_toggle():
+    d = _json_body()
+    if not db.set_sequence_active(acct(), _int_or_none(d.get("id")) or 0, bool(d.get("active"))):
+        return _crm_err("not_found", 404)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sequences/delete", methods=["POST"])
+@require_crm(manage=True)
+def api_sequence_delete():
+    if not db.delete_sequence(acct(), _int_or_none(_json_body().get("id")) or 0):
+        return _crm_err("not_found", 404)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sequences/enroll", methods=["POST"])
+@require_crm()
+def api_sequence_enroll():
+    """تسجيل يدوي من الصندوق المشترك — أي عضو يتابع محادثاته."""
+    d = _json_body()
+    b, peer = _hub_conv(d.get("bot"), d.get("peer"), write=True)
+    seq = db.get_sequence(_int_or_none(d.get("sequence")) or 0, acct())
+    if not seq:
+        return _crm_err("not_found", 404)
+    if not seq["active"]:
+        return _crm_err("inactive")
+    if seq["bot_id"] != b["id"]:
+        return _crm_err("channel")
+    if db.is_opted_out(b["id"], peer):
+        return _crm_err("opted_out")
+    if not SQ.enroll(seq, b["id"], peer):
+        return _crm_err("already")
+    return jsonify({"ok": True, "items": db.peer_enrollments(b["id"], peer)})
+
+
+@app.route("/api/sequences/peer")
+@require_crm()
+def api_sequence_peer():
+    b, peer = _hub_conv(request.args.get("bot"), request.args.get("peer"))
+    return jsonify({"ok": True, "items": db.peer_enrollments(b["id"], peer),
+                    "available": [{"id": s["id"], "name": s["name"]} for s in db.list_sequences(acct(), b["id"]) if s["active"]]})
+
+
+@app.route("/api/sequences/stop", methods=["POST"])
+@require_crm()
+def api_sequence_stop():
+    d = _json_body()
+    b, peer = _hub_conv(d.get("bot"), d.get("peer"), write=True)
+    eid = _int_or_none(d.get("enrollment")) or 0
+    if not any(e["id"] == eid and e["status"] == "active" for e in db.peer_enrollments(b["id"], peer)):
+        return _crm_err("not_found", 404)
+    db.end_enrollment(eid, "stopped", "manual")
+    return jsonify({"ok": True, "items": db.peer_enrollments(b["id"], peer)})
+
+
+import sequences as SQ      # noqa: E402  (مثل broadcasts: الوحدة تُستورد بجانب مساراتها)
+
+
+# ============================================================================
+# النمو — المرحلة 7: روابط التتبّع و QR · تقرير إعلانات CTWA · Conversions API · (ودجت الموقع)
+# ============================================================================
+import growth as GR         # noqa: E402
+
+
+def _growth_bots():
+    out = []
+    for b in db.list_bots(acct()):
+        cfg = json.loads(b.get("config_json") or "{}")
+        out.append({"id": b["id"], "name": b["name"], "channel": b.get("channel") or "telegram",
+                    "linkable": bool(_bot_links(b)),
+                    "capi": {"dataset": cfg.get("capi_dataset") or "", "token": bool(cfg.get("capi_token")),
+                             "lead": bool(cfg.get("capi_lead"))} if (b.get("channel") or "") == "whatsapp" else None})
+    return out
+
+
+def _link_json(l):
+    return dict(l, url=url_for("growth_go", code=l["code"], _external=True),
+                qr=url_for("growth_qr", code=l["code"]))
+
+
+@app.route("/growth")
+@require_crm()
+def growth_page():
+    return react_page("growth", "growth_title", {
+        "bots": _growth_bots(), "links": [_link_json(l) for l in db.list_growth_links(acct())],
+        "ads": db.ads_report(acct(), int(_time.time()) - 30 * 86400), "capiLog": db.capi_recent(acct(), 30),
+        "events": list(GR.CAPI_EVENTS), "canManage": _crm_admin(),
+        "widgets": [_widget_json(w) for w in db.list_widgets(acct())],
+        "social": _social_bots(),
+    })
+
+
+@app.route("/api/growth/links", methods=["POST"])
+@require_crm(manage=True)
+def api_growth_link_create():
+    d = _json_body()
+    b = _owned(_int_or_none(d.get("bot")) or 0)
+    if not _bot_links(b):
+        return _crm_err("bot_link")                       # قناة بلا رقم/اسم مستخدم معروف بعد
+    name = str(d.get("name") or "").strip()[:80]
+    if not name:
+        return _crm_err("name")
+    if len(db.list_growth_links(acct())) >= 200:
+        return _crm_err("limit")
+    text = str(d.get("text") or "").strip()[:300]
+    for _ in range(5):
+        lid = db.create_growth_link(acct(), b["id"], GR.new_code(), name, text)
+        if lid:
+            break
+    else:
+        return _crm_err("retry")
+    return jsonify({"ok": True, "links": [_link_json(l) for l in db.list_growth_links(acct())]})
+
+
+@app.route("/api/growth/links/<int:link_id>/save", methods=["POST"])
+@require_crm(manage=True)
+def api_growth_link_save(link_id):
+    d = _json_body()
+    name = str(d.get("name") or "").strip()[:80]
+    if not name:
+        return _crm_err("name")
+    if not db.update_growth_link(acct(), link_id, name, str(d.get("text") or "").strip()[:300]):
+        return _crm_err("not_found", 404)
+    return jsonify({"ok": True, "links": [_link_json(l) for l in db.list_growth_links(acct())]})
+
+
+@app.route("/api/growth/links/<int:link_id>/delete", methods=["POST"])
+@require_crm(manage=True)
+def api_growth_link_delete(link_id):
+    if not db.delete_growth_link(acct(), link_id):
+        return _crm_err("not_found", 404)
+    return jsonify({"ok": True, "links": [_link_json(l) for l in db.list_growth_links(acct())]})
+
+
+@app.route("/go/<code>")
+def growth_go(code):
+    """رابط التتبّع العام: يعدّ النقرة ثم يحوّل للقناة. النقرة المكررة من نفس العنوان خلال ساعة لا تُعدّ مرتين."""
+    if not GR.CODE_RE.match(code or ""):
+        abort(404)
+    link = db.get_growth_link(code=code)
+    b = db.get_bot(link["bot_id"]) if link else None
+    links = _bot_links(b) if b else None
+    if not links:
+        abort(404)
+    if not _rate_limited(f"go:{code}:{request.remote_addr or '?'}", limit=1, window=3600, bucket="growth_click"):
+        db.growth_click(code)
+    resp = redirect(GR.target_url(links, code, link["text"]), code=302)
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
+@app.route("/go/<code>/qr.svg")
+@require_crm()
+def growth_qr(code):
+    link = db.get_growth_link(code=code, owner_id=acct()) if GR.CODE_RE.match(code or "") else None
+    if not link:
+        abort(404)
+    resp = Response(_qr_svg(url_for("growth_go", code=code, _external=True)), mimetype="image/svg+xml")
+    resp.headers["Cache-Control"] = "private, max-age=300"
+    if request.args.get("dl"):
+        resp.headers["Content-Disposition"] = f'attachment; filename="link-{code}-qr.svg"'
+    return resp
+
+
+@app.route("/api/growth/ads")
+@require_crm()
+def api_growth_ads():
+    days = max(1, min(365, _int_or_none(request.args.get("days")) or 30))
+    return jsonify({"ok": True, "ads": db.ads_report(acct(), int(_time.time()) - days * 86400),
+                    "capiLog": db.capi_recent(acct(), 30)})
+
+
+# ---- ودجت الموقع ومحادثة الويب ----
+import asyncio              # noqa: E402
+import channels.web as WEBCH   # noqa: E402
+from flask import has_request_context   # noqa: E402
+
+WG_KEY_RE = _re.compile(r"^[a-f0-9]{16}$")
+WG_VID_RE = _re.compile(r"^8\d{15}$")          # 16 رقماً تبدأ بـ8: لا تتصادم مع أرقام الهواتف (≤15) ولا معرّفات تليجرام
+
+
+def _owner_crm(owner_id):
+    """نفس بوابة `_crm_on` لكن لصاحب حساب بعينه — مسارات الودجت العامة بلا جلسة."""
+    o = db.get_user(owner_id) or {}
+    if o.get("role") in ("admin", "support"):
+        return True
+    sub = db.get_subscription(owner_id)
+    return bool(plans.feature(sub["plan"] if sub and sub.get("status") == "active" else "free", "crm"))
+
+
+def _wg_sig(key, vid):
+    return hmac.new(app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key,
+                    f"wg:{key}:{vid}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def _wg_asset_sig(aid, exp):
+    return hmac.new(app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key,
+                    f"wga:{aid}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def _wg_asset_url(asset):
+    """رابط عام موقَّع لملف مكتبة يعرضه ودجت الزائر — صالح 7 أيام، لهذا الملف وحده."""
+    base = mailer.site_base() or (request.host_url.rstrip("/") if has_request_context() else "")
+    exp = int(_time.time()) + 7 * 86400
+    return f"{base}/wg/asset/{asset['id']}?e={exp}&s={_wg_asset_sig(asset['id'], exp)}" if base else None
+
+
+WEBCH.SIGNER = _wg_asset_url
+
+
+def _wg(key):
+    w = db.get_widget(key=key) if WG_KEY_RE.match(key or "") else None
+    if not w or not _owner_crm(w["owner_id"]):
+        abort(404)
+    doms = [d for d in (w["settings"].get("domains") or []) if d]
+    if doms and request.headers.get("Origin"):
+        host = _up.urlsplit(request.headers["Origin"]).hostname or ""
+        if not any(host == d or host.endswith("." + d) for d in doms):
+            abort(403)                                   # الودجت مقصور على نطاقات صاحبه
+    return w
+
+
+def _wg_visitor(w, d):
+    vid, sig = str(d.get("vid") or ""), str(d.get("sig") or "")
+    if not WG_VID_RE.match(vid) or not _secrets.compare_digest(sig, _wg_sig(w["key"], vid)):
+        abort(403)
+    return vid
+
+
+@app.after_request
+def _wg_cors(resp):
+    """مسارات الودجت تُنادى من موقع العميل: CORS مفتوح بلا كوكيز (الهوية توقيع لا جلسة)."""
+    if request.path.startswith("/wg/"):
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Max-Age"] = "600"
+    return resp
+
+
+@app.route("/wg/<key>.js")
+def wg_script(key):
+    _wg(key)
+    base = mailer.site_base() or request.host_url.rstrip("/")
+    src = open(os.path.join(app.static_folder, "widget.js"), encoding="utf-8").read()
+    src = src.replace("__BASE__", json.dumps(base)).replace("__KEY__", json.dumps(key))
+    resp = Response(src, mimetype="application/javascript")
+    resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp
+
+
+@app.route("/wg/<key>/config")
+def wg_config(key):
+    w = _wg(key)
+    s = w["settings"]
+    owner_plan = (db.get_subscription(w["owner_id"]) or {}).get("plan") or "free"
+    pub = {k: s.get(k) for k in ("color", "position", "label", "greeting", "greeting_delay", "title", "subtitle",
+                                 "welcome", "icebreakers", "lang", "show_mobile", "show_desktop")}
+    return jsonify({"ok": True, "settings": pub, "mode": s.get("mode") or "both",
+                    "wa": bool(w.get("wa_bot_id")) and s.get("mode") != "chat",
+                    "branding": not plans.plan(owner_plan).get("white_label")})
+
+
+@app.route("/wg/<key>/hello", methods=["POST"])
+def wg_hello(key):
+    """هوية الزائر: رقم عشوائي بتوقيع HMAC يحفظه متصفحه. زيارة تُعدّ مرة لكل عنوان في الساعة."""
+    w = _wg(key)
+    if _rate_limited(request.remote_addr or "?", limit=60, window=600, bucket="wg_hello"):
+        return jsonify({"ok": False, "error": "rate"}), 429
+    d = _json_body()
+    vid = str(d.get("vid") or "")
+    if not (WG_VID_RE.match(vid) and _secrets.compare_digest(str(d.get("sig") or ""), _wg_sig(key, vid))):
+        vid = "8" + "".join(str(_secrets.randbelow(10)) for _ in range(15))
+    if not _rate_limited(f"wgv:{key}:{request.remote_addr}", limit=1, window=3600, bucket="wg_view"):
+        db.widget_count(w["id"], "views")
+    return jsonify({"ok": True, "vid": vid, "sig": _wg_sig(key, vid)})
+
+
+@app.route("/wg/<key>/send", methods=["POST"])
+def wg_send(key):
+    """رسالة زائر ⇒ محرك الفلو نفسه (فلوهات · ذكاء · تحويل) على بوت الودجت، بهوية wb:<رقم>."""
+    w = _wg(key)
+    d = _json_body()
+    vid = _wg_visitor(w, d)
+    text = " ".join(str(d.get("text") or "").split())[:1000]
+    if not text:
+        return jsonify({"ok": False, "error": "empty"}), 400
+    if _rate_limited(f"wgs:{vid}", limit=20, window=60, bucket="wg_send") or \
+            _rate_limited(request.remote_addr or "?", limit=60, window=60, bucket="wg_send_ip"):
+        return jsonify({"ok": False, "error": "rate"}), 429
+    b = db.get_bot(w["bot_id"]) if w.get("bot_id") else None
+    if not b or b["owner_id"] != w["owner_id"] or w["settings"].get("mode") == "whatsapp":
+        return jsonify({"ok": False, "error": "chat_off"}), 400
+    peer = f"wb:{vid}"
+    if not db.peer_known(b["id"], peer):
+        db.widget_count(w["id"], "chats")
+    db.web_push(b["id"], peer, {"me": 1, "text": text})
+    from channels.web import WebChannel
+    coro = FE.handle_message(dict(b), WebChannel(b["id"]), {"id": "", "peer": peer, "kind": "text", "text": text,
+                                                            "name": str(d.get("name") or "")[:60]})
+    if manager._loop is not None and manager._loop.is_running():
+        asyncio.run_coroutine_threadsafe(coro, manager._loop)      # لا ننتظر الرد — الودجت يستطلعه
+    else:
+        asyncio.run(coro)
+    return jsonify({"ok": True})
+
+
+@app.route("/wg/<key>/poll")
+def wg_poll(key):
+    w = _wg(key)
+    vid = _wg_visitor(w, request.args)
+    if not w.get("bot_id") or _rate_limited(f"wgp:{vid}", limit=120, window=60, bucket="wg_poll"):
+        return jsonify({"ok": True, "items": []})
+    return jsonify({"ok": True, "items": db.web_pull(w["bot_id"], f"wb:{vid}", _int_or_none(request.args.get("after")) or 0)})
+
+
+@app.route("/wg/<key>/wa")
+def wg_wa(key):
+    """زر «واتساب» في الودجت: يُعدّ ثم يحوّل لرقم واتساب صاحبه برسالة معبّأة."""
+    w = _wg(key)
+    b = db.get_bot(w["wa_bot_id"]) if w.get("wa_bot_id") else None
+    links = _bot_links(b) if b and b["owner_id"] == w["owner_id"] else None
+    if not links or links["kind"] != "whatsapp":
+        abort(404)
+    if not _rate_limited(f"wgw:{key}:{request.remote_addr}", limit=1, window=3600, bucket="wg_wa"):
+        db.widget_count(w["id"], "wa_clicks")
+    text = (w["settings"].get("wa_text") or "").strip()
+    return redirect(links["plain"] + ("?text=" + _up.quote(text) if text else ""), code=302)
+
+
+@app.route("/wg/asset/<int:asset_id>")
+def wg_asset(asset_id):
+    """ملف مكتبة لرسالة في محادثة الويب — برابط موقَّع ينتهي (لا تصفّح للمكتبة ولا تخمين)."""
+    exp = _int_or_none(request.args.get("e")) or 0
+    if exp < _time.time() or not _secrets.compare_digest(str(request.args.get("s") or ""), _wg_asset_sig(asset_id, exp)):
+        abort(403)
+    a = db.get_asset(asset_id)
+    if not a:
+        abort(404)
+    fname = secure_filename(a["fname"])
+    resp = send_from_directory(asset_store.BASE_DIR, fname, mimetype=a["mime"], conditional=True)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
+def _clean_widget(d):
+    """إعدادات الودجت من الواجهة ⇒ نظيفة أو ValueError(رمز)."""
+    s = d.get("settings") or {}
+    mode = s.get("mode") if s.get("mode") in ("whatsapp", "chat", "both") else "both"
+    color = str(s.get("color") or "#25D366")
+    if not _re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        raise ValueError("color")
+    doms = []
+    for x in (s.get("domains") or [])[:10]:
+        x = str(x).strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+        if x:
+            if not _re.fullmatch(r"[a-z0-9.-]{3,100}", x):
+                raise ValueError("domains")
+            doms.append(x)
+    txt = lambda k, n: str(s.get(k) or "").strip()[:n]
+    out = {"mode": mode, "color": color, "position": "left" if s.get("position") == "left" else "right",
+           "label": txt("label", 40), "greeting": txt("greeting", 200), "title": txt("title", 60),
+           "subtitle": txt("subtitle", 80), "welcome": txt("welcome", 500), "wa_text": txt("wa_text", 300),
+           "lang": "en" if s.get("lang") == "en" else "ar", "domains": doms,
+           "icebreakers": [str(x).strip()[:40] for x in (s.get("icebreakers") or []) if str(x).strip()][:4],
+           "show_mobile": s.get("show_mobile") is not False, "show_desktop": s.get("show_desktop") is not False}
+    try:
+        out["greeting_delay"] = max(0, min(60, int(s.get("greeting_delay") or 3)))
+    except (TypeError, ValueError):
+        out["greeting_delay"] = 3
+    return out
+
+
+def _widget_json(w):
+    base = mailer.site_base() or request.host_url.rstrip("/")
+    return dict(w, embed=f'<script src="{base}/wg/{w["key"]}.js" async></script>')
+
+
+@app.route("/api/growth/widgets/save", methods=["POST"])
+@require_crm(manage=True)
+def api_widget_save():
+    d = _json_body()
+    name = str(d.get("name") or "").strip()[:60]
+    if not name:
+        return _crm_err("name")
+    try:
+        settings = _clean_widget(d)
+    except ValueError as e:
+        return _crm_err(str(e))
+    bot = _int_or_none(d.get("bot"))
+    wa = _int_or_none(d.get("wa_bot"))
+    if bot:
+        _owned(bot)
+    if wa and (_owned(wa).get("channel") or "") != "whatsapp":
+        return _crm_err("wa_bot")
+    if settings["mode"] != "whatsapp" and not bot:
+        return _crm_err("bot")
+    if settings["mode"] != "chat" and not wa:
+        return _crm_err("wa_bot")
+    wid = _int_or_none(d.get("id"))
+    if wid and not db.get_widget(widget_id=wid, owner_id=acct()):
+        return _crm_err("not_found", 404)
+    if not wid and len(db.list_widgets(acct())) >= 20:
+        return _crm_err("limit")
+    db.save_widget(acct(), wid, None if wid else _secrets.token_hex(8), name, bot, wa, settings)
+    return jsonify({"ok": True, "widgets": [_widget_json(w) for w in db.list_widgets(acct())]})
+
+
+@app.route("/api/growth/widgets/delete", methods=["POST"])
+@require_crm(manage=True)
+def api_widget_delete():
+    if not db.delete_widget(acct(), _int_or_none(_json_body().get("id")) or 0):
+        return _crm_err("not_found", 404)
+    return jsonify({"ok": True, "widgets": [_widget_json(w) for w in db.list_widgets(acct())]})
+
+
+# ============================================================================
+# الدفع داخل المحادثة — المرحلة 9 (chat_pay.py · payments_gw.py). المال لا يمرّ بالمنصة.
+# ============================================================================
+import chat_pay as CP       # noqa: E402
+import payments_gw as PGW   # noqa: E402
+
+
+def _pay_channel(bot_row, peer):
+    """قناة إرسال الإيصال/الاستئناف: زائر الويب ⇒ صندوقه، وإلا قناة البوت من حلقة البوتات."""
+    if str(peer).startswith("wb:"):
+        return WEBCH.WebChannel(bot_row["id"])
+    return manager._flow_channel(bot_row)
+
+
+def _pay_public(owner):
+    """ما يحتاجه المتصفح لزر «طلب دفع»/بطاقة الفلو: العملة والعملات فقط — لا مفاتيح."""
+    c = CP.public_config(owner)
+    return {"currency": c["currency"], "currencies": list(PGW.CURRENCIES)} if c["provider"] and c["hasSecret"] else None
+
+
+def _pay_run(coro):
+    if manager._loop is not None and manager._loop.is_running():
+        return asyncio.run_coroutine_threadsafe(coro, manager._loop).result(timeout=40)
+    return asyncio.run(coro)
+
+
+CP.HOOKS.update(secret=app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key,
+                base=lambda: mailer.site_base() or (request.host_url.rstrip("/") if has_request_context() else ""),
+                channel=_pay_channel, run=_pay_run)
+
+
+@app.route("/payments")
+@require_crm()
+def payments_page():
+    owner = acct()
+    return react_page("chat_payments", "cpay_title", {
+        "config": CP.public_config(owner), "providers": list(PGW.PROVIDERS), "currencies": list(PGW.CURRENCIES),
+        "webhooks": {p: CP.webhook_url(owner, p) for p in PGW.PROVIDERS},
+        "items": db.list_chat_payments(owner), "totals": db.chat_payment_totals(owner, int(_time.time()) - 30 * 86400),
+        "canManage": _crm_admin(),
+    })
+
+
+@app.route("/api/pay/settings", methods=["POST"])
+@require_crm(manage=True)
+def api_pay_settings():
+    """بوابة صاحب الحساب: المفتاح السرّي مختوم (`db.seal`) ولا يعود للمتصفح أبداً."""
+    d = _json_body()
+    if d.get("clear"):
+        CP.clear_config(acct())
+        return jsonify({"ok": True, "config": CP.public_config(acct())})
+    provider, currency = d.get("provider"), str(d.get("currency") or "SAR").upper()
+    if provider not in PGW.PROVIDERS:
+        return _crm_err("provider")
+    if currency not in PGW.CURRENCIES:
+        return _crm_err("currency")
+    secret = str(d.get("secret") or "").strip()
+    entity = entity_mada = ""
+    if provider == "hyperpay":
+        # HyperPay: Access Token (Bearer) + Entity ID (32 hex) — ومدى غالباً بكيان منفصل في السعودية
+        if secret and not _re.fullmatch(r"[A-Za-z0-9=+/]{20,300}", secret):
+            return _crm_err("secret")
+        entity, entity_mada = (str(d.get(k) or "").strip().lower() for k in ("entity", "entity_mada"))
+        if not _re.fullmatch(r"[0-9a-f]{32}", entity) or (entity_mada and not _re.fullmatch(r"[0-9a-f]{32}", entity_mada)):
+            return _crm_err("entity")
+    elif secret and not _re.fullmatch(r"sk_(?:test|live)_[A-Za-z0-9]{10,120}", secret):
+        return _crm_err("secret")                          # مفاتيح Moyasar و Tap السرّية تبدأ بـ sk_test_/sk_live_
+    old = CP.public_config(acct())
+    if not secret and (not old["hasSecret"] or old["provider"] != provider):
+        return _crm_err("secret")
+    CP.save_config(acct(), provider, currency, secret or None, str(d.get("webhook_secret") or "").strip()[:200] or None,
+                   entity=entity, entity_mada=entity_mada, test=provider == "hyperpay" and d.get("test") is True)
+    return jsonify({"ok": True, "config": CP.public_config(acct())})
+
+
+@app.route("/api/pay/test", methods=["POST"])
+@require_crm(manage=True)
+def api_pay_test():
+    """فحص المفتاح بلا أي عملية: نسأل البوابة عن معرّف غير موجود — 404 يعني المفتاح صالح، 401 غير صالح."""
+    cfg = CP.config(acct())
+    if not cfg:
+        return _crm_err("not_configured")
+    try:
+        if cfg["provider"] == "hyperpay":
+            # جلسة دفع تجريبية بريال واحد لكل كيان — لا خصم (الجلسة لا تُدفع)، وتثبت التوكن والكيان معاً
+            for ent in [e for e in (cfg["entity"], cfg["entity_mada"]) if e]:
+                PGW.hp_checkout(cfg["secret"], ent, amount=100, currency="SAR", ref="by_probe_" + _secrets.token_hex(4),
+                                test=cfg["test"])
+            return jsonify({"ok": True})
+        PGW.status(cfg["provider"], cfg["secret"], "by_probe_" + _secrets.token_hex(4))
+        return jsonify({"ok": True})
+    except PGW.GatewayError as e:
+        if cfg["provider"] == "hyperpay":
+            return jsonify({"ok": False, "error": str(e)})
+        return jsonify({"ok": str(e) == "rejected", "error": None if str(e) == "rejected" else str(e)})
+
+
+@app.route("/api/pay/request", methods=["POST"])
+@require_crm()
+def api_pay_request():
+    """موظف يرسل رابط دفع من الصندوق المشترك."""
+    d = _json_body()
+    b, peer = _hub_conv(d.get("bot"), d.get("peer"), write=True)
+    if not _can_reply():
+        return _crm_err("readonly", 403)
+    if peer.startswith(("wa:", "fb:", "ig:")) and int(_time.time()) - db.peer_last_in(b["id"], peer) > WA_WINDOW:
+        return _crm_err("window")
+    if _rate_limited(f"u{uid()}:pay", limit=20, window=600, bucket="pay_req"):
+        return _crm_err("rate", 429)
+    cfg = CP.config(acct())
+    if not cfg:
+        return _crm_err("not_configured")
+    currency = str(d.get("currency") or cfg["currency"]).upper()
+    amount = CP.to_minor(d.get("amount"), currency) if currency in PGW.CURRENCIES else None
+    if not amount:
+        return _crm_err("amount")
+    ch = FE.LoggedChannel(_pay_channel(dict(b), peer), b["id"], "human")
+    p, err = _pay_run(CP.request(dict(b), ch, peer, amount, currency, str(d.get("description") or "").strip()[:200],
+                                 minutes=_int_or_none(d.get("minutes")) or 60, created_by=uid(),
+                                 name=(db.get_conversation(b["id"], peer) or {}).get("name") or ""))
+    if not p:
+        return _crm_err(err)
+    return jsonify({"ok": True, "payment": p})
+
+
+@app.route("/api/pay/list")
+@require_crm()
+def api_pay_list():
+    st = request.args.get("status")
+    return jsonify({"ok": True, "items": db.list_chat_payments(acct(), st if st in ("pending", "paid", "failed", "expired", "cancelled") else None),
+                    "totals": db.chat_payment_totals(acct(), int(_time.time()) - 30 * 86400)})
+
+
+@app.route("/pay/wh/<provider>/<int:owner_id>/<sig>", methods=["POST"])
+def pay_webhook(provider, owner_id, sig):
+    """إشعار البوابة: تنبيه فقط — `CP.confirm` يسأل البوابة بمفتاحنا قبل أي تسوية. الرد 200 دائماً
+    (لا نكشف ما نعرفه لمن يجرّب)، والمسار موقَّع لكل حساب فلا يُخمَّن."""
+    if provider not in PGW.PROVIDERS or not CP.webhook_ok(owner_id, provider, sig):
+        abort(404)
+    if _rate_limited(request.remote_addr or "?", limit=120, window=60, bucket="pay_wh"):
+        return jsonify({"ok": True})
+    body = request.get_json(silent=True) or {}
+    cfg = CP.config(owner_id)
+    if provider == "moyasar" and cfg and cfg["webhook_secret"] and \
+            not _secrets.compare_digest(str(body.get("secret_token") or ""), cfg["webhook_secret"]):
+        return jsonify({"ok": True})
+    gw_id = PGW.webhook_gw_id(provider, body)
+    p = db.get_chat_payment(provider=provider, gw_id=gw_id, owner_id=owner_id) if gw_id else None
+    if p:
+        try:
+            CP.confirm(p["id"])
+        except Exception:
+            log.exception("payment confirm failed id=%s", p["id"])
+    return jsonify({"ok": True})
+
+
+@app.route("/pay/r/<int:pid>/<sig>")
+def pay_return(pid, sig):
+    """صفحة عودة العميل بعد الدفع: نسأل البوابة فوراً (لا ننتظر الويبهوك) ثم زر الرجوع للمحادثة."""
+    if not CP.return_ok(pid, sig):
+        abort(404)
+    st = CP.confirm(pid) or "pending"
+    p = db.get_chat_payment(pid)
+    b = db.get_bot(p["bot_id"]) if p else None
+    links = _bot_links(b) if b else None
+    back = links["plain"] if links else ""
+    ok = st == "paid"
+    title = "تم الدفع بنجاح ✅" if ok else ("بانتظار تأكيد الدفع ⏳" if st == "pending" else "لم يكتمل الدفع")
+    sub = (f"استلمنا {CP.fmt(p['amount'], p['currency'])} — رقم العملية #{p['id']}. أرسلنا لك الإيصال في المحادثة."
+           if ok else "إن أتممت الدفع سيصلك التأكيد في المحادثة خلال لحظات." if st == "pending"
+           else "يمكنك طلب رابط جديد من المحادثة.")
+    from markupsafe import escape
+    html = (f'<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>{escape(title)}</title></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;'
+            f'background:#0b1020;color:#fff;font-family:system-ui,Tahoma,sans-serif;text-align:center;padding:24px">'
+            f'<div style="max-width:420px"><h1 style="font-size:24px">{escape(title)}</h1>'
+            f'<p style="opacity:.8;line-height:1.7">{escape(sub)}</p>'
+            + (f'<a href="{escape(back)}" style="display:inline-block;margin-top:12px;background:#25D366;color:#04140E;'
+               f'padding:12px 22px;border-radius:12px;font-weight:800;text-decoration:none">الرجوع للمحادثة</a>' if back else "")
+            + '</div></body></html>')
+    resp = Response(html, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
+@app.route("/pay/h/<int:pid>/<sig>")
+def pay_hosted(pid, sig):
+    """صفحة دفع HyperPay عندنا: جلسة جديدة عند كل فتح (جلسات HyperPay تنتهي خلال 30 دقيقة)، ونموذج
+    البطاقة بسكربتهم. مدى بكيان منفصل ⇒ زرّان يختار العميل بينهما. بعد الدفع يعود لصفحة العودة الموقَّعة
+    التي تسأل HyperPay بمرجعنا (`CP.confirm`) — لا نثق بمعاملات الرابط العائد."""
+    if not CP.hosted_ok(pid, sig):
+        abort(404)
+    p = db.get_chat_payment(pid)
+    if not p or p["provider"] != "hyperpay":
+        abort(404)
+    if p["status"] != "pending" or p["expires_at"] <= _time.time():
+        return redirect(CP.return_url(pid))
+    if _rate_limited(request.remote_addr or "?", limit=30, window=600, bucket="pay_hosted"):
+        abort(429)
+    cfg = CP.config(p["owner_id"])
+    if not cfg or cfg["provider"] != "hyperpay":
+        abort(404)
+    from markupsafe import escape
+    brand = request.args.get("b")
+    head = (f'<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>الدفع الآمن</title></head><body style="margin:0;min-height:100vh;background:#0b1020;color:#fff;'
+            f'font-family:system-ui,Tahoma,sans-serif;padding:24px"><div style="max-width:440px;margin:0 auto;text-align:center">'
+            f'<h1 style="font-size:22px;margin:8px 0">💳 {escape(CP.fmt(p["amount"], p["currency"]))}</h1>'
+            f'<p style="opacity:.8;margin:0 0 18px">{escape(p["description"] or "")}</p>')
+    btn = ("display:block;margin:10px 0;padding:14px;border-radius:12px;font-weight:800;text-decoration:none;"
+           "background:#fff;color:#0b1020")
+    if cfg["entity_mada"] and brand not in ("mada", "card"):
+        html = head + (f'<a style="{btn}" href="?b=mada">مدى</a>'
+                       f'<a style="{btn}" href="?b=card">Visa / Mastercard</a></div></body></html>')
+        resp = Response(html, mimetype="text/html")
+    else:
+        mada = brand == "mada"
+        entity = cfg["entity_mada"] if mada else cfg["entity"]
+        brands = "MADA" if mada else ("VISA MASTER" if cfg["entity_mada"] else "VISA MASTER MADA")
+        name = (db.get_conversation(p["bot_id"], p["peer"]) or {}).get("name") or ""
+        try:
+            checkout = PGW.hp_checkout(cfg["secret"], entity, amount=p["amount"], currency=p["currency"],
+                                       ref=p["gw_id"], test=cfg["test"], customer_name=name)
+        except PGW.GatewayError as e:
+            log.info("hyperpay checkout failed pid=%s: %s", pid, e)
+            return Response(head + '<p>تعذّر فتح صفحة الدفع الآن — أعد المحاولة بعد قليل.</p></div></body></html>',
+                            mimetype="text/html", status=502)
+        host = PGW.HYPERPAY[bool(cfg["test"])]
+        html = (head + '<script>var wpwlOptions={locale:"ar",style:"card"};</script>'
+                f'<script src="{escape(PGW.hp_widget(checkout, cfg["test"]))}"></script>'
+                f'<form action="{escape(CP.return_url(pid))}" class="paymentWidgets" data-brands="{brands}"></form>'
+                '<p style="opacity:.6;font-size:12px;margin-top:16px">الدفع عبر HyperPay — لا نرى بيانات بطاقتك.</p>'
+                '</div></body></html>')
+        resp = Response(html, mimetype="text/html")
+        # سياسة هذه الصفحة وحدها: سكربت HyperPay وإطاراته (تتطلّب inline/eval حسب توثيقهم) — لا شيء غيرها
+        resp.headers["Content-Security-Policy"] = (
+            f"default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' {host}; style-src 'unsafe-inline' {host}; "
+            f"img-src {host} data:; frame-src {host}; connect-src {host}; font-src {host} data:; "
+            f"form-action 'self' {host}; base-uri 'none'")
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
+@app.route("/api/growth/capi", methods=["POST"])
+@require_crm(manage=True)
+def api_growth_capi():
+    """Conversions API لقناة واتساب: Dataset ID ورمز الوصول (سرّ لا يعود للمتصفح) و«العميل المحتمل» تلقائياً."""
+    d = _json_body()
+    b = _owned(_int_or_none(d.get("bot")) or 0)
+    if (b.get("channel") or "") != "whatsapp":
+        return _crm_err("channel")
+    ds = str(d.get("dataset") or "").strip()
+    if ds and not _re.fullmatch(r"\d{5,30}", ds):
+        return _crm_err("dataset")
+    cfg = json.loads(b.get("config_json") or "{}")
+    tok = str(d.get("token") or "").strip()
+    if tok:
+        if not _re.fullmatch(r"[A-Za-z0-9_\-|.]{20,600}", tok):
+            return _crm_err("token")
+        cfg["capi_token"] = tok
+    if ds:
+        cfg["capi_dataset"] = ds
+    else:
+        cfg.pop("capi_dataset", None); cfg.pop("capi_token", None)      # مسح الإعداد
+    cfg["capi_lead"] = bool(d.get("lead")) and bool(ds)
+    db.update_bot_config(b["id"], cfg)                  # الإعداد الكامل — update_bot_config يستبدل
+    return jsonify({"ok": True, "bots": _growth_bots()})
+
+
+def _clean_inbox_cfg(raw):
+    """إعداد القناة في الصندوق المشترك: ساعات عمل الفريق + رسالة خارج الدوام + الإغلاق الآلي (ساعات)."""
+    raw = raw or {}
+    out = {"away_text": str(raw.get("away_text") or "").strip()[:1024], "hours": None}
+    try:
+        out["auto_resolve"] = max(0, min(24 * 30, int(raw.get("auto_resolve") or 0)))
+        h = raw.get("hours")
+        if h:
+            out["hours"] = {"start": max(0, min(23, int(h.get("start", 9)))), "end": max(1, min(24, int(h.get("end", 17)))),
+                            "tz": max(-12.0, min(14.0, float(h.get("tz", 3)))),
+                            "days": sorted({int(x) for x in (h.get("days") or []) if str(x).isdigit() and 0 <= int(x) <= 6})}
+            if out["hours"]["end"] <= out["hours"]["start"] or not out["hours"]["days"]:
+                raise ValueError("hours")
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError("hours")
+    if out["hours"] and not out["away_text"]:
+        raise ValueError("away_text")
+    return out
+
+
+@app.route("/api/inbox/settings", methods=["POST"])
+@require_crm(manage=True)
+def api_hub_settings():
+    """رؤية الموظفين (الكل / ما يخصّهم) · فريق التحويل الافتراضي لكل قناة."""
+    d = _json_body()
+    if d.get("scope") in ("all", "own"):
+        db.set_setting(acct(), "inbox_scope", d["scope"])
+    for bid, raw in (d.get("channels") or {}).items():
+        b = _owned(_int_or_none(bid) or 0)
+        try:
+            ic = _clean_inbox_cfg(raw)
+        except ValueError as e:
+            return _crm_err(str(e))
+        cfg = json.loads(b.get("config_json") or "{}")
+        empty = not (ic["hours"] or ic["auto_resolve"] or ic["away_text"])
+        if cfg.get("inbox") != ic and not (empty and not cfg.get("inbox")):   # لا كتابة لإعداد لم يتغيّر فعلاً
+            cfg["inbox"] = ic
+            db.update_bot_config(b["id"], cfg)          # الإعداد الكامل — update_bot_config يستبدل
+    for bid, team in (d.get("routes") or {}).items():
+        b = _owned(_int_or_none(bid) or 0)
+        team = _int_or_none(team)
+        if team and not db.get_inbox_team(acct(), team):
+            return _crm_err("team")
+        cfg = json.loads(b.get("config_json") or "{}")
+        if (cfg.get("route_team") or None) != team:
+            if team:
+                cfg["route_team"] = team
+            else:
+                cfg.pop("route_team", None)
+            db.update_bot_config(b["id"], cfg)          # الإعداد الكامل — update_bot_config يستبدل
+    return jsonify({"ok": True})
+
+
+# ════════════════════════ التكاملات — المرحلة 9 (AGENTS §68) ════════════════════════
+import integrations as INTEG    # noqa: E402
+import threading                # noqa: E402
+
+
+def _integ_spawn(coro):
+    """الإرسال في حلقة البوتات بلا انتظار — المتجر يأخذ 200 فوراً (مهلته قصيرة ويعيد المحاولة)."""
+    if manager._loop is not None and manager._loop.is_running():
+        asyncio.run_coroutine_threadsafe(coro, manager._loop)
+    else:
+        threading.Thread(target=asyncio.run, args=(coro,), daemon=True).start()
+
+
+INTEG.HOOKS.update(channel=manager._flow_channel, spawn=_integ_spawn, gate=_owner_crm)
+
+
+def _integ_public(i):
+    """ما يصل المتصفح: بلا السرّ المختوم أبداً — `has_secret` فقط."""
+    base = mailer.site_base() or request.host_url.rstrip("/")
+    return {"id": i["id"], "provider": i["provider"], "name": i["name"], "bot_id": i["bot_id"],
+            "bot_name": i.get("bot_name", ""), "cc": i["cc"], "rules": i["rules"], "active": bool(i["active"]),
+            "has_secret": i["has_secret"], "last_at": i.get("last_at"),
+            "url": "" if i["provider"] in ("fb_leads", "sheets") else f"{base}/in/{i['key']}",
+            "sheet_url": i.get("ext_id") or "" if i["provider"] == "sheets" else "",
+            "headers": (i.get("meta") or {}).get("headers") or [], "phone_col": (i.get("meta") or {}).get("phone_col") or "",
+            "rows_seen": i.get("cursor") or 0,
+            "page_id": i.get("ext_id") or "", "page_name": i.get("ext_name") or "", "has_token": i["has_token"],
+            "n30": i.get("n30", 0), "ok30": i.get("ok30", 0)}
+
+
+def _integ_page(d):
+    """Facebook Lead Ads: Page ID + أي توكن ⇒ (ربط الصفحة، None) أو (None, رد خطأ). رسالة Meta تُعرض
+    كما هي (بلا توكنات — PagesError لا يحملها) لأن سبب الرفض غالباً إذن leads_retrieval."""
+    import meta_pages as MP
+    try:
+        return MP.leads_connect(d.get("page_id"), d.get("token"), WAS.app_id(), _meta_secret()), None
+    except MP.PagesError as e:
+        return None, (jsonify({"ok": False, "error": f"page_{e.step}", "message": str(e)[:300]}), 400)
+    except Exception:
+        log.exception("lead ads page connect failed")
+        return None, _crm_err("network", 502)
+
+
+def _integ_list():
+    return [_integ_public(i) for i in db.list_integrations(acct())]
+
+
+def _integ_fields(d):
+    """الاسم والقناة ومفتاح الدولة من الطلب — أو رمز خطأ."""
+    name = str(d.get("name") or "").strip()[:60]
+    if not name:
+        return None, "name"
+    bot = _acct_wa_bot(d.get("bot"))
+    if not bot:
+        return None, "bot"
+    cc = str(d.get("cc") or "+966").strip()
+    if not _re.fullmatch(r"\+[1-9]\d{0,3}", cc):
+        return None, "cc"
+    secret = str(d.get("secret") or "").strip()
+    if len(secret) > 300:
+        return None, "secret"
+    return {"name": name, "bot": bot, "cc": cc, "secret": secret}, None
+
+
+@app.route("/integrations")
+@require_crm()
+def integrations_page():
+    owner = acct()
+    return react_page("integrations", "integ_title", {
+        "items": _integ_list(), "providers": list(INTEG.PROVIDERS), "storeEvents": list(INTEG.STORE_EVENTS),
+        "storeVars": list(INTEG.STORE_VARS),
+        "bots": [{"id": b["id"], "name": b["name"]} for b in _acct_wa_bots()],
+        "sequences": [{"id": s["id"], "name": s["name"], "bot_id": s["bot_id"]} for s in db.list_sequences(owner)],
+        "canManage": _crm_admin(), "crm": CSYNC.public_config(owner), "zohoDc": list(CSYNC.ZOHO_DC),
+    })
+
+
+@app.route("/api/integrations", methods=["POST"])
+@require_crm(manage=True)
+def api_integ_create():
+    d = _json_body()
+    provider = d.get("provider")
+    if provider not in INTEG.PROVIDERS:
+        return _crm_err("provider")
+    if len(db.list_integrations(acct())) >= 20:
+        return _crm_err("limit")
+    f, err = _integ_fields(d)
+    if err:
+        return _crm_err(err)
+    page = sheet = None
+    if provider == "fb_leads":
+        page, resp = _integ_page(d)
+        if resp:
+            return resp
+    if provider == "sheets":
+        # الرابط يُفحص قبل الإنشاء: جدول غير مشترك = خطأ واضح لا تكامل نصف مربوط
+        link = str(d.get("sheet_url") or "").strip()[:500]
+        try:
+            heads, rows = INTEG.fetch_sheet(link)
+        except INTEG.Invalid:
+            return _crm_err("sheet")
+        sheet = (link, heads, len(rows))
+    iid = db.create_integration(acct(), provider, f["name"], f["bot"]["id"], INTEG.new_key(),
+                                None if provider == "fb_leads" else (f["secret"] or None), f["cc"], [])
+    if page:
+        db.set_integration_page(acct(), iid, str(d.get("page_id")).strip(), page["name"], page["page_token"])
+    if sheet:                                            # الصفوف الموجودة لا تُراسَل — المؤشّر من آخرها
+        db.set_integration_sheet(iid, link=sheet[0], cursor=sheet[2], checked_at=int(_time.time()),
+                                 meta={"headers": sheet[1], "phone_col": INTEG._col(d.get("phone_col") or "")})
+    return jsonify({"ok": True, "id": iid, "items": _integ_list()})
+
+
+@app.route("/api/integrations/<int:iid>/save", methods=["POST"])
+@require_crm(manage=True)
+def api_integ_save(iid):
+    i = db.get_integration(iid, acct())
+    if not i:
+        abort(404)
+    d = _json_body()
+    f, err = _integ_fields(d)
+    if err:
+        return _crm_err(err)
+    if i["provider"] == "fb_leads" and str(d.get("token") or "").strip():
+        page, resp = _integ_page(dict(d, page_id=d.get("page_id") or i.get("ext_id")))   # إعادة ربط بتوكن جديد
+        if resp:
+            return resp
+        db.set_integration_page(acct(), iid, str(d.get("page_id") or i.get("ext_id")).strip(), page["name"], page["page_token"])
+    if i["provider"] in ("fb_leads", "sheets"):
+        f["secret"] = ""                                 # لا سرّ توقيع هنا — ويبهوك Meta موقَّع / استطلاع منّا
+    if i["provider"] == "sheets":
+        link = str(d.get("sheet_url") or "").strip()[:500]
+        meta = dict(i.get("meta") or {}, phone_col=INTEG._col(d.get("phone_col") or ""))
+        if link and link != i.get("ext_id"):             # جدول آخر ⇒ مؤشّر جديد من آخر صفوفه
+            try:
+                heads, rows = INTEG.fetch_sheet(link)
+            except INTEG.Invalid:
+                return _crm_err("sheet")
+            meta["headers"] = heads
+            db.set_integration_sheet(iid, link=link, cursor=len(rows), checked_at=int(_time.time()), meta=meta)
+        else:
+            db.set_integration_sheet(iid, meta=meta)
+    seqs = {s["id"] for s in db.list_sequences(acct(), f["bot"]["id"])}
+    try:
+        rules = INTEG.clean_rules(d.get("rules") or [], i["provider"], seqs)
+    except INTEG.Invalid as e:
+        return _crm_err(f"rule:{e}")
+    db.update_integration(acct(), iid, f["name"], f["bot"]["id"], f["cc"], rules, d.get("active", True),
+                          secret=f["secret"] or None, clear_secret=bool(d.get("clear_secret")))
+    return jsonify({"ok": True, "items": _integ_list()})
+
+
+@app.route("/api/integrations/<int:iid>/delete", methods=["POST"])
+@require_crm(manage=True)
+def api_integ_delete(iid):
+    if not db.delete_integration(acct(), iid):
+        abort(404)
+    return jsonify({"ok": True, "items": _integ_list()})
+
+
+@app.route("/api/integrations/<int:iid>/rotate", methods=["POST"])
+@require_crm(manage=True)
+def api_integ_rotate(iid):
+    """رابط جديد (لو تسرّب القديم) — القديم يتوقّف فوراً."""
+    if not db.get_integration(iid, acct()):
+        abort(404)
+    with db.get_conn() as c:
+        c.execute("UPDATE integrations SET key=? WHERE id=? AND owner_id=?", (INTEG.new_key(), iid, acct()))
+    return jsonify({"ok": True, "items": _integ_list()})
+
+
+@app.route("/api/integrations/<int:iid>/events")
+@require_crm()
+def api_integ_events(iid):
+    if not db.get_integration(iid, acct()):
+        abort(404)
+    return jsonify({"ok": True, "events": db.list_integration_events(acct(), iid)})
+
+
+@app.route("/in/<key>", methods=["POST"])
+def integ_inbound(key):
+    """حدث من متجر/نظام: المسار السرّي يحدّد التكامل، والتوقيع يتحقّق منه `INTEG.receive`.
+    المفتاح المجهول 404 (لا نكشف شيئاً)، والتوقيع الخاطئ 401 — ليرى صاحب المتجر الخطأ في سجلّه."""
+    if not _re.fullmatch(r"[0-9a-f]{32}", key or ""):
+        abort(404)
+    if _rate_limited(key, limit=300, window=60, bucket="integ_in"):
+        return jsonify({"ok": False, "error": "rate"}), 429
+    i = db.get_integration(key=key)
+    if not i or not _owner_crm(i["owner_id"]):
+        abort(404)
+    status, _ = INTEG.receive(i, dict(request.headers), request.get_data(cache=False)[:1_000_000])
+    if status == "bad_signature":
+        return jsonify({"ok": False, "error": "signature"}), 401
+    return jsonify({"ok": True, "status": status})
+
+
+# ════════════════════════ مزامنة HubSpot / Zoho — المرحلة 9 (AGENTS §70) ════════════════════════
+import crm_sync as CSYNC        # noqa: E402
+
+CSYNC.HOOKS.update(gate=_owner_crm)
+
+
+@app.route("/api/crm-sync/settings", methods=["POST"])
+@require_crm(manage=True)
+def api_crm_sync_settings():
+    """الأسرار تُكتب ولا تُقرأ: فارغ = إبقاء المحفوظ. أول حفظ لمزوّد يتحقّق من المفتاح فعلاً قبل التفعيل."""
+    d = _json_body()
+    if d.get("clear"):
+        CSYNC.clear_config(acct())
+        return jsonify({"ok": True, "config": CSYNC.public_config(acct())})
+    provider = d.get("provider")
+    if provider not in CSYNC.PROVIDERS:
+        return _crm_err("provider")
+    token = str(d.get("token") or "").strip()
+    cid, csec, rtok = (str(d.get(k) or "").strip() for k in ("client_id", "client_secret", "refresh_token"))
+    if any(len(x) > 500 for x in (token, cid, csec, rtok)):
+        return _crm_err("secret")
+    if provider == "hubspot" and token and not _re.fullmatch(r"pat-[a-z0-9]{2,4}-[A-Za-z0-9\-]{20,}", token):
+        return _crm_err("token")                        # توكن Private App في HubSpot يبدأ بـ pat-
+    old = CSYNC.public_config(acct())
+    fresh = old["provider"] != provider or not old["connected"]
+    if fresh and ((provider == "hubspot" and not token) or (provider == "zoho" and not (cid and csec and rtok))):
+        return _crm_err("secret")
+    dc = str(d.get("dc") or "com")
+    if dc not in CSYNC.ZOHO_DC:
+        return _crm_err("dc")
+    CSYNC.save_config(acct(), provider, token=token or None, client_id=cid or None, client_secret=csec or None,
+                      refresh_token=rtok or None, dc=dc, enabled=d.get("enabled", True) is not False,
+                      notes=d.get("notes", True) is not False, two_way=d.get("two_way") is True)
+    if token or rtok:
+        try:
+            CSYNC.test(acct())
+        except CSYNC.SyncError as e:
+            CSYNC._update_state(acct(), enabled=False, last_error=str(e))   # لا مزامنة بمفتاح لم يثبت
+            return jsonify({"ok": False, "error": f"crm_{e}", "config": CSYNC.public_config(acct())}), 400
+    return jsonify({"ok": True, "config": CSYNC.public_config(acct())})
+
+
+@app.route("/api/crm-sync/now", methods=["POST"])
+@require_crm(manage=True)
+def api_crm_sync_now():
+    if _rate_limited(f"u{acct()}:crmsync", limit=6, window=600, bucket="crm_sync"):
+        return _crm_err("rate", 429)
+    contacts, notes = CSYNC.sync_owner(acct())
+    return jsonify({"ok": True, "contacts": contacts, "notes": notes, "config": CSYNC.public_config(acct())})
+
+
+# ════════════════════════ مكالمات واتساب — المرحلة 8 (AGENTS §71) ════════════════════════
+import calling as CALLS         # noqa: E402
+
+CALLS.HOOKS.update(send=lambda bot, peer, text: manager.send_to_peer(bot["id"], peer, text=text))
+
+
+def _call_of(call_id):
+    """مكالمة في حساب الموظف ومحادثة يراها — وإلا 404."""
+    c = db.get_call(str(call_id or ""))
+    b = db.get_bot(c["bot_id"]) if c else None
+    if not c or not b or b["owner_id"] != acct():
+        abort(404)
+    _inbox_guard(b["id"], c["peer"])
+    return dict(b), c
+
+
+def _call_err(e):
+    code = str(e)
+    return jsonify({"ok": False, "error": code if code in ("taken", "sdp", "channel", "permission", "busy") else "meta",
+                    "message": code[:200]}), 400
+
+
+@app.route("/api/calls/ringing")
+@require_crm()
+def api_calls_ringing():
+    """استطلاع الصندوق المشترك: ما يرنّ الآن (بعرض SDP لمن يملك الرد) ومكالمة الموظف الجارية."""
+    own, teams = _inbox_scope()
+    can = _can_reply()
+    out = []
+    for c in db.ringing_calls(acct(), int(_time.time()) - CALLS.RING_SECONDS):
+        if not db.conv_visible(c["bot_id"], c["peer"], uid(), own, teams):
+            continue
+        if c["status"] in ("answered", "dialing") and c["agent_id"] != uid():
+            continue
+        out.append({"id": c["call_id"], "bot_id": c["bot_id"], "bot_name": c["bot_name"], "peer": c["peer"],
+                    "name": c["name"], "status": c["status"], "since": c["created_at"], "dir": c.get("direction") or "in",
+                    "sdp": c["sdp"] if (can and c["status"] == "ringing") else "",
+                    "answer": c.get("answer_sdp") or "" if c.get("direction") == "out" else ""})
+    return jsonify({"ok": True, "calls": out})
+
+
+@app.route("/api/calls/permission")
+@require_crm()
+def api_call_permission():
+    b, peer = _hub_conv(request.args.get("bot"), request.args.get("peer"))
+    enabled = bool((json.loads(b.get("config_json") or "{}").get("calls") or {}).get("enabled"))
+    return jsonify({"ok": True, "enabled": enabled and peer.startswith("wa:"),
+                    "status": CALLS.permission(b["id"], peer) if peer.startswith("wa:") else "none"})
+
+
+@app.route("/api/calls/permission", methods=["POST"])
+@require_crm()
+def api_call_permission_request():
+    """زر «طلب إذن الاتصال»: رسالة تفاعلية — داخل نافذة الـ24 ساعة فقط، وبحدّ لكل موظف."""
+    d = _json_body()
+    b, peer = _hub_conv(d.get("bot"), d.get("peer"), write=True)
+    if not _can_reply():
+        return _crm_err("readonly", 403)
+    if not peer.startswith("wa:"):
+        return _crm_err("channel")
+    if int(_time.time()) - db.peer_last_in(b["id"], peer) > WA_WINDOW:
+        return _crm_err("window")
+    if _rate_limited(f"u{uid()}:callperm", limit=20, window=600, bucket="call_perm"):
+        return _crm_err("rate", 429)
+    try:
+        CALLS.request_permission(dict(b), peer, str(d.get("text") or "").strip()[:500])
+    except CALLS.CallError as e:
+        return _call_err(e)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/calls/start", methods=["POST"])
+@require_crm()
+def api_call_start():
+    d = _json_body()
+    b, peer = _hub_conv(d.get("bot"), d.get("peer"), write=True)
+    if not _can_reply():
+        return _crm_err("readonly", 403)
+    if not peer.startswith("wa:"):
+        return _crm_err("channel")
+    if _rate_limited(f"u{uid()}:dial", limit=30, window=600, bucket="call_dial"):
+        return _crm_err("rate", 429)
+    try:
+        cid = CALLS.dial(dict(b), peer, uid(), d.get("sdp"))
+    except CALLS.CallError as e:
+        code = str(e)
+        if code in ("permission", "busy"):
+            return jsonify({"ok": False, "error": code}), 400
+        return _call_err(e)
+    return jsonify({"ok": True, "id": cid})
+
+
+@app.route("/api/calls/<call_id>/answer", methods=["POST"])
+@require_crm()
+def api_call_answer(call_id):
+    b, c = _call_of(call_id)
+    if not _can_reply():
+        return _crm_err("readonly", 403)
+    try:
+        CALLS.answer(b, c, uid(), _json_body().get("sdp"))
+    except CALLS.CallError as e:
+        return _call_err(e)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/calls/<call_id>/reject", methods=["POST"])
+@require_crm()
+def api_call_reject(call_id):
+    b, c = _call_of(call_id)
+    if not _can_reply():
+        return _crm_err("readonly", 403)
+    try:
+        CALLS.reject(b, c)
+    except CALLS.CallError as e:
+        return _call_err(e)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/calls/<call_id>/hangup", methods=["POST"])
+@require_crm()
+def api_call_hangup(call_id):
+    b, c = _call_of(call_id)
+    if c["agent_id"] != uid() and not _crm_admin():
+        return _crm_err("role", 403)
+    try:
+        CALLS.hangup(b, c)
+    except CALLS.CallError as e:
+        return _call_err(e)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/calls/settings", methods=["POST"])
+@require_crm(manage=True)
+def api_call_settings():
+    """زر الاتصال على الرقم (عند Meta) + رسالة المكالمة الفائتة (عندنا)."""
+    d = _json_body()
+    b = _acct_wa_bot(d.get("bot"))
+    if not b:
+        return _crm_err("bot")
+    enabled = d.get("enabled") is True
+    text = str(d.get("missed_text") or "").strip()[:500]
+    try:
+        CALLS.set_enabled(dict(b), enabled)
+    except CALLS.CallError as e:
+        return _call_err(e)
+    cfg = json.loads(b.get("config_json") or "{}")
+    cfg["calls"] = {"enabled": enabled, "missed_text": text}
+    db.update_bot_config(b["id"], cfg)                  # الإعداد الكامل — update_bot_config يستبدل
+    return jsonify({"ok": True, "calls": cfg["calls"]})
+
+
+# ════════════════════════ أتمتة التعليقات — المرحلة 8 (AGENTS §69) ════════════════════════
+import comments as CMT          # noqa: E402
+
+
+def _social_bots():
+    """قنوات ماسنجر/إنستجرام للحساب مع قواعد تعليقاتها وإحصاءاتها — بلا توكن الصفحة."""
+    out = []
+    for b in db.list_bots(acct()):
+        if (b.get("channel") or "") not in ("messenger", "instagram"):
+            continue
+        cfg = json.loads(b.get("config_json") or "{}")
+        ca = cfg.get(CMT.CFG_KEY) or {"enabled": False, "rules": []}
+        out.append({"id": b["id"], "name": b["name"], "channel": b["channel"], "config": ca,
+                    "stats": CMT.stats(b["id"]), "connected": bool(cfg.get("page_token"))})
+    return out
+
+
+@app.route("/api/comments/<int:bot_id>/save", methods=["POST"])
+@require_crm(manage=True)
+def api_comments_save(bot_id):
+    b = _owned(bot_id)
+    if (b.get("channel") or "") not in ("messenger", "instagram"):
+        return _crm_err("bot")
+    try:
+        ca = CMT.clean(_json_body())
+    except CMT.Invalid as e:
+        return _crm_err(f"rule:{e}")
+    cfg = json.loads(b.get("config_json") or "{}")
+    cfg[CMT.CFG_KEY] = ca
+    db.update_bot_config(b["id"], cfg)                  # الإعداد الكامل — update_bot_config يستبدل
+    return jsonify({"ok": True, "bots": _social_bots()})
+
+
+@app.route("/api/comments/<int:bot_id>/recent")
+@require_crm()
+def api_comments_recent(bot_id):
+    _owned(bot_id)
+    return jsonify({"ok": True, "items": db.comment_recent(bot_id)})
 
 
 if __name__ == "__main__":

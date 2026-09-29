@@ -29,8 +29,8 @@ export default function Wallet() {
   };
   const CopyRow = ({ v, k }) => (
     <div className="mt-2 flex items-center gap-2">
-      <code className="flex-1 overflow-x-auto rounded-lg bg-black/30 px-3 py-2 text-[13px] text-au-cyan
-                       shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">{v}</code>
+      <code className="flex-1 overflow-x-auto rounded-lg bg-sink/30 px-3 py-2 text-[13px] text-au-cyan
+                       shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">{v}</code>
       <Btn variant="ghost" sm type="button" onClick={() => copy(v, k)} aria-label={t("copy")}>
         <Icon name={copied === k ? "check" : "copy"} size={13} />
       </Btn>
@@ -69,13 +69,13 @@ export default function Wallet() {
         <SectionTitle icon="plus">{t("wallet_topup")}</SectionTitle>
 
         <div className="mb-5 grid gap-4 lg:grid-cols-3">
-          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+          <div className="rounded-2xl bg-ov/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
             <div className="flex items-center gap-2 font-extrabold text-[#FF6B6B]">
               <Icon name="phone" size={16} />{t("pay_vodafone")}
             </div>
             <CopyRow v={plat.vodafone_number} k="vf" />
           </div>
-          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+          <div className="rounded-2xl bg-ov/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
             <div className="flex items-center gap-2 font-extrabold text-au-violet">
               <Icon name="card" size={16} />{t("pay_instapay")}
             </div>
@@ -83,7 +83,7 @@ export default function Wallet() {
                         className="mx-auto my-3 w-[112px] rounded-xl bg-white p-1" />}
             <CopyRow v={plat.instapay_handle} k="ip" />
           </div>
-          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+          <div className="rounded-2xl bg-ov/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
             <div className="flex items-center gap-2 font-extrabold text-au-cyan">
               <Icon name="bank" size={16} />{t("pay_bank")}
             </div>
@@ -99,7 +99,7 @@ export default function Wallet() {
                       className={"rounded-full px-4 py-1.5 text-[13px] font-extrabold transition-colors " +
                         (Number(amount) === v
                           ? "bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] text-[#07090F]"
-                          : "bg-white/[0.06] text-ink-2 hover:text-ink")}>
+                          : "bg-ov/[0.06] text-ink-2 hover:text-ink")}>
                 {num(v)} {t("egp")}
               </button>
             ))}
@@ -122,8 +122,8 @@ export default function Wallet() {
           <div className="mt-4">
             <Field label={t("pay_upload")}>
               <input type="file" name="screenshot" accept="image/*" required
-                     className="w-full cursor-pointer rounded-xl bg-black/25 p-2.5 text-[13px] text-ink-3
-                                shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
+                     className="w-full cursor-pointer rounded-xl bg-sink/25 p-2.5 text-[13px] text-ink-3
+                                shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
                                 file:me-3 file:rounded-lg file:border-0 file:bg-au-violet/25
                                 file:px-3 file:py-1.5 file:text-[13px] file:font-bold file:text-white" />
             </Field>

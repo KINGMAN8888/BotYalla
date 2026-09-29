@@ -776,6 +776,18 @@ def init_db():
         _activation_tables(c)
         _team_tables(c)
         _crm_tables(c)
+        _msg_status_tables(c)
+        _campaign_tables(c)
+        _flow_tables(c)
+        _inbox_tables(c)
+        _sequence_tables(c)
+        _growth_tables(c)
+        _widget_tables(c)
+        _chat_pay_tables(c)
+        _integration_tables(c)
+        _comment_tables(c)
+        _crm_sync_tables(c)
+        _call_tables(c)
 
 def _hot_indexes(c):
     """فهارس الاستعلامات الساخنة. EXPLAIN QUERY PLAN كان يُظهر مسحاً كاملاً لـ events و
@@ -1432,6 +1444,7 @@ def set_opt_out(bot_id, peer, out=True):
                   " WHERE bot_id=? AND peer=?", (1 if out else 0, 1 if out else 0, bot_id, peer))
     if out:                                     # الإيقاف يسقط موافقة الجهة؛ الاستئناف لا يمنحها
         set_contact_optin_by_peer(bot_id, peer, 0)
+        stop_enrollments_for_peer(bot_id, peer, "opted_out")   # ولا تصله خطوة تسلسل بعده أبداً
 
 def set_optin(bot_id, peer, yes=True):
     """موافقة العميل الصريحة على استقبال العروض (أو سحبها)."""
@@ -2926,9 +2939,10 @@ def finish_managed_request(req_id, status, bot_id=None, error=None):
 # ============================================================================
 MSG_TEXT_MAX = 4000
 
-def log_message(bot_id, peer, direction, sender, text="", kind="text", media_id=None, name=None):
+def log_message(bot_id, peer, direction, sender, text="", kind="text", media_id=None, name=None, user_id=None):
     """يسجّل رسالة ويحدّث ملخّص المحادثة في معاملة واحدة.
-    الوارد يزيد عدّاد غير المقروء؛ ردّ صاحب النشاط يصفّره."""
+    الوارد يزيد عدّاد غير المقروء؛ ردّ صاحب النشاط يصفّره. رسالة واردة لمحادثة مغلقة تعيد فتحها.
+    `user_id`: الموظف صاحب الرد اليدوي (الصندوق المشترك)."""
     # حماية: peer فاسد (مثل "wa:" بلا رقم) يُفسد صندوق الوارد كله (404 عند فتحه)
     # عميل واتساب برقم مخفي (wa:EG.1349…) هوية صحيحة — رفضه كان يُخفي محادثته كلها
     parts = (peer or "").split(":", 1)
@@ -2939,9 +2953,9 @@ def log_message(bot_id, peer, direction, sender, text="", kind="text", media_id=
     now = int(time.time())
     text = (text or "")[:MSG_TEXT_MAX]
     with get_conn() as c:
-        c.execute("INSERT INTO messages(bot_id,peer,direction,sender,kind,text,media_id,created_at)"
-                  " VALUES(?,?,?,?,?,?,?,?)",
-                  (bot_id, peer, direction, sender, kind, text, media_id, now))
+        c.execute("INSERT INTO messages(bot_id,peer,direction,sender,kind,text,media_id,created_at,user_id)"
+                  " VALUES(?,?,?,?,?,?,?,?,?)",
+                  (bot_id, peer, direction, sender, kind, text, media_id, now, user_id))
         preview = text[:140] if text else ("📎" if kind == "media" else "")
         c.execute("INSERT INTO conversations(bot_id,peer,name,unread,last_text,last_at)"
                   " VALUES(?,?,?,?,?,?)"
@@ -2949,9 +2963,11 @@ def log_message(bot_id, peer, direction, sender, text="", kind="text", media_id=
                   " name=COALESCE(NULLIF(excluded.name,''), conversations.name),"
                   " unread=CASE WHEN ?='in' THEN conversations.unread+1"
                   "             WHEN ?='human' THEN 0 ELSE conversations.unread END,"
+                  " status=CASE WHEN ?='in' AND conversations.status='resolved' THEN 'open'"
+                  "             ELSE conversations.status END,"
                   " last_text=excluded.last_text, last_at=excluded.last_at",
                   (bot_id, peer, name or "", 1 if direction == "in" else 0, preview, now,
-                   direction, sender))
+                   direction, sender, direction))
 
 
 def get_conversation(bot_id, peer):
@@ -2988,8 +3004,9 @@ def list_messages(bot_id, peer, after_id=0, limit=300):
 def recent_history(bot_id, peer, limit=12):
     """آخر N رسالة نصية للمحادثة — ذاكرة الذكاء الاصطناعي."""
     with get_conn() as c:
+        # الملاحظات الداخلية (direction='note') لا تدخل ذاكرة الذكاء الاصطناعي أبداً — قد تحوي ما لا يُقال للعميل
         rows = c.execute("SELECT direction, sender, text FROM messages WHERE bot_id=? AND peer=? "
-                         "AND text<>'' ORDER BY id DESC LIMIT ?", (bot_id, peer, limit)).fetchall()
+                         "AND text<>'' AND direction<>'note' ORDER BY id DESC LIMIT ?", (bot_id, peer, limit)).fetchall()
         return [dict(r) for r in reversed(rows)]
 
 
@@ -3840,7 +3857,7 @@ def report_expiring(days=7):
 # ---------- تحليل الرسائل (conv_insights.py) ----------
 def conv_totals(a, b, bot_id=None):
     """أعداد الرسائل في الفترة مقسّمة كما يحتاجها التحليل (مرسِل · نوع · ساعة)."""
-    where = "created_at>=? AND created_at<?" + (" AND bot_id=?" if bot_id else "")
+    where = "created_at>=? AND created_at<? AND direction<>'note'" + (" AND bot_id=?" if bot_id else "")
     p = (a, b) + ((int(bot_id),) if bot_id else ())
     with get_conn() as c:
         rows = lambda q: [dict(r) for r in c.execute(q, p).fetchall()]
@@ -3867,7 +3884,7 @@ def conv_rows(a, b, bot_id=None, limit=CONV_ROWS_MAX):
 
     السقف مقصود: التحليل يمرّ على كل صف في الذاكرة، وعملية الويب نفسها تشغّل
     البوتات (`workers=1`). ما تجاوز السقف يُعلَن في التقرير بدل أن يُسقَط بصمت."""
-    where = "m.created_at>=? AND m.created_at<?" + (" AND m.bot_id=?" if bot_id else "")
+    where = "m.created_at>=? AND m.created_at<? AND m.direction<>'note'" + (" AND m.bot_id=?" if bot_id else "")
     p = (a, b) + ((int(bot_id),) if bot_id else ()) + (int(limit),)
     with get_conn() as c:
         rows = [dict(r) for r in c.execute(
@@ -4918,3 +4935,2112 @@ def save_segment(owner_id, name, rules, seg_id=None, by=None):
 def delete_segment(owner_id, seg_id):
     with get_conn() as c:
         return c.execute("DELETE FROM segments WHERE id=? AND owner_id=?", (seg_id, owner_id)).rowcount > 0
+
+
+# ─────────────────────────────  حالة رسائل واتساب الصادرة  ─────────────────────────────
+# المرحلة 2 من docs/ENTERPRISE_PLAN.md — المنطق في msg_status.py. صفّ لكل رسالة صادرة
+# بمعرّف Meta (`wamid`)، والويبهوك يرفع حالتها. الترتيب **لا يتراجع**: Meta قد ترسل «read»
+# قبل «delivered»، فالحالة ترتفع فقط (sent<delivered<read)، و«failed» لا يمحو «read».
+import msg_status as MS
+
+
+def _msg_status_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS wa_messages(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wamid TEXT UNIQUE,                  -- NULL لرسالة رفضتها Meta عند الإرسال (لا معرّف)
+            bot_id INTEGER,
+            phone_id TEXT,
+            peer TEXT,
+            kind TEXT,                          -- text | template | image | interactive | …
+            campaign_id INTEGER,                -- من msg_status.SEND_CTX عند الإرسال ضمن حملة
+            status TEXT NOT NULL DEFAULT 'sent',
+            error_code INTEGER,
+            error_title TEXT,
+            category TEXT,                      -- فئة التسعير من Meta (marketing · utility · service …)
+            billable INTEGER,
+            created_at INTEGER NOT NULL,
+            delivered_at INTEGER, read_at INTEGER, failed_at INTEGER,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_wa_msgs_bot ON wa_messages(bot_id, created_at);
+        CREATE INDEX IF NOT EXISTS ix_wa_msgs_campaign ON wa_messages(campaign_id) WHERE campaign_id IS NOT NULL;
+    """)
+
+
+def record_wa_send(bot_id, phone_id, peer, kind, wamid=None, error_code=None, error_title="", campaign_id=None):
+    """تسجيل رسالة صادرة. لا يرمي أبداً — فشل السجل لا يجوز أن يُفشل الإرسال نفسه."""
+    now = int(time.time())
+    try:
+        code = int(error_code) if error_code is not None else None
+    except (TypeError, ValueError):
+        code = None
+    try:
+        with get_conn() as c:
+            c.execute("INSERT OR IGNORE INTO wa_messages(wamid,bot_id,phone_id,peer,kind,campaign_id,status,"
+                      "error_code,error_title,created_at,failed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                      (wamid, bot_id, str(phone_id or "")[:40], (peer or "")[:160], (kind or "")[:30], campaign_id,
+                       "sent" if wamid else "failed", code, (error_title or "")[:200] or None, now,
+                       None if wamid else now))
+    except Exception:
+        log.exception("record_wa_send failed bot=%s", bot_id)
+
+
+def apply_wa_statuses(updates):
+    """تحديثات من msg_status.parse_statuses. يعيد عدد الصفوف التي تغيّرت. معرّف لا نعرفه (رسالة
+    أرسلها الشريك مباشرةً عبر /api/v1، أو من قبل هذه الميزة) يُتجاهل بصمت."""
+    n = 0
+    with get_conn() as c:
+        for u in updates:
+            st, ts = u["status"], u["ts"]
+            if st == "failed":
+                try:
+                    code = int(u["code"]) if u.get("code") is not None else None
+                except (TypeError, ValueError):
+                    code = None
+                cur = c.execute("UPDATE wa_messages SET status='failed', failed_at=?, error_code=?, error_title=?,"
+                                " category=COALESCE(?,category) WHERE wamid=? AND status!='read'",
+                                (ts, code, u.get("title") or None, u.get("category"), u["wamid"]))
+            else:
+                rank = MS.RANK[st]
+                # «read» يعني «delivered» ضمناً: وقت التسليم يُملأ إن لم يصل حدثه بعد
+                cur = c.execute(
+                    "UPDATE wa_messages SET"
+                    " status=CASE WHEN status='failed' THEN status"
+                    "             WHEN (CASE status WHEN 'read' THEN 3 WHEN 'delivered' THEN 2 ELSE 1 END) < ? THEN ?"
+                    "             ELSE status END,"
+                    " delivered_at=CASE WHEN ?>=2 THEN COALESCE(delivered_at, ?) ELSE delivered_at END,"
+                    " read_at=CASE WHEN ?=3 THEN COALESCE(read_at, ?) ELSE read_at END,"
+                    " category=COALESCE(?,category), billable=COALESCE(?,billable)"
+                    " WHERE wamid=?",
+                    (rank, st, rank, ts, rank, ts, u.get("category"), u.get("billable"), u["wamid"]))
+            n += cur.rowcount
+    return n
+
+
+def wa_delivery_stats(bot_ids, since=0, campaign_id=None):
+    """{total, sent, delivered, read, failed, failures: {فئة: عدد}} لبوتات حساب أو حملة.
+    «delivered» تشمل ما قُرئ (القراءة تسليم ضمناً) — كقراءة المنافس للأرقام."""
+    if not bot_ids and campaign_id is None:
+        return {"total": 0, "sent": 0, "delivered": 0, "read": 0, "failed": 0, "failures": {}}
+    where, args = ["created_at>=?"], [since]
+    if campaign_id is not None:
+        where.append("campaign_id=?"); args.append(campaign_id)
+    if bot_ids:
+        where.append(f"bot_id IN ({','.join('?' * len(bot_ids))})"); args += list(bot_ids)
+    w = " AND ".join(where)
+    with get_conn() as c:
+        r = c.execute("SELECT COUNT(*) total,"
+                      " SUM(status IN ('sent','delivered','read')) sent,"
+                      " SUM(status IN ('delivered','read')) delivered,"
+                      " SUM(status='read') read, SUM(status='failed') failed"
+                      f" FROM wa_messages WHERE {w}", args).fetchone()
+        fails = {}
+        for row in c.execute(f"SELECT error_code, COUNT(*) n FROM wa_messages WHERE {w} AND status='failed'"
+                             " GROUP BY error_code", args):
+            b = MS.bucket(row["error_code"])
+            fails[b] = fails.get(b, 0) + row["n"]
+    out = {k: int(r[k] or 0) for k in ("total", "sent", "delivered", "read", "failed")}
+    out["failures"] = fails
+    return out
+
+
+def wa_failed_messages(bot_ids, limit=100):
+    """آخر الرسائل الفاشلة (للتقرير «WhatsApp Failed Messages»)."""
+    if not bot_ids:
+        return []
+    with get_conn() as c:
+        rows = c.execute(f"SELECT id, bot_id, peer, kind, error_code, error_title, created_at, failed_at"
+                         f" FROM wa_messages WHERE status='failed' AND bot_id IN ({','.join('?' * len(bot_ids))})"
+                         " ORDER BY id DESC LIMIT ?", (*bot_ids, int(limit))).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r); d["bucket"] = MS.bucket(d["error_code"]); out.append(d)
+    return out
+
+
+def purge_old_wa_messages(days=365):
+    with get_conn() as c:
+        return c.execute("DELETE FROM wa_messages WHERE created_at<?",
+                         (int(time.time()) - days * 86400,)).rowcount
+
+
+# ─────────────────────────────  البث 2.0: الحملات  ─────────────────────────────
+# المرحلة 3 — المنطق والمال في broadcasts.py. `campaign_recipients` لقطة ثابتة للجمهور عند
+# الإطلاق: هي القائمة التي حُسبت عليها التكلفة وهي نفسها المُرسَل إليها (§22)، وتربط كل مستلم
+# بـ`wamid` آخر محاولة فتُقرأ حالته من `wa_messages`.
+_CAMP_JSON = ("header_json", "vars_json", "audience_json")
+
+
+def _campaign_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS campaigns(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            template TEXT NOT NULL,
+            lang TEXT NOT NULL,
+            category TEXT,
+            header_json TEXT NOT NULL DEFAULT '{}',
+            vars_json TEXT NOT NULL DEFAULT '[]',
+            audience_json TEXT NOT NULL DEFAULT '{}',
+            policy_optin INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'draft',  -- draft|scheduled|running|done|cancelled|failed
+            error TEXT,
+            scheduled_at INTEGER, started_at INTEGER, finished_at INTEGER,
+            total INTEGER NOT NULL DEFAULT 0,
+            charged INTEGER NOT NULL DEFAULT 0,    -- قروش: المخصوم الصافي (بعد الردّ) لكل الجولات
+            refunded INTEGER NOT NULL DEFAULT 0,
+            price INTEGER NOT NULL DEFAULT 0,
+            retry_until INTEGER, next_retry_at INTEGER,
+            retries INTEGER NOT NULL DEFAULT 0,
+            assign_to INTEGER,
+            created_by INTEGER,
+            created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_campaigns_owner ON campaigns(owner_id, id);
+        CREATE INDEX IF NOT EXISTS ix_campaigns_due ON campaigns(status, scheduled_at);
+        CREATE TABLE IF NOT EXISTS campaign_recipients(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id INTEGER NOT NULL,
+            contact_id INTEGER,
+            peer TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',  -- pending|accepted|failed (قبول Meta عند الإرسال)
+            wamid TEXT,
+            error_code INTEGER,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER,
+            UNIQUE(campaign_id, peer),
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_camp_rcpt_wamid ON campaign_recipients(wamid);
+        -- ما لا تحفظه Meta من قوالبنا ونحتاجه عند الإرسال (دبّوس ترويسة LOCATION) — المرحلة 4
+        CREATE TABLE IF NOT EXISTS template_meta(
+            bot_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            lang TEXT NOT NULL,
+            data_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY(bot_id, name, lang),
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+    """)
+    # المرحلة 4: قيم الإرسال الإضافية (مواصفة القالب، كوبون، عدّاد، بطاقات، موقع). حارس لقواعد
+    # أنشأت الجدول في المرحلة 3 قبل العمود.
+    cols = {r[1] for r in c.execute("PRAGMA table_info(campaigns)")}
+    if "extra_json" not in cols:
+        c.execute("ALTER TABLE campaigns ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+
+
+def set_template_meta(bot_id, name, lang, data, by=None):
+    with get_conn() as c:
+        c.execute("INSERT INTO template_meta(bot_id,name,lang,data_json,created_by,created_at) VALUES(?,?,?,?,?,?)"
+                  " ON CONFLICT(bot_id,name,lang) DO UPDATE SET data_json=excluded.data_json",
+                  (bot_id, name, lang, json.dumps(data or {}), by, int(time.time())))
+
+
+def get_template_meta(bot_id, name, lang):
+    with get_conn() as c:
+        r = c.execute("SELECT data_json FROM template_meta WHERE bot_id=? AND name=? AND lang=?",
+                      (bot_id, name, lang)).fetchone()
+    return json.loads(r[0]) if r else {}
+
+
+def delete_template_meta(bot_id, name):
+    with get_conn() as c:
+        c.execute("DELETE FROM template_meta WHERE bot_id=? AND name=?", (bot_id, name))
+
+
+def _campaign_row(r):
+    d = dict(r)
+    d["header"] = json.loads(d.pop("header_json") or "{}")
+    d["vars"] = json.loads(d.pop("vars_json") or "[]")
+    d["audience"] = json.loads(d.pop("audience_json") or "{}")
+    d["extra"] = json.loads(d.pop("extra_json", None) or "{}")
+    return d
+
+
+def create_campaign(owner_id, d, by=None):
+    """d منظَّف في app. يعيد المعرّف."""
+    now = int(time.time())
+    with get_conn() as c:
+        return c.execute(
+            "INSERT INTO campaigns(owner_id,bot_id,name,template,lang,category,header_json,vars_json,audience_json,"
+            "extra_json,policy_optin,status,scheduled_at,retry_until,assign_to,created_by,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (owner_id, d["bot_id"], d["name"], d["template"], d["lang"], d.get("category"),
+             json.dumps(d.get("header") or {}), json.dumps(d.get("vars") or []), json.dumps(d["audience"]),
+             json.dumps(d.get("extra") or {}),
+             1 if d.get("policy_optin", True) else 0, d.get("status", "draft"), d.get("scheduled_at"),
+             d.get("retry_until"), d.get("assign_to"), by, now, now)).lastrowid
+
+
+def get_campaign(cid, owner_id=None):
+    q, args = "SELECT * FROM campaigns WHERE id=?", [cid]
+    if owner_id is not None:
+        q += " AND owner_id=?"; args.append(owner_id)
+    with get_conn() as c:
+        r = c.execute(q, args).fetchone()
+    return _campaign_row(r) if r else None
+
+
+_CAMP_COLS = {"status", "error", "category", "total", "charged", "refunded", "price", "started_at",
+              "finished_at", "scheduled_at", "retry_until", "next_retry_at", "retries"}
+
+
+def update_campaign(cid, **kw):
+    cols = {k: v for k, v in kw.items() if k in _CAMP_COLS}
+    if not cols:
+        return
+    with get_conn() as c:
+        c.execute(f"UPDATE campaigns SET {', '.join(k + '=?' for k in cols)}, updated_at=? WHERE id=?",
+                  (*cols.values(), int(time.time()), cid))
+
+
+def claim_campaign(cid, from_status):
+    """ذرّي: يحوّل الحملة إلى running فقط لو ما زالت على حالتها — طلبان لا يطلقانها مرتين."""
+    with get_conn() as c:
+        return c.execute("UPDATE campaigns SET status='running', updated_at=? WHERE id=? AND status=?",
+                         (int(time.time()), cid, from_status)).rowcount == 1
+
+
+def cancel_campaign(owner_id, cid):
+    with get_conn() as c:
+        return c.execute("UPDATE campaigns SET status='cancelled', updated_at=? WHERE id=? AND owner_id=?"
+                         " AND status IN ('scheduled','draft')", (int(time.time()), cid, owner_id)).rowcount == 1
+
+
+def stop_campaign_retries(owner_id, cid):
+    with get_conn() as c:
+        return c.execute("UPDATE campaigns SET retry_until=NULL, next_retry_at=NULL, updated_at=?"
+                         " WHERE id=? AND owner_id=?", (int(time.time()), cid, owner_id)).rowcount == 1
+
+
+def snapshot_recipients(cid, audience):
+    now = int(time.time())
+    with get_conn() as c:
+        c.executemany("INSERT OR IGNORE INTO campaign_recipients(campaign_id,contact_id,peer,updated_at)"
+                      " VALUES(?,?,?,?)", [(cid, a.get("contact_id"), a["peer"], now) for a in audience])
+
+
+def clear_recipients(cid):
+    with get_conn() as c:
+        c.execute("DELETE FROM campaign_recipients WHERE campaign_id=?", (cid,))
+
+
+def _items(c, rows):
+    """صفوف مستلمين ⇒ عناصر إرسال بجهة الاتصال (لتخصيص المتغيّرات)."""
+    ids = [r["contact_id"] for r in rows if r["contact_id"]]
+    contacts = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        for r in c.execute(f"SELECT id,name,phone,email,fields_json FROM contacts WHERE id IN ({','.join('?' * len(chunk))})",
+                           chunk):
+            d = dict(r); d["fields"] = json.loads(d.pop("fields_json") or "{}"); contacts[d["id"]] = d
+    return [{"rid": r["id"], "peer": r["peer"],
+             "contact": contacts.get(r["contact_id"]) or {"name": "", "phone": "", "email": "", "fields": {}}}
+            for r in rows]
+
+
+def campaign_send_items(cid):
+    with get_conn() as c:
+        rows = c.execute("SELECT id, contact_id, peer FROM campaign_recipients WHERE campaign_id=? ORDER BY id",
+                         (cid,)).fetchall()
+        return _items(c, rows)
+
+
+def mark_recipient(rid, wamid=None, error_code=None):
+    """نتيجة محاولة إرسال لمستلم: قبلتها Meta (wamid) أو رفضتها فوراً (رمز)."""
+    try:
+        code = int(error_code) if error_code is not None else None
+    except (TypeError, ValueError):
+        code = None
+    with get_conn() as c:
+        c.execute("UPDATE campaign_recipients SET status=?, wamid=COALESCE(?, wamid), error_code=?,"
+                  " attempts=attempts+1, updated_at=? WHERE id=?",
+                  ("accepted" if wamid else "failed", wamid, None if wamid else code, int(time.time()), rid))
+
+
+def finish_campaign_round(cid, kept, refunded, attempt):
+    """نهاية جولة إرسال: تراكم المال، وموعد الإعادة التالية لو ما زالت نافذتها مفتوحة."""
+    import broadcasts as BC
+    now = int(time.time())
+    with get_conn() as c:
+        c.execute("UPDATE campaigns SET status='done', finished_at=?, charged=charged+?, refunded=refunded+?,"
+                  " retries=?, next_retry_at=CASE WHEN retry_until IS NOT NULL AND retry_until>? THEN ? ELSE NULL END,"
+                  " updated_at=? WHERE id=?",
+                  (now, int(kept), int(refunded), attempt, now, now + BC.RETRY_EVERY, now, cid))
+
+
+def due_campaigns(now):
+    with get_conn() as c:
+        return [r[0] for r in c.execute("SELECT id FROM campaigns WHERE status='scheduled' AND scheduled_at<=?"
+                                        " ORDER BY scheduled_at LIMIT 20", (now,))]
+
+
+def retry_due_campaigns(now):
+    with get_conn() as c:
+        return [r[0] for r in c.execute("SELECT id FROM campaigns WHERE status='done' AND retry_until>?"
+                                        " AND next_retry_at IS NOT NULL AND next_retry_at<=? LIMIT 20", (now, now))]
+
+
+def _state_of(rcpt_status, rcpt_code, wa_status, wa_code):
+    """حالة المستلم الفعلية ورمز الفشل من سجلّين: قبول Meta عند الإرسال ثم الويبهوك."""
+    if rcpt_status == "failed":
+        return "failed", rcpt_code
+    if wa_status == "failed":
+        return "failed", wa_code
+    return (wa_status or ("sent" if rcpt_status == "accepted" else "pending")), None
+
+
+def retryable_items(cid, buckets, max_attempts):
+    with get_conn() as c:
+        rows = c.execute("SELECT r.id, r.contact_id, r.peer, r.status, r.error_code, r.attempts,"
+                         " w.status wa_status, w.error_code wa_code FROM campaign_recipients r"
+                         " LEFT JOIN wa_messages w ON w.wamid=r.wamid WHERE r.campaign_id=? AND r.attempts<?",
+                         (cid, max_attempts)).fetchall()
+        keep = [r for r in rows if _state_of(r["status"], r["error_code"], r["wa_status"], r["wa_code"])[0] == "failed"
+                and MS.bucket(_state_of(r["status"], r["error_code"], r["wa_status"], r["wa_code"])[1]) in buckets]
+        return _items(c, keep)
+
+
+def campaign_recipient_states(cid):
+    """[{id, contact_id, peer, state, bucket, replied, wamid}] — أساس الإحصاءات وإعادة الاستهداف."""
+    with get_conn() as c:
+        camp = c.execute("SELECT bot_id, started_at FROM campaigns WHERE id=?", (cid,)).fetchone()
+        if not camp:
+            return []
+        since = camp["started_at"] or 0
+        rows = c.execute(
+            "SELECT r.id, r.contact_id, r.peer, r.status, r.error_code, r.wamid, w.status wa_status, w.error_code wa_code,"
+            " EXISTS(SELECT 1 FROM messages m WHERE m.bot_id=? AND m.peer=r.peer AND m.direction='in'"
+            "        AND m.created_at>=?) AS replied"
+            " FROM campaign_recipients r LEFT JOIN wa_messages w ON w.wamid=r.wamid WHERE r.campaign_id=?",
+            (camp["bot_id"], since, cid)).fetchall()
+    out = []
+    for r in rows:
+        st, code = _state_of(r["status"], r["error_code"], r["wa_status"], r["wa_code"])
+        out.append({"id": r["id"], "contact_id": r["contact_id"], "peer": r["peer"], "state": st,
+                    "code": code, "bucket": MS.bucket(code) if st == "failed" else None,
+                    "replied": bool(r["replied"]) and st != "failed", "wamid": r["wamid"]})
+    return out
+
+
+def campaign_stats(cid):
+    """أرقام الحملة كما يعرضها المنافس: كل حالة **تشمل** ما بعدها (القراءة تسليم ضمناً)."""
+    rs = campaign_recipient_states(cid)
+    s = {"recipients": len(rs), "pending": 0, "sent": 0, "delivered": 0, "read": 0, "replied": 0,
+         "delivered_not_replied": 0, "failed": 0, "failures": {}}
+    for r in rs:
+        st = r["state"]
+        if st == "failed":
+            s["failed"] += 1
+            s["failures"][r["bucket"]] = s["failures"].get(r["bucket"], 0) + 1
+            continue
+        if st == "pending":
+            s["pending"] += 1
+            continue
+        s["sent"] += 1
+        if st in ("delivered", "read"):
+            s["delivered"] += 1
+            if not r["replied"]:
+                s["delivered_not_replied"] += 1
+        if st == "read":
+            s["read"] += 1
+        if r["replied"]:
+            s["replied"] += 1
+    return s
+
+
+def list_campaigns(owner_id, limit=50, offset=0):
+    with get_conn() as c:
+        total = c.execute("SELECT COUNT(*) FROM campaigns WHERE owner_id=?", (owner_id,)).fetchone()[0]
+        rows = [_campaign_row(r) for r in c.execute(
+            "SELECT cp.*, b.name AS bot_name, u.username AS creator FROM campaigns cp"
+            " LEFT JOIN bots b ON b.id=cp.bot_id LEFT JOIN users u ON u.id=cp.created_by"
+            " WHERE cp.owner_id=? ORDER BY cp.id DESC LIMIT ? OFFSET ?", (owner_id, int(limit), int(offset)))]
+    return rows, total
+
+
+def _contact_peer(row):
+    """جهة اتصال ⇒ peer واتساب: الرقم أولاً، وإلا اسم المستخدم (BSUID)."""
+    if row["phone"]:
+        return "wa:" + row["phone"].lstrip("+")
+    if row["bsuid"]:
+        return "wa:" + row["bsuid"]
+    return None
+
+
+def campaign_audience(owner_id, bot_id, spec, require_optin=True):
+    """الجمهور الفعلي لحملة ⇒ [{contact_id, peer}] بلا تكرار. **STOP مستبعد دائماً** (§55):
+    جهة موافقتها 0، أو peer طلب الإيقاف على هذا البوت. `require_optin` (سياسة واتساب للتسويق):
+    الموافقون صراحةً وحدهم — جهة موافقتها 1 أو مشترك وافق من داخل المحادثة."""
+    kind = (spec or {}).get("type")
+    fields = fields_map(owner_id, "contact", active_only=False)
+    with get_conn() as c:
+        stopped = {r[0] for r in c.execute("SELECT peer FROM bot_users WHERE bot_id=? AND opted_out=1", (bot_id,))}
+        opted = {r[0] for r in c.execute("SELECT peer FROM bot_users WHERE bot_id=? AND optin_at IS NOT NULL"
+                                         " AND opted_out=0", (bot_id,))}
+    out, seen = [], set()
+
+    def add(contact_id, peer, optin):
+        if not peer or peer in seen or peer in stopped or optin == 0:
+            return
+        if require_optin and optin != 1 and peer not in opted:
+            return
+        seen.add(peer)
+        out.append({"contact_id": contact_id, "peer": peer})
+
+    if kind in ("segment", "all"):
+        rules = []
+        if kind == "segment":
+            seg = get_segment(owner_id, int(spec.get("id") or 0))
+            if not seg:
+                return []
+            rules, err = CRM.clean_rules(seg["rules"], fields)
+            if err:
+                return []
+        rows, _ = query_contacts(owner_id, rules, fields, limit=None, sort="old")
+        for r in rows:
+            add(r["id"], _contact_peer(r), r["optin"])
+    elif kind == "subscribers":
+        with get_conn() as c:
+            for r in c.execute("SELECT bu.peer, cp.contact_id, ct.optin FROM bot_users bu"
+                               " LEFT JOIN contact_peers cp ON cp.bot_id=bu.bot_id AND cp.peer=bu.peer"
+                               " LEFT JOIN contacts ct ON ct.id=cp.contact_id"
+                               " WHERE bu.bot_id=? AND bu.peer LIKE 'wa:%' ORDER BY bu.id", (bot_id,)):
+                add(r["contact_id"], r["peer"], r["optin"])
+    elif kind == "numbers":
+        # إرسال تجريبي لقالب (Template Studio) — أرقام منظَّفة في app، بحد 5. STOP مستبعد كالعادة؛
+        # سياسة الموافقة لا تنطبق (المستلم هو صاحب الحساب أو فريقه يختبر).
+        with get_conn() as c:
+            for p in (spec.get("phones") or [])[:5]:
+                peer = "wa:" + str(p).lstrip("+")
+                r = c.execute("SELECT id FROM contacts WHERE owner_id=? AND phone=?", (owner_id, p)).fetchone()
+                if peer not in stopped and peer not in seen:
+                    seen.add(peer)
+                    out.append({"contact_id": r[0] if r else None, "peer": peer})
+    elif kind == "retarget":
+        src = get_campaign(int(spec.get("campaign_id") or 0), owner_id)
+        state = spec.get("state")
+        if not src or state not in ("sent", "delivered", "read", "not_read", "replied",
+                                    "delivered_not_replied", "failed"):
+            return []
+        with get_conn() as c:
+            optins = {r[0]: r[1] for r in c.execute("SELECT id, optin FROM contacts WHERE owner_id=?", (owner_id,))}
+        for r in campaign_recipient_states(src["id"]):
+            st = r["state"]
+            hit = {"sent": st in ("sent", "delivered", "read"), "delivered": st in ("delivered", "read"),
+                   "read": st == "read", "not_read": st in ("sent", "delivered"), "replied": r["replied"],
+                   "delivered_not_replied": st in ("delivered", "read") and not r["replied"],
+                   "failed": st == "failed"}[state]
+            if hit:
+                add(r["contact_id"], r["peer"], optins.get(r["contact_id"]))
+    return out
+
+
+def campaigns_overview(owner_id, since):
+    """بطاقات «نظرة عامة» لآخر فترة: مجموع حالات كل الحملات التي بدأت بعد `since`."""
+    with get_conn() as c:
+        ids = [r[0] for r in c.execute("SELECT id FROM campaigns WHERE owner_id=? AND started_at>=?",
+                                       (owner_id, since))]
+    agg = {"campaigns": len(ids), "recipients": 0, "sent": 0, "delivered": 0, "read": 0, "replied": 0,
+           "failed": 0, "failures": {}}
+    for cid in ids:
+        s = campaign_stats(cid)
+        for k in ("recipients", "sent", "delivered", "read", "replied", "failed"):
+            agg[k] += s[k]
+        for b, n in s["failures"].items():
+            agg["failures"][b] = agg["failures"].get(b, 0) + n
+    return agg
+
+
+# ─────────────────────────────  الفلو المرئي: الجلسات والزيارات  ─────────────────────────────
+# المرحلة 5 — المحرك في flow_graph.py. جلسة لكل مرور عميل بفلو (نشطة · مكتملة · تحويل · متسرّبة)
+# وعدّاد زيارات لكل بطاقة: منهما Sessions/Completed/Dropped و«خريطة التسرّب» على الكانفس.
+def _flow_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS flow_sessions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            flow_id TEXT NOT NULL,
+            peer TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',   -- active|completed|handoff|dropped
+            last_node TEXT,
+            started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, ended_at INTEGER,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_flow_sess ON flow_sessions(bot_id, flow_id, status);
+        CREATE INDEX IF NOT EXISTS ix_flow_sess_peer ON flow_sessions(bot_id, peer, status);
+        CREATE TABLE IF NOT EXISTS flow_visits(
+            bot_id INTEGER NOT NULL,
+            flow_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            visits INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(bot_id, flow_id, node_id),
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+    """)
+    # مهلة الرد والتذكير (المرحلة 5): موعدا الجلسة المنتظرة يُحسبان عند الانتظار فيُستعلَم بفهرس
+    cols = {r[1] for r in c.execute("PRAGMA table_info(flow_sessions)")}
+    for col in ("remind_at INTEGER", "end_at INTEGER", "reminded INTEGER NOT NULL DEFAULT 0"):
+        if col.split()[0] not in cols:
+            c.execute(f"ALTER TABLE flow_sessions ADD COLUMN {col}")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_flow_sess_due ON flow_sessions(status, remind_at, end_at)")
+
+
+def flow_session_start(bot_id, flow_id, peer):
+    """جلسة جديدة. جلسة نشطة سابقة لنفس العميل على نفس البوت = تسرّب (بدأ شيئاً آخر)."""
+    now = int(time.time())
+    with get_conn() as c:
+        c.execute("UPDATE flow_sessions SET status='dropped', ended_at=? WHERE bot_id=? AND peer=? AND status='active'",
+                  (now, bot_id, peer))
+        return c.execute("INSERT INTO flow_sessions(bot_id,flow_id,peer,started_at,updated_at) VALUES(?,?,?,?,?)",
+                         (bot_id, flow_id, peer, now, now)).lastrowid
+
+
+def flow_session_touch(sid, node_id, remind_at=None, end_at=None):
+    """الجلسة تنتظر رد العميل عند `node_id`. موعدا التذكير والإنهاء يُعادان مع كل انتظار جديد."""
+    if not sid:
+        return
+    with get_conn() as c:
+        c.execute("UPDATE flow_sessions SET last_node=?, updated_at=?, remind_at=?, end_at=?, reminded=0"
+                  " WHERE id=? AND status='active'", (node_id, int(time.time()), remind_at, end_at, sid))
+
+
+def flow_sessions_due(now, limit=200):
+    """جلسات نشطة حلّ موعد تذكيرها (ولم تُذكَّر) أو موعد إنهائها."""
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT * FROM flow_sessions WHERE status='active' AND ((remind_at IS NOT NULL AND remind_at<=?"
+            " AND reminded=0) OR (end_at IS NOT NULL AND end_at<=?)) ORDER BY id LIMIT ?",
+            (now, now, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def flow_session_mark(sid, reminded=None, clear=False):
+    with get_conn() as c:
+        if clear:
+            c.execute("UPDATE flow_sessions SET remind_at=NULL, end_at=NULL WHERE id=?", (sid,))
+        elif reminded:
+            c.execute("UPDATE flow_sessions SET reminded=1 WHERE id=?", (sid,))
+
+
+def resolve_conversation(bot_id, peer):
+    """«إغلاق المحادثة» من الفلو: حالة «مغلقة» في الصندوق المشترك، تعود للبوت، ويُصفَّر غير المقروء."""
+    set_conversation_status(bot_id, peer, "resolved")
+
+
+def least_loaded_assignee(owner_id, ids):
+    """من فريق الحساب: صاحب أقل عدد من جهات الاتصال المسندة (التعادل = الأسبق في القائمة)."""
+    if not ids:
+        return None
+    with get_conn() as c:
+        load = {r[0]: r[1] for r in c.execute(
+            "SELECT assignee_id, COUNT(*) FROM contacts WHERE owner_id=? AND assignee_id IN (%s) GROUP BY assignee_id"
+            % ",".join("?" * len(ids)), (owner_id, *ids))}
+    return min(ids, key=lambda i: (load.get(i, 0), ids.index(i)))
+
+
+def flow_session_end(sid, status, node_id=None):
+    if not sid:
+        return
+    now = int(time.time())
+    with get_conn() as c:
+        c.execute("UPDATE flow_sessions SET status=?, last_node=COALESCE(?, last_node), ended_at=?, updated_at=?"
+                  " WHERE id=? AND status='active'", (status, node_id, now, now, sid))
+
+
+def flow_visit(bot_id, flow_id, node_id):
+    try:
+        with get_conn() as c:
+            c.execute("INSERT INTO flow_visits(bot_id,flow_id,node_id,visits) VALUES(?,?,?,1)"
+                      " ON CONFLICT(bot_id,flow_id,node_id) DO UPDATE SET visits=visits+1", (bot_id, flow_id, node_id))
+    except Exception:
+        log.exception("flow_visit failed bot=%s", bot_id)
+
+
+def flow_stats(bot_id, flow_id, drop_after=24 * 3600):
+    """{sessions, completed, handoff, dropped, active, visits:{node:n}, drops:{node:n}}.
+    جلسة نشطة لم تتحرّك منذ `drop_after` تُحتسب متسرّبة عند آخر بطاقة وصلها العميل."""
+    stale = int(time.time()) - drop_after
+    with get_conn() as c:
+        rows = c.execute("SELECT status, last_node, updated_at FROM flow_sessions WHERE bot_id=? AND flow_id=?",
+                         (bot_id, flow_id)).fetchall()
+        visits = {r[0]: r[1] for r in c.execute(
+            "SELECT node_id, visits FROM flow_visits WHERE bot_id=? AND flow_id=?", (bot_id, flow_id))}
+    s = {"sessions": len(rows), "completed": 0, "handoff": 0, "dropped": 0, "active": 0, "visits": visits, "drops": {}}
+    for r in rows:
+        st = r["status"]
+        if st == "active" and r["updated_at"] < stale:
+            st = "dropped"
+        s[st] = s.get(st, 0) + 1
+        if st == "dropped" and r["last_node"]:
+            s["drops"][r["last_node"]] = s["drops"].get(r["last_node"], 0) + 1
+    return s
+
+
+def delete_flow_stats(bot_id, flow_id):
+    with get_conn() as c:
+        c.execute("DELETE FROM flow_sessions WHERE bot_id=? AND flow_id=?", (bot_id, flow_id))
+        c.execute("DELETE FROM flow_visits WHERE bot_id=? AND flow_id=?", (bot_id, flow_id))
+
+
+# ---- جهة الاتصال من داخل الفلو (بطاقات الوسم وتحديث الحقل) ----
+def contact_id_for_peer(bot_id, peer):
+    with get_conn() as c:
+        r = c.execute("SELECT contact_id FROM contact_peers WHERE bot_id=? AND peer=?", (bot_id, peer)).fetchone()
+    return r[0] if r else None
+
+
+def get_contact_by_id(contact_id):
+    with get_conn() as c:
+        r = c.execute(_CONTACT_SELECT + " WHERE c.id=?", (contact_id,)).fetchone()
+    return _contact_row(r) if r else None
+
+
+def tag_contact_by_names(owner_id, contact_id, names):
+    """وسوم بأسمائها (تُنشأ لو لم توجد) — الجهة يجب أن تكون ملك الحساب."""
+    now = int(time.time())
+    with get_conn() as c:
+        if not c.execute("SELECT 1 FROM contacts WHERE id=? AND owner_id=?", (contact_id, owner_id)).fetchone():
+            return 0
+        n = 0
+        for name in names:
+            tid = _tag_id(c, owner_id, name)
+            if tid:
+                n += c.execute("INSERT OR IGNORE INTO contact_tags(contact_id,tag_id,created_at) VALUES(?,?,?)",
+                               (contact_id, tid, now)).rowcount
+        return n
+
+
+def set_contact_value(owner_id, contact_id, field, value):
+    """قيمة من الفلو إلى جهة الاتصال: الاسم أو البريد أو حقل مخصّص — بنفس تحقّق الإدخال اليدوي.
+    قيمة لا تناسب نوع الحقل تُتجاهل بصمت (لا تكسر المحادثة)."""
+    now = int(time.time())
+    value = (value or "").strip()
+    if field == "name":
+        with get_conn() as c:
+            return c.execute("UPDATE contacts SET name=?, updated_at=? WHERE id=? AND owner_id=?",
+                             (value[:120], now, contact_id, owner_id)).rowcount > 0
+    if field == "email":
+        email = CRM.norm_email(value)
+        if not email:
+            return False
+        with get_conn() as c:
+            return c.execute("UPDATE contacts SET email=?, updated_at=? WHERE id=? AND owner_id=?",
+                             (email, now, contact_id, owner_id)).rowcount > 0
+    fd = fields_map(owner_id, "contact").get(field)
+    if not fd or fd["type"] == "user":
+        return False
+    val, err = CRM.clean_value(dict(fd, required=0), value)
+    if err or val is None:
+        return False
+    with get_conn() as c:
+        return c.execute("UPDATE contacts SET fields_json=json_set(fields_json, ?, json(?)), updated_at=?"
+                         " WHERE id=? AND owner_id=?",
+                         ('$."' + field + '"', CRM.dumps(val), now, contact_id, owner_id)).rowcount > 0
+
+
+
+# ─────────────────────────────  الصندوق المشترك (المرحلة 6)  ─────────────────────────────
+# المحادثة صارت وحدة عمل للفريق: حالة (مفتوحة · معلّقة · مغلقة) ومسؤول وفريق. `mode` (bot|human)
+# يبقى كما هو: من يرد الآن — البوت أم إنسان. الحالة تقول هل انتهى العمل عليها، والإسناد يقول لمن.
+# الملاحظات الداخلية رسائل `direction='note'` لا تُرسل للعميل ولا تدخل ذاكرة الذكاء الاصطناعي.
+CONV_STATUSES = ("open", "pending", "resolved")
+_VALID_PEER = ("(c.peer GLOB '[a-z][a-z]:[0-9]*' OR c.peer GLOB '[a-z][a-z]:-[0-9]*'"
+               " OR c.peer GLOB 'wa:[A-Z][A-Z].[A-Za-z0-9]*')")
+
+
+def _inbox_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS inbox_teams(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            rule TEXT NOT NULL DEFAULT 'round_robin',   -- round_robin | manual
+            rr_last INTEGER,                            -- آخر من استلم بالتناوب
+            created_at INTEGER NOT NULL,
+            UNIQUE(owner_id, name),
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS inbox_team_members(
+            team_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            PRIMARY KEY(team_id, user_id),
+            FOREIGN KEY(team_id) REFERENCES inbox_teams(id) ON DELETE CASCADE,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS canned_replies(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            shortcut TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            body TEXT NOT NULL,
+            created_by INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(owner_id, shortcut),
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS inbox_mentions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            by_user INTEGER,
+            created_at INTEGER NOT NULL,
+            seen_at INTEGER,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_mention_user ON inbox_mentions(user_id, seen_at);
+    """)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(conversations)")}
+    for col in ("status TEXT NOT NULL DEFAULT 'open'", "assignee_id INTEGER", "team_id INTEGER",
+                "status_at INTEGER", "resolved_at INTEGER"):
+        if col.split()[0] not in cols:
+            c.execute(f"ALTER TABLE conversations ADD COLUMN {col}")
+    if "user_id" not in {r[1] for r in c.execute("PRAGMA table_info(messages)")}:
+        c.execute("ALTER TABLE messages ADD COLUMN user_id INTEGER")      # من أرسل الرد اليدوي/كتب الملاحظة
+    c.execute("CREATE INDEX IF NOT EXISTS ix_conv_status ON conversations(bot_id, status, last_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_conv_assignee ON conversations(assignee_id, status)")
+
+
+# ---- الفرق ----
+def account_user_ids(owner_id):
+    """صاحب الحساب وكل فريقه — من يجوز إسناد المحادثات إليهم."""
+    with get_conn() as c:
+        return [owner_id] + [r[0] for r in c.execute("SELECT id FROM users WHERE works_for=? ORDER BY id", (owner_id,))]
+
+
+def list_inbox_teams(owner_id):
+    with get_conn() as c:
+        teams = [dict(r) for r in c.execute("SELECT id, name, rule, created_at FROM inbox_teams WHERE owner_id=?"
+                                            " ORDER BY name", (owner_id,))]
+        for t in teams:
+            t["members"] = [r[0] for r in c.execute("SELECT user_id FROM inbox_team_members WHERE team_id=?"
+                                                    " ORDER BY user_id", (t["id"],))]
+    return teams
+
+
+def get_inbox_team(owner_id, team_id):
+    return next((t for t in list_inbox_teams(owner_id) if t["id"] == team_id), None)
+
+
+def save_inbox_team(owner_id, team_id, name, rule, members):
+    """ينشئ أو يعدّل فريقاً. الأعضاء يُصفّون إلى أفراد الحساب فقط. يرجّع (id, خطأ)."""
+    name = (name or "").strip()[:60]
+    if not name:
+        return None, "name"
+    rule = rule if rule in ("round_robin", "manual") else "round_robin"
+    allowed = set(account_user_ids(owner_id))
+    members = sorted({int(m) for m in members or [] if str(m).isdigit() and int(m) in allowed})
+    now = int(time.time())
+    try:
+        with get_conn() as c:
+            if team_id:
+                if not c.execute("UPDATE inbox_teams SET name=?, rule=? WHERE id=? AND owner_id=?",
+                                 (name, rule, team_id, owner_id)).rowcount:
+                    return None, "not_found"
+            else:
+                team_id = c.execute("INSERT INTO inbox_teams(owner_id,name,rule,created_at) VALUES(?,?,?,?)",
+                                    (owner_id, name, rule, now)).lastrowid
+            c.execute("DELETE FROM inbox_team_members WHERE team_id=?", (team_id,))
+            c.executemany("INSERT INTO inbox_team_members(team_id,user_id) VALUES(?,?)", [(team_id, m) for m in members])
+    except sqlite3.IntegrityError:
+        return None, "duplicate"
+    return team_id, None
+
+
+def delete_inbox_team(owner_id, team_id):
+    with get_conn() as c:
+        if not c.execute("DELETE FROM inbox_teams WHERE id=? AND owner_id=?", (team_id, owner_id)).rowcount:
+            return False
+        c.execute("UPDATE conversations SET team_id=NULL WHERE team_id=?", (team_id,))
+    return True
+
+
+def user_team_ids(user_id):
+    with get_conn() as c:
+        return [r[0] for r in c.execute("SELECT team_id FROM inbox_team_members WHERE user_id=?", (user_id,))]
+
+
+def next_in_team(owner_id, team_id):
+    """التالي بالتناوب في فريق (round-robin) — ذرّي: طلبان متزامنان لا يأخذان نفس الموظف.
+    فريق «يدوي» أو بلا أعضاء = None (تبقى المحادثة على الفريق بلا مسؤول)."""
+    with get_conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        t = c.execute("SELECT rule, rr_last FROM inbox_teams WHERE id=? AND owner_id=?", (team_id, owner_id)).fetchone()
+        if not t or t["rule"] != "round_robin":
+            return None
+        ids = [r[0] for r in c.execute("SELECT user_id FROM inbox_team_members WHERE team_id=? ORDER BY user_id",
+                                       (team_id,))]
+        if not ids:
+            return None
+        nxt = next((i for i in ids if t["rr_last"] is not None and i > t["rr_last"]), ids[0])
+        c.execute("UPDATE inbox_teams SET rr_last=? WHERE id=?", (nxt, team_id))
+        return nxt
+
+
+# ---- حالة المحادثة والإسناد ----
+def _conv_touch(c, bot_id, peer):
+    c.execute("INSERT OR IGNORE INTO conversations(bot_id,peer,last_at) VALUES(?,?,?)", (bot_id, peer, int(time.time())))
+
+
+def assign_conversation(bot_id, peer, user_id=None, team_id=None, takeover=True):
+    """مسؤول و/أو فريق المحادثة. إسنادها لموظف = تولٍّ بشري (البوت يسكت) ما لم `takeover=False`.
+    المستدعي يتحقق أن الموظف والفريق من الحساب."""
+    now = int(time.time())
+    with get_conn() as c:
+        _conv_touch(c, bot_id, peer)
+        c.execute("UPDATE conversations SET assignee_id=?, team_id=?,"
+                  " status=CASE WHEN status='resolved' THEN 'open' ELSE status END, status_at=?"
+                  " WHERE bot_id=? AND peer=?", (user_id, team_id, now, bot_id, peer))
+        if user_id and takeover:
+            c.execute("UPDATE conversations SET mode='human', human_at=? WHERE bot_id=? AND peer=?", (now, bot_id, peer))
+
+
+def set_conversation_status(bot_id, peer, status):
+    """open | pending | resolved. الإغلاق يعيد المحادثة للبوت ويصفّر غير المقروء — رسالة جديدة من
+    العميل تعيد فتحها تلقائياً (log_message)."""
+    if status not in CONV_STATUSES:
+        return False
+    now = int(time.time())
+    with get_conn() as c:
+        _conv_touch(c, bot_id, peer)
+        if status == "resolved":
+            c.execute("UPDATE conversations SET status='resolved', status_at=?, resolved_at=?, mode='bot',"
+                      " human_at=NULL, unread=0 WHERE bot_id=? AND peer=?", (now, now, bot_id, peer))
+        else:
+            c.execute("UPDATE conversations SET status=?, status_at=? WHERE bot_id=? AND peer=?",
+                      (status, now, bot_id, peer))
+    return True
+
+
+def auto_resolve_idle(now=None):
+    """إغلاق آلي للمحادثات المفتوحة الخاملة حسب إعداد كل قناة (`inbox.auto_resolve` بالساعات).
+    «المعلّقة» لا تُغلق آلياً — تعليقها قرار موظف. يرجّع عدد ما أُغلق."""
+    now = int(now or time.time())
+    n = 0
+    with get_conn() as c:
+        for bid, cfg in c.execute("SELECT id, config_json FROM bots WHERE config_json LIKE '%auto_resolve%'").fetchall():
+            try:
+                hours = int((json.loads(cfg or "{}").get("inbox") or {}).get("auto_resolve") or 0)
+            except (TypeError, ValueError):
+                continue
+            if hours <= 0:
+                continue
+            n += c.execute("UPDATE conversations SET status='resolved', status_at=?, resolved_at=?, mode='bot',"
+                           " human_at=NULL, unread=0 WHERE bot_id=? AND status='open' AND last_at<?",
+                           (now, now, bid, now - hours * 3600)).rowcount
+    return n
+
+
+def route_conversation(owner_id, bot_id, peer, team_id):
+    """تحويل آلي لفريق (من الفلو أو إعداد القناة): الفريق + التالي بالتناوب إن وُجد.
+    لا يغيّر مسؤولاً قائماً — المحادثة التي يتابعها موظف تبقى معه."""
+    conv = get_conversation(bot_id, peer) or {}
+    if conv.get("assignee_id") and conv.get("status") != "resolved":
+        return conv["assignee_id"]
+    if not get_inbox_team(owner_id, team_id):
+        return None
+    who = next_in_team(owner_id, team_id)
+    assign_conversation(bot_id, peer, who, team_id, takeover=False)
+    return who
+
+
+# ---- الملاحظات والإشارات ----
+def add_note(bot_id, peer, user_id, text, mention_ids=()):
+    """ملاحظة داخلية على المحادثة + إشارة لكل موظف مذكور. لا تمسّ ملخّص المحادثة ولا غير المقروء."""
+    now = int(time.time())
+    text = (text or "")[:MSG_TEXT_MAX]
+    with get_conn() as c:
+        mid = c.execute("INSERT INTO messages(bot_id,peer,direction,sender,kind,text,created_at,user_id)"
+                        " VALUES(?,?,?,?,?,?,?,?)", (bot_id, peer, "note", "human", "note", text, now, user_id)).lastrowid
+        owner = c.execute("SELECT owner_id FROM bots WHERE id=?", (bot_id,)).fetchone()[0]
+        for u in set(mention_ids):
+            if u != user_id:
+                c.execute("INSERT INTO inbox_mentions(owner_id,user_id,bot_id,peer,message_id,by_user,created_at)"
+                          " VALUES(?,?,?,?,?,?,?)", (owner, u, bot_id, peer, mid, user_id, now))
+    return mid
+
+
+def mentions_seen(user_id, bot_id, peer):
+    with get_conn() as c:
+        c.execute("UPDATE inbox_mentions SET seen_at=? WHERE user_id=? AND bot_id=? AND peer=? AND seen_at IS NULL",
+                  (int(time.time()), user_id, bot_id, peer))
+
+
+# ---- القائمة الموحّدة ----
+def _view_where(view, user_id, team_ids):
+    """(شرط SQL, معاملات) لكل عرض. العروض: open · mine · unassigned · bot · pending · resolved · team:<id> · mentions · all."""
+    if view == "mine":
+        return "c.assignee_id=? AND c.status<>'resolved'", [user_id]
+    if view == "unassigned":           # تنتظر إنساناً ولم يستلمها أحد
+        return "c.assignee_id IS NULL AND c.status<>'resolved' AND c.mode='human'", []
+    if view == "bot":
+        return "c.assignee_id IS NULL AND c.status='open' AND c.mode='bot'", []
+    if view in ("pending", "resolved"):
+        return "c.status=?", [view]
+    if view.startswith("team:") and view[5:].isdigit():
+        return "c.team_id=? AND c.status<>'resolved'", [int(view[5:])]
+    if view == "mentions":
+        return ("EXISTS(SELECT 1 FROM inbox_mentions x WHERE x.bot_id=c.bot_id AND x.peer=c.peer"
+                " AND x.user_id=? AND x.seen_at IS NULL)"), [user_id]
+    if view == "all":
+        return "1=1", []
+    return "c.status<>'resolved'", []                      # open (الافتراضي): كل ما لم يُغلق
+
+
+def _scope_where(own_only, user_id, team_ids):
+    """الموظف في حساب «يرى ما يخصّه فقط»: المسندة إليه، وغير المسندة، ومحادثات فِرقه."""
+    if not own_only:
+        return "1=1", []
+    q = "(c.assignee_id=? OR c.assignee_id IS NULL"
+    args = [user_id]
+    if team_ids:
+        q += " OR c.team_id IN (%s)" % ",".join("?" * len(team_ids))
+        args += list(team_ids)
+    return q + ")", args
+
+
+def inbox_list(owner_id, user_id, view="open", bot_id=None, q=None, own_only=False, team_ids=(),
+               limit=50, offset=0):
+    vw, va = _view_where(view, user_id, team_ids)
+    sw, sa = _scope_where(own_only, user_id, team_ids)
+    where = [f"b.owner_id=?", _VALID_PEER, vw, sw]
+    args = [owner_id] + va + sa
+    if bot_id:
+        where.append("c.bot_id=?"); args.append(bot_id)
+    if q:
+        like = "%" + q.replace("%", "").replace("_", "")[:60] + "%"
+        where.append("(c.name LIKE ? OR c.peer LIKE ? OR c.last_text LIKE ?)"); args += [like, like, like]
+    sql = ("SELECT c.*, b.name bot_name, b.channel bot_channel, u.username assignee_name, t.name team_name"
+           " FROM conversations c JOIN bots b ON b.id=c.bot_id"
+           " LEFT JOIN users u ON u.id=c.assignee_id LEFT JOIN inbox_teams t ON t.id=c.team_id"
+           " WHERE " + " AND ".join(where) + " ORDER BY c.last_at DESC LIMIT ? OFFSET ?")
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(sql, args + [int(limit), int(offset)])]
+
+
+def inbox_counts(owner_id, user_id, own_only=False, team_ids=()):
+    sw, sa = _scope_where(own_only, user_id, team_ids)
+    views = ["open", "mine", "unassigned", "bot", "pending", "resolved", "mentions"] + [f"team:{t}" for t in team_ids]
+    out = {}
+    with get_conn() as c:
+        for v in views:
+            vw, va = _view_where(v, user_id, team_ids)
+            out[v] = c.execute(f"SELECT COUNT(*) FROM conversations c JOIN bots b ON b.id=c.bot_id WHERE b.owner_id=?"
+                               f" AND {_VALID_PEER} AND {vw} AND {sw}", [owner_id] + va + sa).fetchone()[0]
+        out["unread"] = c.execute(f"SELECT COALESCE(SUM(c.unread),0) FROM conversations c JOIN bots b ON b.id=c.bot_id"
+                                  f" WHERE b.owner_id=? AND c.status<>'resolved' AND {_VALID_PEER} AND {sw}",
+                                  [owner_id] + sa).fetchone()[0]
+    return out
+
+
+def conv_visible(bot_id, peer, user_id, own_only, team_ids):
+    if not own_only:
+        return True
+    conv = get_conversation(bot_id, peer) or {}
+    return not conv.get("assignee_id") or conv["assignee_id"] == user_id or conv.get("team_id") in set(team_ids)
+
+
+# ---- الردود الجاهزة ----
+def list_canned(owner_id):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute("SELECT id, shortcut, title, body, updated_at FROM canned_replies"
+                                           " WHERE owner_id=? ORDER BY shortcut", (owner_id,))]
+
+
+def save_canned(owner_id, cid, shortcut, title, body, by):
+    shortcut = re.sub(r"[^\w\-؀-ۿ]", "", (shortcut or "").strip().lstrip("/").lower())[:30]
+    body = (body or "").strip()[:4000]
+    if not shortcut:
+        return None, "shortcut"
+    if not body:
+        return None, "body"
+    now = int(time.time())
+    try:
+        with get_conn() as c:
+            if cid:
+                if not c.execute("UPDATE canned_replies SET shortcut=?, title=?, body=?, updated_at=? WHERE id=? AND owner_id=?",
+                                 (shortcut, (title or "")[:80], body, now, cid, owner_id)).rowcount:
+                    return None, "not_found"
+                return cid, None
+            if c.execute("SELECT COUNT(*) FROM canned_replies WHERE owner_id=?", (owner_id,)).fetchone()[0] >= 500:
+                return None, "limit"
+            return c.execute("INSERT INTO canned_replies(owner_id,shortcut,title,body,created_by,created_at,updated_at)"
+                             " VALUES(?,?,?,?,?,?,?)", (owner_id, shortcut, (title or "")[:80], body, by, now, now)).lastrowid, None
+    except sqlite3.IntegrityError:
+        return None, "duplicate"
+
+
+def delete_canned(owner_id, cid):
+    with get_conn() as c:
+        return c.execute("DELETE FROM canned_replies WHERE id=? AND owner_id=?", (cid, owner_id)).rowcount > 0
+
+
+
+# ─────────────────────────────  التسلسلات (المرحلة 6)  ─────────────────────────────
+# متابعة آلية على خطوات بتأخير لكل عميل مسجَّل. المنطق (الإرسال والمال والنافذة) في sequences.py.
+def _sequence_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS sequences(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 0,
+            spec_json TEXT NOT NULL DEFAULT '{}',   -- {steps, trigger, stop_on_reply, hours}
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_seq_owner ON sequences(owner_id);
+        CREATE TABLE IF NOT EXISTS sequence_enrollments(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sequence_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            step INTEGER NOT NULL DEFAULT 0,          -- الخطوة التالية
+            next_at INTEGER,
+            status TEXT NOT NULL DEFAULT 'active',    -- active | done | stopped
+            reason TEXT,                              -- سبب التوقّف: replied · opted_out · human · manual · deleted
+            started_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(sequence_id) REFERENCES sequences(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_enr_due ON sequence_enrollments(status, next_at);
+        CREATE INDEX IF NOT EXISTS ix_enr_peer ON sequence_enrollments(bot_id, peer, status);
+        CREATE TABLE IF NOT EXISTS sequence_sends(
+            enrollment_id INTEGER NOT NULL,
+            sequence_id INTEGER NOT NULL,
+            step INTEGER NOT NULL,
+            ok INTEGER NOT NULL,
+            note TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(sequence_id) REFERENCES sequences(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_seq_sends ON sequence_sends(sequence_id, step);
+    """)
+
+
+def _seq_row(r):
+    d = dict(r)
+    d["spec"] = json.loads(d.pop("spec_json") or "{}")
+    d["active"] = bool(d["active"])
+    return d
+
+
+def list_sequences(owner_id, bot_id=None):
+    q, a = "SELECT * FROM sequences WHERE owner_id=?", [owner_id]
+    if bot_id:
+        q += " AND bot_id=?"; a.append(bot_id)
+    with get_conn() as c:
+        return [_seq_row(r) for r in c.execute(q + " ORDER BY id DESC", a)]
+
+
+def get_sequence(seq_id, owner_id=None):
+    q, a = "SELECT * FROM sequences WHERE id=?", [seq_id]
+    if owner_id is not None:
+        q += " AND owner_id=?"; a.append(owner_id)
+    with get_conn() as c:
+        r = c.execute(q, a).fetchone()
+    return _seq_row(r) if r else None
+
+
+def save_sequence(owner_id, seq_id, bot_id, name, spec, active):
+    now = int(time.time())
+    with get_conn() as c:
+        if seq_id:
+            ok = c.execute("UPDATE sequences SET bot_id=?, name=?, spec_json=?, active=?, updated_at=? WHERE id=? AND owner_id=?",
+                           (bot_id, name, json.dumps(spec, ensure_ascii=False), int(bool(active)), now, seq_id, owner_id)).rowcount
+            return seq_id if ok else None
+        return c.execute("INSERT INTO sequences(owner_id,bot_id,name,spec_json,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                         (owner_id, bot_id, name, json.dumps(spec, ensure_ascii=False), int(bool(active)), now, now)).lastrowid
+
+
+def set_sequence_active(owner_id, seq_id, active):
+    with get_conn() as c:
+        return c.execute("UPDATE sequences SET active=?, updated_at=? WHERE id=? AND owner_id=?",
+                         (int(bool(active)), int(time.time()), seq_id, owner_id)).rowcount > 0
+
+
+def delete_sequence(owner_id, seq_id):
+    with get_conn() as c:
+        return c.execute("DELETE FROM sequences WHERE id=? AND owner_id=?", (seq_id, owner_id)).rowcount > 0
+
+
+def enroll_peer(seq_id, bot_id, peer, next_at):
+    """تسجيل عميل في تسلسل. تسجيل نشط قائم لنفس العميل في نفس التسلسل = لا تكرار (None)."""
+    now = int(time.time())
+    with get_conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        if c.execute("SELECT 1 FROM sequence_enrollments WHERE sequence_id=? AND peer=? AND status='active'",
+                     (seq_id, peer)).fetchone():
+            return None
+        return c.execute("INSERT INTO sequence_enrollments(sequence_id,bot_id,peer,step,next_at,started_at,updated_at)"
+                         " VALUES(?,?,?,0,?,?,?)", (seq_id, bot_id, peer, next_at, now, now)).lastrowid
+
+
+def due_enrollments(now, limit=100):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT e.* FROM sequence_enrollments e JOIN sequences s ON s.id=e.sequence_id"
+            " WHERE e.status='active' AND e.next_at<=? AND s.active=1 ORDER BY e.next_at LIMIT ?", (now, limit))]
+
+
+def claim_enrollment(eid, step, next_at_was):
+    """حجز ذرّي لإرسال خطوة: دورتان متزامنتان لا ترسلان الخطوة نفسها مرتين."""
+    with get_conn() as c:
+        return c.execute("UPDATE sequence_enrollments SET next_at=NULL, updated_at=? WHERE id=? AND status='active'"
+                         " AND step=? AND next_at=?", (int(time.time()), eid, step, next_at_was)).rowcount > 0
+
+
+def advance_enrollment(eid, step, next_at):
+    with get_conn() as c:
+        c.execute("UPDATE sequence_enrollments SET step=?, next_at=?, updated_at=? WHERE id=? AND status='active'",
+                  (step, next_at, int(time.time()), eid))
+
+
+def end_enrollment(eid, status, reason=None):
+    with get_conn() as c:
+        c.execute("UPDATE sequence_enrollments SET status=?, reason=?, next_at=NULL, updated_at=? WHERE id=? AND status='active'",
+                  (status, reason, int(time.time()), eid))
+
+
+def stop_enrollments_for_peer(bot_id, peer, reason, only_stop_on_reply=False):
+    """إيقاف تسجيلات العميل النشطة (ردّ · STOP · تولٍّ بشري). `only_stop_on_reply`: ما يطلب التوقّف عند الرد فقط."""
+    now = int(time.time())
+    with get_conn() as c:
+        q = ("UPDATE sequence_enrollments SET status='stopped', reason=?, next_at=NULL, updated_at=?"
+             " WHERE bot_id=? AND peer=? AND status='active'")
+        if only_stop_on_reply:
+            q += (" AND sequence_id IN (SELECT id FROM sequences WHERE"
+                  " COALESCE(json_extract(spec_json,'$.stop_on_reply'),1)=1)")
+        return c.execute(q, (reason, now, bot_id, peer)).rowcount
+
+
+def log_sequence_send(eid, seq_id, step, ok, note=None):
+    with get_conn() as c:
+        c.execute("INSERT INTO sequence_sends(enrollment_id,sequence_id,step,ok,note,created_at) VALUES(?,?,?,?,?,?)",
+                  (eid, seq_id, step, int(bool(ok)), (note or "")[:200], int(time.time())))
+
+
+def sequence_stats(seq_id):
+    with get_conn() as c:
+        st = {r[0]: r[1] for r in c.execute("SELECT status, COUNT(*) FROM sequence_enrollments WHERE sequence_id=?"
+                                            " GROUP BY status", (seq_id,))}
+        steps = {}
+        for r in c.execute("SELECT step, SUM(ok), SUM(1-ok) FROM sequence_sends WHERE sequence_id=? GROUP BY step", (seq_id,)):
+            steps[r[0]] = {"sent": r[1] or 0, "failed": r[2] or 0}
+        reasons = {r[0] or "": r[1] for r in c.execute(
+            "SELECT reason, COUNT(*) FROM sequence_enrollments WHERE sequence_id=? AND status='stopped' GROUP BY reason", (seq_id,))}
+    return {"enrolled": sum(st.values()), "active": st.get("active", 0), "done": st.get("done", 0),
+            "stopped": st.get("stopped", 0), "steps": steps, "reasons": reasons}
+
+
+def peer_enrollments(bot_id, peer):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT e.id, e.sequence_id, s.name, e.step, e.next_at, e.status FROM sequence_enrollments e"
+            " JOIN sequences s ON s.id=e.sequence_id WHERE e.bot_id=? AND e.peer=? ORDER BY e.id DESC LIMIT 20",
+            (bot_id, peer))]
+
+
+def sequences_for_tags(owner_id, tag_names):
+    """التسلسلات النشطة التي يشغّلها وسم من هذه الوسوم."""
+    names = {str(n).strip().lower() for n in tag_names if n}
+    return [s for s in list_sequences(owner_id) if s["active"]
+            and (s["spec"].get("trigger") or {}).get("type") == "tag"
+            and str((s["spec"].get("trigger") or {}).get("tag") or "").strip().lower() in names]
+
+
+
+# ─────────────────────────────  النمو (المرحلة 7): روابط التتبّع · إعلانات CTWA · ودجت الموقع  ─────────────────────────────
+def _growth_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS growth_links(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL,
+            code TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            text TEXT NOT NULL DEFAULT '',
+            clicks INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS growth_hits(
+            link_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY(link_id, peer),
+            FOREIGN KEY(link_id) REFERENCES growth_links(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS ad_referrals(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            source_type TEXT, source_id TEXT, source_url TEXT,
+            headline TEXT, body TEXT, ctwa_clid TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_adref_bot ON ad_referrals(bot_id, source_id);
+        CREATE INDEX IF NOT EXISTS ix_adref_peer ON ad_referrals(bot_id, peer, created_at);
+        CREATE TABLE IF NOT EXISTS capi_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            event TEXT NOT NULL,
+            value REAL, currency TEXT,
+            ok INTEGER NOT NULL DEFAULT 0,
+            error TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_capi_bot ON capi_events(bot_id, created_at);
+    """)
+
+
+# ---- روابط التتبّع ----
+def create_growth_link(owner_id, bot_id, code, name, text):
+    try:
+        with get_conn() as c:
+            return c.execute("INSERT INTO growth_links(owner_id,bot_id,code,name,text,created_at) VALUES(?,?,?,?,?,?)",
+                             (owner_id, bot_id, code, name, text, int(time.time()))).lastrowid
+    except sqlite3.IntegrityError:
+        return None                                   # رمز مكرر — المستدعي يولّد غيره
+
+
+def update_growth_link(owner_id, link_id, name, text):
+    with get_conn() as c:
+        return c.execute("UPDATE growth_links SET name=?, text=? WHERE id=? AND owner_id=?",
+                         (name, text, link_id, owner_id)).rowcount > 0
+
+
+def delete_growth_link(owner_id, link_id):
+    with get_conn() as c:
+        return c.execute("DELETE FROM growth_links WHERE id=? AND owner_id=?", (link_id, owner_id)).rowcount > 0
+
+
+def get_growth_link(code=None, link_id=None, owner_id=None):
+    q, a = "SELECT * FROM growth_links WHERE ", []
+    if code:
+        q += "code=?"; a.append(code)
+    else:
+        q += "id=?"; a.append(link_id)
+    if owner_id is not None:
+        q += " AND owner_id=?"; a.append(owner_id)
+    with get_conn() as c:
+        r = c.execute(q, a).fetchone()
+    return dict(r) if r else None
+
+
+def list_growth_links(owner_id):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT l.*, b.name bot_name, b.channel bot_channel,"
+            " (SELECT COUNT(*) FROM growth_hits h WHERE h.link_id=l.id) conversations,"
+            " (SELECT COUNT(*) FROM growth_hits h JOIN leads d ON d.bot_id=h.bot_id"
+            "   AND d.tg_user_id=CAST(substr(h.peer, 4) AS INTEGER) WHERE h.link_id=l.id) leads"
+            " FROM growth_links l JOIN bots b ON b.id=l.bot_id WHERE l.owner_id=? ORDER BY l.id DESC", (owner_id,))]
+
+
+def growth_click(code):
+    with get_conn() as c:
+        c.execute("UPDATE growth_links SET clicks=clicks+1 WHERE code=?", (code,))
+
+
+def growth_hit(bot_id, code, peer):
+    """محادثة جاءت من رابط تتبّع (أول مرة لكل عميل). الرابط يجب أن يكون لهذا البوت. يرجّع الرابط أو None."""
+    link = get_growth_link(code=code)
+    if not link or link["bot_id"] != bot_id:
+        return None
+    with get_conn() as c:
+        c.execute("INSERT OR IGNORE INTO growth_hits(link_id,bot_id,peer,created_at) VALUES(?,?,?,?)",
+                  (link["id"], bot_id, peer, int(time.time())))
+    return link
+
+
+# ---- إعلانات Click-to-WhatsApp ----
+def record_ad_referral(bot_id, peer, ref):
+    with get_conn() as c:
+        return c.execute("INSERT INTO ad_referrals(bot_id,peer,source_type,source_id,source_url,headline,body,ctwa_clid,created_at)"
+                         " VALUES(?,?,?,?,?,?,?,?,?)",
+                         (bot_id, peer, (ref.get("source_type") or "")[:20], (ref.get("source_id") or "")[:40],
+                          (ref.get("source_url") or "")[:500], (ref.get("headline") or "")[:200],
+                          (ref.get("body") or "")[:500], (ref.get("ctwa_clid") or "")[:500], int(time.time()))).lastrowid
+
+
+def last_ad_referral(bot_id, peer, within=7 * 86400):
+    """آخر نقرة إعلان للعميل خلال النافذة (Meta تقبل التحويلات حتى 7 أيام من النقرة)."""
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM ad_referrals WHERE bot_id=? AND peer=? AND created_at>=? ORDER BY id DESC LIMIT 1",
+                      (bot_id, peer, int(time.time()) - within)).fetchone()
+    return dict(r) if r else None
+
+
+def ads_report(owner_id, since):
+    """لكل إعلان: المحادثات · العملاء · الإدخالات (leads) · الأهداف المحقّقة (goal_*) · تحويلات أُرسلت لـ Meta."""
+    with get_conn() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT a.bot_id, b.name bot_name, a.source_id, a.source_type, MAX(a.headline) headline, MAX(a.source_url) source_url,"
+            " COUNT(*) clicks, COUNT(DISTINCT a.peer) people, MIN(a.created_at) first_at, MAX(a.created_at) last_at,"
+            " (SELECT COUNT(DISTINCT d.tg_user_id) FROM leads d WHERE d.bot_id=a.bot_id AND d.created_at>=MIN(a.created_at)"
+            "   AND d.tg_user_id IN (SELECT CAST(substr(x.peer,4) AS INTEGER) FROM ad_referrals x"
+            "                        WHERE x.bot_id=a.bot_id AND x.source_id=a.source_id)) leads,"
+            " (SELECT COUNT(*) FROM capi_events e WHERE e.bot_id=a.bot_id AND e.ok=1 AND e.peer IN"
+            "   (SELECT x.peer FROM ad_referrals x WHERE x.bot_id=a.bot_id AND x.source_id=a.source_id)) conversions"
+            " FROM ad_referrals a JOIN bots b ON b.id=a.bot_id WHERE b.owner_id=? AND a.created_at>=?"
+            " GROUP BY a.bot_id, a.source_id ORDER BY people DESC LIMIT 200", (owner_id, since))]
+    return rows
+
+
+def peer_source(bot_id, peer):
+    """من أين جاء العميل: آخر نقرة إعلان، وإلا رابط التتبّع — للوحة جهة الاتصال في الصندوق المشترك."""
+    with get_conn() as c:
+        r = c.execute("SELECT headline, source_url, source_id, created_at FROM ad_referrals WHERE bot_id=? AND peer=?"
+                      " ORDER BY id DESC LIMIT 1", (bot_id, peer)).fetchone()
+        if r:
+            return {"kind": "ad", "name": r["headline"] or r["source_id"], "url": r["source_url"], "at": r["created_at"]}
+        r = c.execute("SELECT l.name, h.created_at FROM growth_hits h JOIN growth_links l ON l.id=h.link_id"
+                      " WHERE h.bot_id=? AND h.peer=? ORDER BY h.created_at DESC LIMIT 1", (bot_id, peer)).fetchone()
+    return {"kind": "link", "name": r["name"], "at": r["created_at"]} if r else None
+
+
+def log_capi_event(bot_id, peer, event, value, currency, ok, error=None):
+    with get_conn() as c:
+        c.execute("INSERT INTO capi_events(bot_id,peer,event,value,currency,ok,error,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                  (bot_id, peer, event, value, currency, int(bool(ok)), (error or "")[:300], int(time.time())))
+
+
+def capi_recent(owner_id, limit=50):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT e.*, b.name bot_name FROM capi_events e JOIN bots b ON b.id=e.bot_id WHERE b.owner_id=?"
+            " ORDER BY e.id DESC LIMIT ?", (owner_id, limit))]
+
+
+
+# ---- ودجت الموقع ومحادثة الويب (المرحلة 7) ----
+def _widget_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS web_widgets(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            key TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            bot_id INTEGER,                      -- البوت الذي يرد في محادثة الويب
+            wa_bot_id INTEGER,                   -- رقم واتساب لزر «أكمل على واتساب»
+            settings_json TEXT NOT NULL DEFAULT '{}',
+            views INTEGER NOT NULL DEFAULT 0,
+            wa_clicks INTEGER NOT NULL DEFAULT 0,
+            chats INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS web_outbox(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_web_outbox ON web_outbox(bot_id, peer, id);
+    """)
+
+
+def _widget_row(r):
+    d = dict(r)
+    d["settings"] = json.loads(d.pop("settings_json") or "{}")
+    return d
+
+
+def list_widgets(owner_id):
+    with get_conn() as c:
+        return [_widget_row(r) for r in c.execute("SELECT * FROM web_widgets WHERE owner_id=? ORDER BY id DESC", (owner_id,))]
+
+
+def get_widget(key=None, widget_id=None, owner_id=None):
+    q, a = ("SELECT * FROM web_widgets WHERE key=?", [key]) if key else ("SELECT * FROM web_widgets WHERE id=?", [widget_id])
+    if owner_id is not None:
+        q += " AND owner_id=?"; a.append(owner_id)
+    with get_conn() as c:
+        r = c.execute(q, a).fetchone()
+    return _widget_row(r) if r else None
+
+
+def save_widget(owner_id, widget_id, key, name, bot_id, wa_bot_id, settings):
+    s = json.dumps(settings, ensure_ascii=False)
+    with get_conn() as c:
+        if widget_id:
+            return widget_id if c.execute("UPDATE web_widgets SET name=?, bot_id=?, wa_bot_id=?, settings_json=? WHERE id=? AND owner_id=?",
+                                          (name, bot_id, wa_bot_id, s, widget_id, owner_id)).rowcount else None
+        return c.execute("INSERT INTO web_widgets(owner_id,key,name,bot_id,wa_bot_id,settings_json,created_at) VALUES(?,?,?,?,?,?,?)",
+                         (owner_id, key, name, bot_id, wa_bot_id, s, int(time.time()))).lastrowid
+
+
+def delete_widget(owner_id, widget_id):
+    with get_conn() as c:
+        return c.execute("DELETE FROM web_widgets WHERE id=? AND owner_id=?", (widget_id, owner_id)).rowcount > 0
+
+
+def widget_count(widget_id, col):
+    if col not in ("views", "wa_clicks", "chats"):
+        return
+    with get_conn() as c:
+        c.execute(f"UPDATE web_widgets SET {col}={col}+1 WHERE id=?", (widget_id,))
+
+
+def web_push(bot_id, peer, payload):
+    """رسالة صادرة لزائر محادثة الويب (من البوت أو الموظف أو صداه هو) — يستطلعها الودجت."""
+    with get_conn() as c:
+        return c.execute("INSERT INTO web_outbox(bot_id,peer,payload_json,created_at) VALUES(?,?,?,?)",
+                         (bot_id, peer, json.dumps(payload, ensure_ascii=False), int(time.time()))).lastrowid
+
+
+def web_pull(bot_id, peer, after=0, limit=60):
+    with get_conn() as c:
+        if after:
+            rows = c.execute("SELECT id, payload_json, created_at FROM web_outbox WHERE bot_id=? AND peer=? AND id>?"
+                             " ORDER BY id LIMIT ?", (bot_id, peer, int(after), limit)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM (SELECT id, payload_json, created_at FROM web_outbox WHERE bot_id=? AND peer=?"
+                             " ORDER BY id DESC LIMIT ?) ORDER BY id", (bot_id, peer, limit)).fetchall()
+    return [dict(json.loads(r["payload_json"]), id=r["id"], at=r["created_at"]) for r in rows]
+
+
+def purge_web_outbox(max_age=90 * 86400):
+    with get_conn() as c:
+        return c.execute("DELETE FROM web_outbox WHERE created_at<?", (int(time.time()) - max_age,)).rowcount
+
+
+
+# ─────────────────────────────  الدفع داخل المحادثة (المرحلة 9)  ─────────────────────────────
+# روابط دفع من بوابة صاحب النشاط نفسه (payments_gw). المبلغ بالوحدة الصغرى صحيحاً.
+def _chat_pay_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS chat_payments(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            gw_id TEXT,
+            amount INTEGER NOT NULL,                  -- بالوحدة الصغرى (هللة/قرش)
+            currency TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',   -- pending | paid | failed | expired | cancelled
+            url TEXT,
+            flow_id TEXT, node_id TEXT,               -- بطاقة الفلو التي تنتظر الدفع (إن وُجدت)
+            created_by INTEGER,                        -- موظف أرسله من الصندوق، أو NULL للفلو
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            paid_at INTEGER,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_chatpay_gw ON chat_payments(provider, gw_id) WHERE gw_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS ix_chatpay_owner ON chat_payments(owner_id, created_at);
+        CREATE INDEX IF NOT EXISTS ix_chatpay_due ON chat_payments(status, expires_at);
+    """)
+
+
+def create_chat_payment(owner_id, bot_id, peer, provider, amount, currency, description, expires_at,
+                        flow_id=None, node_id=None, created_by=None):
+    with get_conn() as c:
+        return c.execute("INSERT INTO chat_payments(owner_id,bot_id,peer,provider,amount,currency,description,flow_id,"
+                         "node_id,created_by,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                         (owner_id, bot_id, peer, provider, int(amount), currency, description[:255], flow_id, node_id,
+                          created_by, int(time.time()), int(expires_at))).lastrowid
+
+
+def set_chat_payment_link(pid, gw_id, url):
+    with get_conn() as c:
+        c.execute("UPDATE chat_payments SET gw_id=?, url=? WHERE id=?", (gw_id, url, pid))
+
+
+def get_chat_payment(pid=None, provider=None, gw_id=None, owner_id=None):
+    if pid is not None:
+        q, a = "SELECT * FROM chat_payments WHERE id=?", [pid]
+    else:
+        q, a = "SELECT * FROM chat_payments WHERE provider=? AND gw_id=?", [provider, gw_id]
+    if owner_id is not None:
+        q += " AND owner_id=?"; a.append(owner_id)
+    with get_conn() as c:
+        r = c.execute(q, a).fetchone()
+    return dict(r) if r else None
+
+
+def settle_chat_payment(pid, status, from_states=("pending",)):
+    """انتقال ذرّي من حالة مسموحة فقط — إشعاران متزامنان (ويبهوك + صفحة العودة) لا يسوّيان مرتين.
+    `from_states`: «مدفوعة» تُقبل أيضاً بعد «ملغاة/منتهية» محلياً — المال وصل فعلاً عند البوابة.
+    يرجّع True لمن نفّذ الانتقال فعلاً."""
+    now = int(time.time())
+    states = tuple(s for s in from_states if s in ("pending", "cancelled", "expired"))
+    with get_conn() as c:
+        return c.execute("UPDATE chat_payments SET status=?, paid_at=CASE WHEN ?='paid' THEN ? ELSE paid_at END"
+                         f" WHERE id=? AND status IN ({','.join('?' * len(states))})",
+                         (status, status, now, pid, *states)).rowcount > 0
+
+
+def cancel_pending_payments(bot_id, peer):
+    """العميل ألغى المحادثة: روابطه المعلّقة تُعلَّم ملغاة (ولو دفع لاحقاً تُقبل — confirm)."""
+    with get_conn() as c:
+        return c.execute("UPDATE chat_payments SET status='cancelled' WHERE bot_id=? AND peer=? AND status='pending'",
+                         (bot_id, peer)).rowcount
+
+
+def due_chat_payments(now, limit=100):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM chat_payments WHERE status='pending' AND expires_at<=?"
+                                           " ORDER BY expires_at LIMIT ?", (now, limit))]
+
+
+def pending_chat_payments(created_before, now, limit=100):
+    """معلّقة لم تنتهِ مدتها وعمرها دقيقة على الأقل (لا نسأل البوابة عن رابط أُرسل للتوّ)."""
+    with get_conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM chat_payments WHERE status='pending' AND gw_id IS NOT NULL"
+                                           " AND created_at<=? AND expires_at>? ORDER BY id LIMIT ?",
+                                           (created_before, now, limit))]
+
+
+def list_chat_payments(owner_id, status=None, limit=200):
+    q, a = ("SELECT p.*, b.name bot_name, cv.name customer FROM chat_payments p JOIN bots b ON b.id=p.bot_id"
+            " LEFT JOIN conversations cv ON cv.bot_id=p.bot_id AND cv.peer=p.peer WHERE p.owner_id=?"), [owner_id]
+    if status:
+        q += " AND p.status=?"; a.append(status)
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(q + " ORDER BY p.id DESC LIMIT ?", a + [limit])]
+
+
+def chat_payment_totals(owner_id, since):
+    with get_conn() as c:
+        rows = c.execute("SELECT currency, status, COUNT(*) n, COALESCE(SUM(amount),0) total FROM chat_payments"
+                         " WHERE owner_id=? AND created_at>=? GROUP BY currency, status", (owner_id, since)).fetchall()
+    return [dict(r) for r in rows]
+
+
+
+# ════════════════════════ التكاملات — المرحلة 9 (سلة · زد · Shopify · WooCommerce · Webhook) ════════════════════════
+def _integration_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS integrations(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,                    -- salla | zid | shopify | woocommerce | webhook
+            name TEXT NOT NULL DEFAULT '',
+            bot_id INTEGER NOT NULL,                   -- قناة واتساب التي تُرسل منها الرسائل
+            key TEXT NOT NULL UNIQUE,                  -- جزء مسار الاستقبال (128 بت عشوائية)
+            secret TEXT,                               -- سرّ توقيع المزوّد (مختوم db.seal) أو NULL
+            cc TEXT NOT NULL DEFAULT '+966',           -- مفتاح الدولة لأرقام بلا مفتاح
+            rules_json TEXT NOT NULL DEFAULT '[]',
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            last_at INTEGER,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_integ_owner ON integrations(owner_id);
+        CREATE TABLE IF NOT EXISTS integration_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            integration_id INTEGER NOT NULL,
+            dedupe TEXT NOT NULL,                      -- «الحدث:رقم الطلب» — نفس الإشعار لا يصل العميل مرتين
+            event TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'received',   -- received | sent | done | skipped | failed | ignored
+            detail TEXT NOT NULL DEFAULT '',
+            phone TEXT,
+            summary TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            UNIQUE(integration_id, dedupe),
+            FOREIGN KEY(integration_id) REFERENCES integrations(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_integ_ev ON integration_events(integration_id, id);
+    """)
+    # Facebook Lead Ads: الصفحة المربوطة وتوكنها (مختوم) — أعمدة منفصلة عن سرّ التوقيع
+    cols = {r[1] for r in c.execute("PRAGMA table_info(integrations)")}
+    for col in ("ext_id", "ext_name", "token", "meta"):
+        if col not in cols:
+            c.execute(f"ALTER TABLE integrations ADD COLUMN {col} TEXT")
+    for col in ("cursor", "checked_at"):                # Google Sheets: عدد الصفوف المعالَجة وآخر فحص
+        if col not in cols:
+            c.execute(f"ALTER TABLE integrations ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_integ_ext ON integrations(provider, ext_id)")
+
+
+def _integration_row(r):
+    d = dict(r)
+    d["rules"] = json.loads(d.pop("rules_json") or "[]")
+    d["has_secret"] = bool(d.get("secret"))
+    d["has_token"] = bool(d.get("token"))
+    try:
+        d["meta"] = json.loads(d.get("meta") or "{}")
+    except ValueError:
+        d["meta"] = {}
+    return d
+
+
+def set_integration_page(owner_id, iid, page_id, page_name, page_token):
+    with get_conn() as c:
+        return c.execute("UPDATE integrations SET ext_id=?, ext_name=?, token=? WHERE id=? AND owner_id=?",
+                         (page_id, (page_name or "")[:120], seal(page_token), iid, owner_id)).rowcount > 0
+
+
+def integration_token(row):
+    return unseal(row["token"]) if row and row.get("token") else ""
+
+
+def set_integration_sheet(iid, link=None, cursor=None, meta=None, checked_at=None):
+    """Google Sheets: الرابط · المؤشّر (صفوف عولجت) · العناوين وعمود الهاتف · آخر فحص — ما يُمرَّر فقط."""
+    sets, args = [], []
+    for col, v in (("ext_id", link), ("cursor", cursor), ("meta", json.dumps(meta, ensure_ascii=False) if meta is not None else None),
+                   ("checked_at", checked_at)):
+        if v is not None:
+            sets.append(f"{col}=?"); args.append(v)
+    if sets:
+        with get_conn() as c:
+            c.execute(f"UPDATE integrations SET {', '.join(sets)} WHERE id=?", args + [iid])
+
+
+def sheet_integrations():
+    with get_conn() as c:
+        return [_integration_row(r) for r in c.execute("SELECT * FROM integrations WHERE provider='sheets' AND active=1")]
+
+
+def integrations_for_page(page_id):
+    with get_conn() as c:
+        return [_integration_row(r) for r in c.execute(
+            "SELECT * FROM integrations WHERE provider='fb_leads' AND ext_id=? AND active=1", (str(page_id),))]
+
+
+def set_integration_event_info(eid, phone, summary):
+    with get_conn() as c:
+        c.execute("UPDATE integration_events SET phone=?, summary=? WHERE id=?", (phone, (summary or "")[:200], eid))
+
+
+def create_integration(owner_id, provider, name, bot_id, key, secret, cc, rules):
+    with get_conn() as c:
+        return c.execute("INSERT INTO integrations(owner_id,provider,name,bot_id,key,secret,cc,rules_json,created_at)"
+                         " VALUES(?,?,?,?,?,?,?,?,?)",
+                         (owner_id, provider, name, bot_id, key, seal(secret) if secret else None, cc,
+                          json.dumps(rules, ensure_ascii=False), int(time.time()))).lastrowid
+
+
+def update_integration(owner_id, iid, name, bot_id, cc, rules, active, secret=None, clear_secret=False):
+    with get_conn() as c:
+        n = c.execute("UPDATE integrations SET name=?, bot_id=?, cc=?, rules_json=?, active=? WHERE id=? AND owner_id=?",
+                      (name, bot_id, cc, json.dumps(rules, ensure_ascii=False), 1 if active else 0, iid, owner_id)).rowcount
+        if n and (secret or clear_secret):
+            c.execute("UPDATE integrations SET secret=? WHERE id=?", (seal(secret) if secret else None, iid))
+        return n > 0
+
+
+def delete_integration(owner_id, iid):
+    with get_conn() as c:
+        c.execute("DELETE FROM integration_events WHERE integration_id IN"
+                  " (SELECT id FROM integrations WHERE id=? AND owner_id=?)", (iid, owner_id))
+        return c.execute("DELETE FROM integrations WHERE id=? AND owner_id=?", (iid, owner_id)).rowcount > 0
+
+
+def get_integration(iid=None, owner_id=None, key=None):
+    """بالمعرّف (مع صاحبه) أو بمفتاح المسار. السرّ يبقى مختوماً هنا — `integration_secret` تفتحه."""
+    with get_conn() as c:
+        if key is not None:
+            r = c.execute("SELECT * FROM integrations WHERE key=?", (key,)).fetchone()
+        else:
+            r = c.execute("SELECT * FROM integrations WHERE id=? AND owner_id=?", (iid, owner_id)).fetchone()
+    return _integration_row(r) if r else None
+
+
+def integration_secret(row):
+    return unseal(row["secret"]) if row and row.get("secret") else ""
+
+
+def list_integrations(owner_id):
+    since = int(time.time()) - 30 * 86400
+    with get_conn() as c:
+        rows = c.execute("SELECT i.*, b.name bot_name,"
+                         " (SELECT COUNT(*) FROM integration_events e WHERE e.integration_id=i.id AND e.created_at>=?) n30,"
+                         " (SELECT COUNT(*) FROM integration_events e WHERE e.integration_id=i.id AND e.created_at>=?"
+                         "   AND e.status IN ('sent','done')) ok30"
+                         " FROM integrations i JOIN bots b ON b.id=i.bot_id WHERE i.owner_id=? ORDER BY i.id",
+                         (since, since, owner_id)).fetchall()
+    return [_integration_row(r) for r in rows]
+
+
+def claim_integration_event(iid, dedupe, event, phone, summary):
+    """يسجّل الحدث مرة واحدة ⇒ معرّفه، أو None لو وصل من قبل (إعادة إرسال المتجر لنفس الإشعار)."""
+    now = int(time.time())
+    with get_conn() as c:
+        try:
+            eid = c.execute("INSERT INTO integration_events(integration_id,dedupe,event,phone,summary,created_at)"
+                            " VALUES(?,?,?,?,?,?)", (iid, dedupe[:200], event[:60], phone, summary[:200], now)).lastrowid
+        except sqlite3.IntegrityError:
+            return None
+        c.execute("UPDATE integrations SET last_at=? WHERE id=?", (now, iid))
+        # سجلّ محدود: آخر 2000 حدث لكل تكامل (منع التكرار يعمل داخل هذه النافذة)
+        c.execute("DELETE FROM integration_events WHERE integration_id=? AND id <="
+                  " (SELECT id FROM integration_events WHERE integration_id=? ORDER BY id DESC LIMIT 1 OFFSET 2000)",
+                  (iid, iid))
+        return eid
+
+
+def set_integration_event(eid, status, detail=""):
+    with get_conn() as c:
+        c.execute("UPDATE integration_events SET status=?, detail=? WHERE id=?", (status, str(detail)[:300], eid))
+
+
+def list_integration_events(owner_id, iid, limit=50):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT e.* FROM integration_events e JOIN integrations i ON i.id=e.integration_id"
+            " WHERE e.integration_id=? AND i.owner_id=? ORDER BY e.id DESC LIMIT ?", (iid, owner_id, limit))]
+
+
+def upsert_contact_by_phone(owner_id, phone, name="", email=None, source="integration"):
+    """جهة اتصال بالهاتف من متجر/نظام خارجي ⇒ (المعرّف, الموافقة). القائمة لا يُمحى اسمها ولا بريدها،
+    ولا تُغيَّر موافقتها (STOP يبقى STOP)."""
+    now = int(time.time())
+    with get_conn() as c:
+        r = c.execute("SELECT id, name, email, optin FROM contacts WHERE owner_id=? AND phone=?", (owner_id, phone)).fetchone()
+        if r:
+            c.execute("UPDATE contacts SET name=?, email=?, updated_at=? WHERE id=?",
+                      (r["name"] or (name or "")[:120], r["email"] or email, now, r["id"]))
+            return r["id"], r["optin"]
+        try:
+            cid = c.execute("INSERT INTO contacts(owner_id,name,phone,email,fields_json,source,created_at,updated_at)"
+                            " VALUES(?,?,?,?,'{}',?,?,?)",
+                            (owner_id, (name or "")[:120], phone, email, source, now, now)).lastrowid
+        except sqlite3.IntegrityError:          # سباق مع إدخال آخر لنفس الرقم
+            r = c.execute("SELECT id, optin FROM contacts WHERE owner_id=? AND phone=?", (owner_id, phone)).fetchone()
+            return (r["id"], r["optin"]) if r else (None, None)
+        return cid, None
+
+
+def peer_consented(bot_id, peer):
+    """موافقة من داخل المحادثة (زر «أوافق على العروض») على هذا البوت، وليس بعدها STOP."""
+    with get_conn() as c:
+        return c.execute("SELECT 1 FROM bot_users WHERE bot_id=? AND peer=? AND optin_at IS NOT NULL AND opted_out=0",
+                         (bot_id, peer)).fetchone() is not None
+
+
+# ════════════════════════ أتمتة التعليقات — المرحلة 8 ════════════════════════
+def _comment_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS comment_actions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            comment_id TEXT NOT NULL,
+            post_id TEXT NOT NULL DEFAULT '',
+            user_id TEXT NOT NULL DEFAULT '',
+            user_name TEXT NOT NULL DEFAULT '',
+            text TEXT NOT NULL DEFAULT '',
+            rule_id TEXT NOT NULL DEFAULT '',
+            public_ok INTEGER,                         -- NULL لم يُطلب · 1 نجح · 0 فشل
+            private_ok INTEGER,
+            error TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            UNIQUE(bot_id, comment_id),
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_cmt_user ON comment_actions(bot_id, rule_id, post_id, user_id);
+        CREATE INDEX IF NOT EXISTS ix_cmt_time ON comment_actions(bot_id, created_at);
+    """)
+
+
+def claim_comment(bot_id, c, rule_id):
+    """يحجز التعليق مرة واحدة ⇒ المعرّف، أو None لو عولج من قبل."""
+    with get_conn() as conn:
+        try:
+            return conn.execute("INSERT INTO comment_actions(bot_id,comment_id,post_id,user_id,user_name,text,rule_id,created_at)"
+                                " VALUES(?,?,?,?,?,?,?,?)",
+                                (bot_id, c["comment_id"], c["post_id"], c["user_id"], c["user_name"][:80],
+                                 c["text"][:500], rule_id, int(time.time()))).lastrowid
+        except sqlite3.IntegrityError:
+            return None
+
+
+def finish_comment(aid, public_ok, private_ok, error=""):
+    def b(v):
+        return None if v is None else (1 if v else 0)
+    with get_conn() as c:
+        c.execute("UPDATE comment_actions SET public_ok=?, private_ok=?, error=? WHERE id=?",
+                  (b(public_ok), b(private_ok), str(error or "")[:300], aid))
+
+
+def comment_user_done(bot_id, rule_id, post_id, user_id):
+    with get_conn() as c:
+        return c.execute("SELECT 1 FROM comment_actions WHERE bot_id=? AND rule_id=? AND post_id=? AND user_id=? LIMIT 1",
+                         (bot_id, rule_id, post_id, user_id)).fetchone() is not None
+
+
+def comment_stats(bot_id, since):
+    """لكل قاعدة: التعليقات المعالَجة · الردود العلنية · الرسائل الخاصة الناجحة · الإخفاقات."""
+    with get_conn() as c:
+        rows = c.execute("SELECT rule_id, COUNT(*) n, SUM(public_ok=1) pub, SUM(private_ok=1) dm,"
+                         " SUM(public_ok=0 OR private_ok=0) bad"
+                         " FROM comment_actions WHERE bot_id=? AND created_at>=? GROUP BY rule_id", (bot_id, since)).fetchall()
+    return {r["rule_id"]: {"n": r["n"], "pub": r["pub"] or 0, "dm": r["dm"] or 0, "bad": r["bad"] or 0} for r in rows}
+
+
+def _crm_sync_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS crm_links(
+            owner_id INTEGER NOT NULL,
+            contact_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            ext_id TEXT NOT NULL,
+            synced_at INTEGER NOT NULL,
+            PRIMARY KEY(owner_id, contact_id, provider),
+            FOREIGN KEY(contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_contacts_upd ON contacts(owner_id, updated_at, id);
+    """)
+    if "hash" not in {r[1] for r in c.execute("PRAGMA table_info(crm_links)")}:   # المزامنة باتجاهين: بصمة آخر تطابق
+        c.execute("ALTER TABLE crm_links ADD COLUMN hash TEXT")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_crm_ext ON crm_links(owner_id, provider, ext_id)")
+
+
+def crm_link(owner_id, contact_id, provider):
+    with get_conn() as c:
+        r = c.execute("SELECT ext_id FROM crm_links WHERE owner_id=? AND contact_id=? AND provider=?",
+                      (owner_id, contact_id, provider)).fetchone()
+    return r[0] if r else None
+
+
+def crm_link_hash(owner_id, contact_id, provider):
+    with get_conn() as c:
+        r = c.execute("SELECT hash FROM crm_links WHERE owner_id=? AND contact_id=? AND provider=?",
+                      (owner_id, contact_id, provider)).fetchone()
+    return r[0] if r else None
+
+
+def crm_contact_by_ext(owner_id, provider, ext_id):
+    with get_conn() as c:
+        r = c.execute("SELECT contact_id, hash FROM crm_links WHERE owner_id=? AND provider=? AND ext_id=?",
+                      (owner_id, provider, str(ext_id))).fetchone()
+    return (r[0], r[1]) if r else (None, None)
+
+
+def set_crm_link(owner_id, contact_id, provider, ext_id, hash_=None):
+    """`hash_`: بصمة آخر قيم متطابقة بين الطرفين — تمنع الصدى (دفع ثم سحب ثم دفع…)."""
+    with get_conn() as c:
+        c.execute("INSERT INTO crm_links(owner_id,contact_id,provider,ext_id,synced_at,hash) VALUES(?,?,?,?,?,?)"
+                  " ON CONFLICT(owner_id,contact_id,provider) DO UPDATE SET ext_id=excluded.ext_id,"
+                  " synced_at=excluded.synced_at, hash=COALESCE(excluded.hash, crm_links.hash)",
+                  (owner_id, contact_id, provider, str(ext_id), int(time.time()), hash_))
+
+
+def contact_by_email(owner_id, email):
+    with get_conn() as c:
+        r = c.execute("SELECT id FROM contacts WHERE owner_id=? AND lower(email)=lower(?) LIMIT 1", (owner_id, email)).fetchone()
+    return r[0] if r else None
+
+
+def contact_by_phone(owner_id, phone):
+    with get_conn() as c:
+        r = c.execute("SELECT id FROM contacts WHERE owner_id=? AND phone=? LIMIT 1", (owner_id, phone)).fetchone()
+    return r[0] if r else None
+
+
+def update_contact_from_crm(owner_id, contact_id, name, phone, email):
+    """قيم الـ CRM على جهة قائمة — الفارغ لا يمحو، والهاتف المأخوذ لجهة أخرى لا يُكتب (يبقى القديم)."""
+    now = int(time.time())
+    with get_conn() as c:
+        if name:
+            c.execute("UPDATE contacts SET name=?, updated_at=? WHERE id=? AND owner_id=?", (name[:120], now, contact_id, owner_id))
+        if email:
+            c.execute("UPDATE contacts SET email=?, updated_at=? WHERE id=? AND owner_id=?", (email, now, contact_id, owner_id))
+        if phone:
+            try:
+                c.execute("UPDATE contacts SET phone=?, updated_at=? WHERE id=? AND owner_id=?", (phone, now, contact_id, owner_id))
+            except sqlite3.IntegrityError:
+                pass
+
+
+def create_contact_from_crm(owner_id, name, phone, email):
+    now = int(time.time())
+    with get_conn() as c:
+        try:
+            return c.execute("INSERT INTO contacts(owner_id,name,phone,email,fields_json,source,created_at,updated_at)"
+                             " VALUES(?,?,?,?,'{}','crm',?,?)", (owner_id, (name or "")[:120], phone, email, now, now)).lastrowid
+        except sqlite3.IntegrityError:
+            return None
+
+
+def contacts_changed_since(owner_id, cursor, limit=100):
+    """جهات تغيّرت بعد المؤشّر [updated_at, id] مرتّبةً — المؤشّر المركّب لا يُسقط جهتين بنفس الثانية."""
+    ts, cid = (cursor if isinstance(cursor, (list, tuple)) and len(cursor) == 2 else (0, 0))
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT id, name, phone, email, updated_at FROM contacts WHERE owner_id=? AND"
+            " (updated_at > ? OR (updated_at = ? AND id > ?)) ORDER BY updated_at, id LIMIT ?",
+            (owner_id, int(ts), int(ts), int(cid), limit))]
+
+
+def max_lead_id(owner_id):
+    with get_conn() as c:
+        r = c.execute("SELECT MAX(l.id) FROM leads l JOIN bots b ON b.id=l.bot_id WHERE b.owner_id=?", (owner_id,)).fetchone()
+    return r[0] or 0
+
+
+def leads_after(owner_id, lead_id, limit=100):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT l.id, l.bot_id, l.tg_user_id, l.data_json, l.created_at, b.name bot_name FROM leads l"
+            " JOIN bots b ON b.id=l.bot_id WHERE b.owner_id=? AND l.id>? ORDER BY l.id LIMIT ?",
+            (owner_id, int(lead_id or 0), limit))]
+
+
+def lead_contact(lead):
+    """جهة اتصال الإدخال: بمعرّف العميل في قناة البوت (واتساب: الرقم نفسه)."""
+    if not lead.get("tg_user_id"):
+        return None
+    with get_conn() as c:
+        r = c.execute("SELECT contact_id FROM contact_peers WHERE bot_id=? AND substr(peer, instr(peer, ':') + 1)=?",
+                      (lead["bot_id"], str(lead["tg_user_id"]))).fetchone()
+    return r[0] if r else None
+
+
+def owners_with_setting(key):
+    with get_conn() as c:
+        return [r[0] for r in c.execute("SELECT user_id FROM settings WHERE key=? AND value IS NOT NULL AND value!=''", (key,))]
+
+
+# ════════════════════════ مكالمات واتساب — المرحلة 8 ════════════════════════
+def _call_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS wa_calls(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            call_id TEXT NOT NULL UNIQUE,
+            peer TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            sdp TEXT NOT NULL DEFAULT '',              -- عرض Meta — يُمسح عند الانتهاء
+            status TEXT NOT NULL DEFAULT 'ringing',    -- ringing | answered | rejected | ended | missed
+            agent_id INTEGER,
+            duration INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            answered_at INTEGER,
+            ended_at INTEGER,
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_calls_ring ON wa_calls(status, created_at);
+        CREATE INDEX IF NOT EXISTS ix_calls_bot ON wa_calls(bot_id, id);
+        CREATE TABLE IF NOT EXISTS call_permissions(
+            bot_id INTEGER NOT NULL,
+            peer TEXT NOT NULL,
+            granted INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL DEFAULT 0,     -- 0 = دائم
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY(bot_id, peer),
+            FOREIGN KEY(bot_id) REFERENCES bots(id) ON DELETE CASCADE
+        );
+    """)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(wa_calls)")}
+    if "direction" not in cols:                        # المكالمات الصادرة: الاتجاه وجواب SDP من العميل
+        c.execute("ALTER TABLE wa_calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'in'")
+    if "answer_sdp" not in cols:
+        c.execute("ALTER TABLE wa_calls ADD COLUMN answer_sdp TEXT NOT NULL DEFAULT ''")
+
+
+def set_call_permission(bot_id, peer, granted, expires_at):
+    with get_conn() as c:
+        c.execute("INSERT INTO call_permissions(bot_id,peer,granted,expires_at,updated_at) VALUES(?,?,?,?,?)"
+                  " ON CONFLICT(bot_id,peer) DO UPDATE SET granted=excluded.granted, expires_at=excluded.expires_at,"
+                  " updated_at=excluded.updated_at", (bot_id, peer, 1 if granted else 0, int(expires_at or 0), int(time.time())))
+
+
+def get_call_permission(bot_id, peer):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM call_permissions WHERE bot_id=? AND peer=?", (bot_id, peer)).fetchone()
+    return dict(r) if r else None
+
+
+def add_out_call(bot_id, call_id, peer, agent_id):
+    with get_conn() as c:
+        c.execute("INSERT INTO wa_calls(bot_id,call_id,peer,status,agent_id,direction,created_at) VALUES(?,?,?,'dialing',?,'out',?)",
+                  (bot_id, call_id, peer, agent_id, int(time.time())))
+
+
+def set_call_answer(call_id, sdp):
+    """العميل ردّ على مكالمتنا ⇒ جواب SDP مرة واحدة (من «يتصل» فقط)."""
+    with get_conn() as c:
+        return c.execute("UPDATE wa_calls SET status='answered', answer_sdp=?, answered_at=? WHERE call_id=?"
+                         " AND status='dialing' AND direction='out'", (sdp, int(time.time()), call_id)).rowcount > 0
+
+
+def agent_busy(agent_id):
+    with get_conn() as c:
+        return c.execute("SELECT 1 FROM wa_calls WHERE agent_id=? AND status IN ('dialing','answered') AND ended_at IS NULL"
+                         " AND created_at>? LIMIT 1", (agent_id, int(time.time()) - 4 * 3600)).fetchone() is not None
+
+
+def add_call(bot_id, call_id, peer, name, sdp):
+    with get_conn() as c:
+        try:
+            return c.execute("INSERT INTO wa_calls(bot_id,call_id,peer,name,sdp,created_at) VALUES(?,?,?,?,?,?)",
+                             (bot_id, call_id, peer, (name or "")[:120], sdp, int(time.time()))).lastrowid
+        except sqlite3.IntegrityError:          # Meta تعيد الحدث
+            return None
+
+
+def get_call(call_id):
+    with get_conn() as c:
+        r = c.execute("SELECT * FROM wa_calls WHERE call_id=?", (call_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def claim_call(call_id, agent_id, status="answered"):
+    """من «ترنّ» فقط — موظف واحد يرد مهما ضغط الفريق معاً."""
+    with get_conn() as c:
+        return c.execute("UPDATE wa_calls SET status=?, agent_id=?, answered_at=? WHERE call_id=? AND status='ringing'",
+                         (status, agent_id, int(time.time()) if status == "answered" else None, call_id)).rowcount > 0
+
+
+def release_call(call_id):
+    with get_conn() as c:
+        c.execute("UPDATE wa_calls SET status='ringing', agent_id=NULL, answered_at=NULL"
+                  " WHERE call_id=? AND status IN ('answered','rejected') AND ended_at IS NULL", (call_id,))
+
+
+def end_call(call_id, duration):
+    """انتهاء مرة واحدة ⇒ الصف بعد التحديث، أو None. مُجابة ⇒ ended بمدتها، وإلا missed (والمرفوضة تبقى)."""
+    now = int(time.time())
+    with get_conn() as c:
+        n = c.execute("UPDATE wa_calls SET status=CASE status WHEN 'answered' THEN 'ended' WHEN 'rejected' THEN 'rejected'"
+                      " WHEN 'dialing' THEN 'no_answer' ELSE 'missed' END, duration=?, ended_at=?, sdp='', answer_sdp=''"
+                      " WHERE call_id=? AND ended_at IS NULL",
+                      (max(0, int(duration or 0)), now, call_id)).rowcount
+        r = c.execute("SELECT * FROM wa_calls WHERE call_id=?", (call_id,)).fetchone() if n else None
+    return dict(r) if r else None
+
+
+def stale_ringing_calls(before):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM wa_calls WHERE status IN ('ringing','dialing') AND created_at<?"
+                                           " AND ended_at IS NULL", (before,))]
+
+
+def ringing_calls(owner_id, since):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT w.*, b.name bot_name FROM wa_calls w JOIN bots b ON b.id=w.bot_id"
+            " WHERE b.owner_id=? AND w.status IN ('ringing','answered','dialing') AND w.ended_at IS NULL"
+            " AND (w.created_at>=? OR w.status!='ringing') AND w.created_at>?"
+            " ORDER BY w.id", (owner_id, since, int(time.time()) - 4 * 3600))]
+
+
+def comment_recent(bot_id, limit=30):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT id, post_id, user_name, text, rule_id, public_ok, private_ok, error, created_at FROM comment_actions"
+            " WHERE bot_id=? ORDER BY id DESC LIMIT ?", (bot_id, limit))]

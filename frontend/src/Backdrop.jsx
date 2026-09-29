@@ -177,11 +177,11 @@ export default function Backdrop({ dense = true }) {
   return (
     <>
       {/* 1) حقل الضوء المتفاعل */}
-      <canvas ref={canvasRef} aria-hidden="true"
+      <canvas ref={canvasRef} aria-hidden="true" data-backdrop=""
               style={{ ...fixed, zIndex: -40, width: "100%", height: "100%" }} />
 
       {/* 2) شبكة تضيء حول المؤشّر فقط */}
-      <div ref={glowRef} aria-hidden="true"
+      <div ref={glowRef} aria-hidden="true" data-backdrop=""
            style={{
              ...fixed, zIndex: -30, opacity: 0,
              transition: "opacity .6s cubic-bezier(.16,1,.3,1)",
@@ -196,7 +196,7 @@ export default function Backdrop({ dense = true }) {
            }} />
 
       {/* 3) شبكة خافتة ثابتة تعطي إحساس منتج هندسي */}
-      <div aria-hidden="true"
+      <div aria-hidden="true" data-backdrop=""
            style={{
              ...fixed, zIndex: -25,
              backgroundImage:
@@ -208,11 +208,11 @@ export default function Backdrop({ dense = true }) {
            }} />
 
       {/* 4) حبيبات فيلمية */}
-      <div aria-hidden="true" className="grain"
+      <div aria-hidden="true" data-backdrop="" className="grain"
            style={{ ...fixed, zIndex: -20, opacity: 0.15 }} />
 
       {/* 5) تعتيم سفلي يثبّت النص فوق الضوء */}
-      <div aria-hidden="true"
+      <div aria-hidden="true" data-backdrop=""
            style={{
              ...fixed, zIndex: -15,
              background: "linear-gradient(180deg, transparent 0%, rgba(5,7,13,.35) 55%, rgba(5,7,13,.8) 100%)",

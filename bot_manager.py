@@ -126,7 +126,7 @@ def _wa_channel(row):
         await manager._warn_wa_limit(row, owner_id, limit)
         return False
 
-    return WhatsAppChannel(phone_id, cfg.get("wa_token", ""), on_send=guard)
+    return WhatsAppChannel(phone_id, cfg.get("wa_token", ""), on_send=guard, bot_id=bot_id)
 
 # قنوات تصلها الرسائل بالويبهوك (لا polling): تُسجَّل «مشغّلة» بلا عملية، والإرسال عبر Graph.
 WEBHOOK_CHANNELS = ("whatsapp", "messenger", "instagram")
@@ -344,6 +344,96 @@ class BotManager:
         # محرّك التفعيل وتنبيه العميل المنتظر: دورة أقصر، فـ«بعد ساعة من التسجيل»
         # لا معنى لها في حلقة كل ست ساعات.
         threading.Thread(target=self._activation_loop, daemon=True).start()
+        # البث 2.0: الحملات المجدولة وإعادة المحاولة الذكية (broadcasts.tick) — كل 30 ثانية
+        threading.Thread(target=self._campaign_loop, daemon=True).start()
+        # مزامنة HubSpot/Zoho: خيط مستقل كل دقيقة — بطء CRM خارجي لا يؤخّر الحملات والتسلسلات
+        threading.Thread(target=self._crm_loop, daemon=True).start()
+
+    def _crm_loop(self):
+        import crm_sync
+        while True:
+            _time.sleep(60)
+            try:
+                crm_sync.tick()
+            except Exception:
+                log.exception("crm sync")
+            try:
+                import integrations                          # Google Sheets كمصدر: كل دقيقتين لكل جدول
+                integrations.sheets_tick()
+            except Exception:
+                log.exception("sheets poll")
+
+    def _campaign_loop(self):
+        import broadcasts as BC
+        while True:
+            _time.sleep(30)
+            try:
+                BC.tick()
+            except Exception:
+                log.exception("campaign scheduler")
+            try:
+                self.flow_timeouts()
+            except Exception:
+                log.exception("flow timeouts")
+            try:
+                self.sequence_tick()
+            except Exception:
+                log.exception("sequences")
+            try:
+                import chat_pay                              # روابط دفع انتهت مدتها: سؤال أخير للبوابة ثم «منتهية»
+                chat_pay.sweep()
+            except Exception:
+                log.exception("chat payments sweep")
+            try:
+                import calling                               # مكالمات رنّت بلا رد ولا terminate ⇒ فائتة
+                calling.sweep()
+            except Exception:
+                log.exception("calls sweep")
+            if _time.time() - getattr(self, "_resolved_at", 0) > 600:   # الإغلاق الآلي كل عشر دقائق يكفي
+                self._resolved_at = _time.time()
+                try:
+                    n = db.auto_resolve_idle()
+                    if n:
+                        log.info("auto-resolved %s idle conversations", n)
+                except Exception:
+                    log.exception("auto resolve")
+
+    # ---- التسلسلات: خطوات حلّ موعدها (sequences.due يحجزها ذرّياً قبل الإرسال) ----
+    def sequence_tick(self, now=None):
+        import sequences as SQ
+        for e, seq, bot in SQ.due(now):
+            ch = self._flow_channel(bot) if bot else None
+            coro = SQ.run_step(bot, ch, e, seq, now)
+            try:
+                if self._loop is not None and self._loop.is_running():
+                    self._submit(coro, timeout=60)
+                else:
+                    asyncio.run(coro)
+            except Exception:
+                log.exception("sequence step enrollment=%s", e["id"])
+                # حُجزت الخطوة (next_at=NULL) ولم تكتمل: تُعاد جدولتها بدل أن تعلق للأبد
+                db.advance_enrollment(e["id"], e["step"], int(_time.time()) + 600)
+
+    # ---- الفلو المرئي: تذكير من لم يرد، وإنهاء الجلسة بعد المهلة (flow_graph.due_timeouts) ----
+    def _flow_channel(self, row):
+        ch = channel_for(row)
+        if ch is None:
+            app = self._apps.get(row["id"])
+            if app is None or isinstance(app, dict):
+                return None
+            from channels.telegram import TelegramChannel
+            ch = TelegramChannel(app.bot)
+        return ch
+
+    def flow_timeouts(self, now=None):
+        import flow_graph as FG
+        for bot, s, flow, action in FG.due_timeouts(now):
+            ch = self._flow_channel(bot) if bot and action != "stale" else None
+            coro = FG.apply_timeout(bot, ch, s, flow, action)
+            if self._loop is not None and self._loop.is_running():
+                self._submit(coro, timeout=30)
+            else:
+                asyncio.run(coro)
 
     def _run(self):
         self._loop = asyncio.new_event_loop()
@@ -609,6 +699,45 @@ class BotManager:
             self._tally(prog, bool(ok))
             await asyncio.sleep(0.1)
 
+    # ---- البث 2.0: قالب مخصّص لكل مستلم (broadcasts.py) ----
+    def send_campaign_items(self, bot_id, camp, items, prog=None):
+        """يرسل قالب الحملة لكل عنصر {rid, peer, contact} بمتغيّراته هو، ويسجّل نتيجة كل مستلم.
+        يرجّع (قبلتها Meta, لم تُقبل) من العدّاد الحيّ — كل البثّ (§38)."""
+        row = db.get_bot(bot_id)
+        if not row or (row.get("channel") or "") != "whatsapp" or not items:
+            return 0, 0
+        prog = self._progress(prog, len(items))
+        return self._run_counted(self._send_campaign(row, camp, items, prog), prog, len(items),
+                                 max(60, len(items) * 2.0), "campaign")
+
+    async def _send_campaign(self, row, camp, items, prog):
+        import broadcasts as BC
+        import msg_status as MS
+        MS.SEND_CTX.set({"campaign_id": camp["id"]})      # كل رسالة توسَم بالحملة في wa_messages
+        channel = _wa_channel(row)
+        async def ref(aid):
+            asset = db.get_asset(aid, owner_id=row["owner_id"]) if aid else None
+            return await channel.media_ref(asset, row["id"]) if asset else None
+        # كل ملف يُرفع لـ Meta مرة واحدة للحملة كلها (ويُخزَّن 30 يوماً)، لا لكل مستلم
+        media_id = await ref((camp.get("header") or {}).get("asset_id"))
+        card_media = {}
+        for c in (camp.get("extra") or {}).get("cards") or []:
+            if c.get("asset_id") and c["asset_id"] not in card_media:
+                card_media[c["asset_id"]] = await ref(c["asset_id"])
+        for it in items:
+            if prog["stop"]:
+                break
+            try:
+                res = await channel.send_template(it["peer"], camp["template"], camp["lang"],
+                                                  BC.build_components(camp, it["contact"], media_id, card_media))
+            except Exception:
+                log.exception("campaign %s send", camp["id"])
+                res = None
+            wamid = MS.wamid_from(res) if res else None
+            db.mark_recipient(it["rid"], wamid, None if wamid else (channel.last_error or (None, ""))[0])
+            self._tally(prog, bool(wamid))
+            await asyncio.sleep(0.1)
+
     # ---- الحملات: في الخلفية، حملة واحدة لكل بوت ----
     def start_campaign(self, bot_id, job):
         """يشغّل `job(state)` في خيط خلفي، ويرجّع False لو حملة البوت نفسه ما زالت تعمل.
@@ -711,6 +840,15 @@ class BotManager:
     async def _send_to_peer(self, row, peer, text=None, asset=None):
         from telegram.error import Forbidden
         from channels.telegram import TelegramChannel
+        if peer.startswith("wb:"):
+            # زائر محادثة الويب (ودجت الموقع): الرد يُكتب في صندوقه ويستطلعه الودجت — أياً كانت قناة البوت
+            from channels.web import WebChannel
+            ch = WebChannel(row["id"])
+            if asset:
+                await ch.send_media(peer, asset, row["id"], caption=text or None)
+            else:
+                await ch.send_text(peer, text)
+            return True, ""
         is_wa = (row.get("channel") or "telegram") in WEBHOOK_CHANNELS
         own = None
         if is_wa and peer.startswith("tg:"):
@@ -885,6 +1023,9 @@ class BotManager:
                 n = db.purge_old_messages()
                 if n:
                     log.info("purged %s messages older than the retention period", n)
+                n = db.purge_old_wa_messages()        # سجل حالات التسليم: نفس مدة الاحتفاظ
+                if n:
+                    log.info("purged %s delivery-status rows older than a year", n)
                 n = db.purge_old_events()
                 if n:
                     log.info("purged %s analytics events older than a year", n)
@@ -1031,6 +1172,12 @@ class BotManager:
             except Exception:
                 log.exception("Meta side events failed for bot #%s", row["id"])
             ch = _meta_channel(row)
+            if entry.get("changes"):
+                try:                                    # أتمتة التعليقات (AGENTS §69): ردّ علني + رسالة خاصة
+                    import comments as CM
+                    await CM.process(row, entry, pfx, ch.token)
+                except Exception:
+                    log.exception("comment automation failed for bot #%s", row["id"])
             for msg in ch.normalize_all({"entry": [entry]}):
                 if not db.mark_msg_seen(msg.get("id")):
                     continue

@@ -28,8 +28,10 @@ BASE_DIR = os.path.join(
                    os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")),
     "assets")
 
-ALLOWED = {"image/jpeg": ".jpg", "image/png": ".png", "video/mp4": ".mp4"}
-MAX_BYTES = {"image": 5 * 1024 * 1024, "video": 16 * 1024 * 1024}
+ALLOWED = {"image/jpeg": ".jpg", "image/png": ".png", "video/mp4": ".mp4",
+           # الصوت (باني الفلو المرئي): الصيغ التي يقبلها واتساب وتليجرام معاً. OGG/Opus = رسالة صوتية.
+           "audio/mpeg": ".mp3", "audio/ogg": ".ogg", "audio/mp4": ".m4a", "audio/aac": ".aac"}
+MAX_BYTES = {"image": 5 * 1024 * 1024, "video": 16 * 1024 * 1024, "audio": 16 * 1024 * 1024}
 MAX_ANY = max(MAX_BYTES.values())
 MIN_BYTES = 64
 FETCH_TIMEOUT = 15

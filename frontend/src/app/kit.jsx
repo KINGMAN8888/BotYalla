@@ -82,13 +82,24 @@ export function Avatar({ src, name = "", size = 36, className = "" }) {
   const style = { width: size, height: size, fontSize: Math.round(size * 0.42) };
   return src
     ? <img src={src} alt="" style={style}
-           className={`shrink-0 rounded-full object-cover shadow-[0_0_0_2px_rgb(255_255_255/0.12)] ${className}`} />
+           className={`shrink-0 rounded-full object-cover shadow-[0_0_0_2px_rgb(var(--ov-rgb)/0.12)] ${className}`} />
     : <span style={style}
             className={`grid shrink-0 place-items-center rounded-full font-extrabold text-[#07090F]
                         bg-[linear-gradient(135deg,#8FE9FF,#B9AFFF)] ${className}`}>{letter}</span>;
 }
 
 /* ---------------------------------------------------------------- عناوين */
+/* الشعار بنسختيه: الكلمة فاتحة للمظهر الداكن وداكنة للفاتح. الاثنتان في الصفحة و CSS يُظهر
+   المناسبة — فالتبديل فوري بلا إعادة تحميل ولا وميض. */
+export function Logo({ className = "h-9 w-auto" }) {
+  return (
+    <>
+      <img src={BY.urls.logo} alt={BY.brand} className={`logo-on-dark ${className}`} />
+      <img src={BY.urls.logoLight || BY.urls.logo} alt={BY.brand} className={`logo-on-light ${className}`} />
+    </>
+  );
+}
+
 export function PageHead({ icon, title, sub, actions }) {
   return (
     <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
@@ -128,8 +139,8 @@ const SKINS = {
   primary: "text-[#07090F] bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] " +
            "shadow-[0_8px_24px_-8px_rgb(124_108_246/0.7)] hover:-translate-y-0.5 " +
            "hover:shadow-[0_14px_32px_-8px_rgb(124_108_246/0.9)]",
-  ghost:   "text-ink bg-white/[0.04] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] " +
-           "hover:bg-white/[0.09] hover:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.2)]",
+  ghost:   "text-ink bg-ov/[0.04] shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] " +
+           "hover:bg-ov/[0.09] hover:shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.2)]",
   green:   "text-[#04140E] bg-[linear-gradient(100deg,#5EEAD4,#2DD4A7)] " +
            "shadow-[0_8px_24px_-8px_rgb(45_212_167/0.7)] hover:-translate-y-0.5",
   red:     "text-[#2A0A0A] bg-[linear-gradient(100deg,#FCA5A5,#F87171)] " +
@@ -158,9 +169,9 @@ export function Field({ label, hint, children, className = "" }) {
 }
 
 export const INPUT =
-  "w-full rounded-xl bg-black/25 px-3.5 py-2.5 text-[14px] text-ink " +
-  "shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] outline-none transition-all duration-300 " +
-  "placeholder:text-ink-3/70 hover:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.18)] " +
+  "w-full rounded-xl bg-sink/25 px-3.5 py-2.5 text-[14px] text-ink " +
+  "shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] outline-none transition-all duration-300 " +
+  "placeholder:text-ink-3/70 hover:shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.18)] " +
   "focus:shadow-[inset_0_0_0_1px_rgb(124_108_246/0.8),0_0_0_3px_rgb(124_108_246/0.18)]";
 
 export const Input = (p) => <input {...p} className={`${INPUT} ${p.className || ""}`} />;
@@ -326,9 +337,9 @@ export function Select({ children, className = "", value: controlledValue, defau
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
             style={{ position: "fixed", left: pos.left, width: pos.width, top: pos.top,
                      bottom: pos.bottom, maxHeight: pos.maxH }}
-            className="z-[1000] overflow-y-auto overscroll-contain rounded-xl bg-[rgb(17_18_32/0.97)] p-1.5
-                       backdrop-blur-xl shadow-[0_18px_40px_-12px_rgb(0_0_0/0.75),inset_0_0_0_1px_rgb(255_255_255/0.1)]
-                       [scrollbar-width:thin] [scrollbar-color:rgb(255_255_255/0.18)_transparent]"
+            className="z-[1000] overflow-y-auto overscroll-contain rounded-xl bg-[rgb(var(--menu-rgb)/0.97)] p-1.5
+                       backdrop-blur-xl shadow-[0_18px_40px_-12px_rgb(0_0_0/0.75),inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
+                       [scrollbar-width:thin] [scrollbar-color:rgb(var(--ov-rgb)/0.18)_transparent]"
           >
             {options.map((opt, i) => (
               <div
@@ -340,8 +351,8 @@ export function Select({ children, className = "", value: controlledValue, defau
                   opt.disabled ? "cursor-not-allowed opacity-50 text-ink-3"
                   : i === selectedIdx
                     ? "cursor-pointer bg-[linear-gradient(120deg,rgba(124,108,246,0.15),rgba(34,211,238,0.05))] text-au-cyan font-bold"
-                  : i === active ? "cursor-pointer bg-white/[0.06] text-ink"
-                  : "cursor-pointer text-ink-2 hover:bg-white/[0.04] hover:text-ink"
+                  : i === active ? "cursor-pointer bg-ov/[0.06] text-ink"
+                  : "cursor-pointer text-ink-2 hover:bg-ov/[0.04] hover:text-ink"
                 }`}
               >
                 {opt.label}
@@ -361,7 +372,7 @@ export function Pill({ tone = "on", children, dot }) {
     on:   "bg-au-teal/15 text-au-teal",
     off:  "bg-red-400/15 text-red-300",
     warn: "bg-yellow-400/15 text-yellow-300",
-    mute: "bg-white/5 text-ink-3",
+    mute: "bg-ov/5 text-ink-3",
   };
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] font-extrabold ${tones[tone]}`}>
@@ -414,7 +425,7 @@ export function Table({ head, children }) {
             {head.map((h, i) => (
               <th key={i} className="whitespace-nowrap px-3 py-3 text-start text-[11.5px] font-extrabold
                                      uppercase tracking-wider text-ink-3
-                                     shadow-[inset_0_-1px_0_rgb(255_255_255/0.08)]">{h}</th>
+                                     shadow-[inset_0_-1px_0_rgb(var(--ov-rgb)/0.08)]">{h}</th>
             ))}
           </tr>
         </thead>
@@ -424,10 +435,10 @@ export function Table({ head, children }) {
   );
 }
 export const Tr = ({ children }) => (
-  <tr className="transition-colors duration-200 hover:bg-white/[0.035]">{children}</tr>
+  <tr className="transition-colors duration-200 hover:bg-ov/[0.035]">{children}</tr>
 );
 export const Td = ({ children, className = "" }) => (
-  <td className={`px-3 py-3.5 align-middle text-ink-2 shadow-[inset_0_-1px_0_rgb(255_255_255/0.05)] ${className}`}>
+  <td className={`px-3 py-3.5 align-middle text-ink-2 shadow-[inset_0_-1px_0_rgb(var(--ov-rgb)/0.05)] ${className}`}>
     {children}
   </td>
 );
@@ -438,7 +449,7 @@ export function Empty({ icon, title, text, action }) {
     <div className="py-12 text-center">
       <span className="mx-auto mb-4 grid size-16 place-items-center rounded-2xl text-au-cyan
                        bg-[linear-gradient(150deg,rgb(124_108_246/0.25),rgb(34_211_238/0.1))]
-                       shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]">
+                       shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.09)]">
         <Icon name={icon} size={28} />
       </span>
       <h3 className="m-0 mb-2 text-[17px] font-extrabold text-ink">{title}</h3>
@@ -469,3 +480,42 @@ export const Grid = ({ cols = 4, children, className = "" }) => (
     cols === 2 ? "sm:grid-cols-2" : cols === 3 ? "sm:grid-cols-2 lg:grid-cols-3" :
     "sm:grid-cols-2 lg:grid-cols-4"} ${className}`}>{children}</div>
 );
+
+/* نافذة حوار فوق كل طبقات القشرة (الشريط 150 · الدرج 200 · المساعد 350) — Esc والنقر خارجها يغلقانها */
+export function Modal({ open, onClose, title, icon, children, footer, wide }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const k = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[360] grid place-items-center bg-sink/70 p-3 backdrop-blur-sm sm:p-4"
+         onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div role="dialog" aria-modal="true" aria-label={title}
+           className={`glass relative flex max-h-[92vh] w-full flex-col rounded-[22px] ${wide ? "max-w-[860px]" : "max-w-[560px]"}`}>
+        <div className="flex items-center justify-between gap-3 px-5 pb-3 pt-5 sm:px-6">
+          <h2 className="m-0 flex items-center gap-2 text-[17px] font-extrabold text-ink">
+            {icon && <Icon name={icon} size={18} className="text-au-cyan" />}{title}
+          </h2>
+          <Btn sm variant="ghost" type="button" onClick={onClose} aria-label={t("cancel")}><Icon name="close" size={16} /></Btn>
+        </div>
+        <div className="overflow-y-auto px-5 pb-5 sm:px-6">{children}</div>
+        {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-ov/5 px-5 py-4 sm:px-6">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* مفتاح تشغيل/إيقاف بدور switch */
+export function Toggle({ checked, onChange, label, disabled }) {
+  return (
+    <button type="button" role="switch" aria-checked={!!checked} aria-label={label} disabled={disabled}
+            onClick={() => onChange(!checked)}
+            className={`relative h-6 w-11 shrink-0 cursor-pointer rounded-full border-0 transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50
+                        ${checked ? "bg-au-teal/80" : "bg-ov/15"}`}>
+      <span className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all duration-200 ${checked ? "start-[22px]" : "start-0.5"}`} />
+    </button>
+  );
+}

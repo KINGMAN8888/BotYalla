@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   BY, P, t, bi, Icon, Card, Btn, Field, Input, Select, Textarea, Form, Pill, PageHead,
   SectionTitle, Table, Tr, Td, Empty, num, fmtDate,
-} from "../kit.jsx";
+ Logo } from "../kit.jsx";
 import { Flashes } from "../AppShell.jsx";
 
 /* ============================================================================
@@ -74,13 +74,13 @@ function KindCard({ active, onClick, icon, title, desc, count }) {
     <button type="button" onClick={onClick}
       className={`flex w-full cursor-pointer items-start gap-3 rounded-2xl border-0 p-4 text-start transition-all duration-300
         ${active ? "bg-[linear-gradient(150deg,rgb(124_108_246/0.22),rgb(34_211_238/0.08))] shadow-[inset_0_0_0_1.5px_rgb(124_108_246/0.75)]"
-                 : "bg-white/[0.03] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] hover:bg-white/[0.06]"}`}>
-      <span className={`grid size-10 shrink-0 place-items-center rounded-xl ${active ? "bg-au-violet/30 text-ink" : "bg-white/5 text-ink-3"}`}>
+                 : "bg-ov/[0.03] shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)] hover:bg-ov/[0.06]"}`}>
+      <span className={`grid size-10 shrink-0 place-items-center rounded-xl ${active ? "bg-au-violet/30 text-ink" : "bg-ov/5 text-ink-3"}`}>
         <Icon name={icon} size={20} />
       </span>
       <span className="min-w-0">
         <span className="flex items-center gap-2 text-[14.5px] font-extrabold text-ink">
-          {title}<span className="tnum rounded-full bg-white/10 px-2 py-0.5 text-[11.5px] text-ink-2">{num(count)}</span>
+          {title}<span className="tnum rounded-full bg-ov/10 px-2 py-0.5 text-[11.5px] text-ink-2">{num(count)}</span>
         </span>
         <span className="mt-1 block text-[12.5px] leading-relaxed text-ink-3">{desc}</span>
       </span>
@@ -393,7 +393,7 @@ export function AdminEmails() {
                       {c.failed > 0 && <span className="tnum text-red-300">· {num(c.failed)} {bi("فشل", "failed")}</span>}
                       {c.skipped > 0 && <span className="tnum text-ink-3">· {num(c.skipped)} {bi("ألغوا", "opted out")}</span>}
                     </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
+                    <div className="h-1.5 overflow-hidden rounded-full bg-ov/[0.08]">
                       <div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)] transition-[width] duration-700" style={{ width: `${pct}%` }} />
                     </div>
                   </Td>
@@ -433,7 +433,7 @@ export function Unsubscribe() {
     <div className="mx-auto flex min-h-screen max-w-[460px] flex-col justify-center px-5 py-16">
       <Flashes />
       <a href={BY.urls.landing} className="mb-6 flex justify-center no-underline">
-        <img src={BY.urls.logo} alt={BY.brand} className="h-11 w-auto" />
+        <Logo className="h-11 w-auto" />
       </a>
       <Card className="!p-8 text-center">
         <span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl text-au-cyan

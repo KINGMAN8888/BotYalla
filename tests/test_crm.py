@@ -347,6 +347,27 @@ class ImportExportTests(unittest.TestCase):
         self.assertNotIn(",=HYPERLINK", body)
 
 
+class ThemeTests(unittest.TestCase):
+    """مبدّل المظهر: يُحفظ لكل مستخدم ويُرسم من الخادم في <html data-theme> — والموقع العام داكن."""
+
+    def test_default_is_dark_and_the_choice_is_saved(self):
+        u = _user("th" + secrets.token_hex(3))
+        c = _client(u)
+        self.assertIn('data-theme="dark"', c.get("/dashboard").get_data(as_text=True))
+        self.assertTrue(post(c, "/account/theme", {"theme": "light"}).get_json()["ok"])
+        self.assertIn('data-theme="light"', c.get("/dashboard").get_data(as_text=True))
+        self.assertEqual(db.get_setting(u, "theme"), "light")
+
+    def test_only_known_themes_with_csrf(self):
+        c = _client(_user("th" + secrets.token_hex(3)))
+        self.assertEqual(post(c, "/account/theme", {"theme": "<script>"}).status_code, 400)
+        r = c.post("/account/theme", data=json.dumps({"theme": "light"}), content_type="application/json")
+        self.assertEqual(r.status_code, 400)                          # بلا توكن CSRF
+
+    def test_visitors_stay_dark(self):
+        self.assertIn('data-theme="dark"', web.app.test_client().get("/login").get_data(as_text=True))
+
+
 def session_token(c):
     with c.session_transaction() as s:
         return (s.get("crm_import") or {}).get("token")

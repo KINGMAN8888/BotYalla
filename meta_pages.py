@@ -40,6 +40,7 @@ ALL_FIELDS = [
     ("messaging_payments", "مدفوعات", False), ("messaging_pre_checkouts", "مدفوعات", False),
     ("messaging_checkout_updates", "مدفوعات", False), ("send_cart", "مدفوعات", False),
     ("messaging_game_plays", "أخرى", False), ("group_feed", "أخرى", False),
+    ("leadgen", "عملاء محتملون", False),      # نماذج إعلانات Lead Ads — يشترك فيه تكامل «Facebook Lead Ads» وحده
     ("calls", "مكالمات", False), ("call_permission_reply", "مكالمات", False),
     ("call_settings_update", "مكالمات", False),
 ]
@@ -101,26 +102,7 @@ def connect(page_id, token, app_id="", secret="", ig_hint=""):
     if not _ID.match(page_id) or len(token) < 20:
         raise PagesError("token", "invalid Page ID or token")
     with httpx.Client(timeout=TIMEOUT) as c:
-        r = c.get(f"{GRAPH}/me", params={"fields": "id,name", "access_token": token})
-        if r.status_code != 200:
-            raise PagesError("token", _err(r))
-        page_token = token
-        if str((r.json() or {}).get("id")) != page_id:
-            # توكن مستخدم: طويل الأمد أولاً (إن توفّر السرّ)، ثم توكن الصفحة منه
-            if app_id and secret:
-                x = c.get(f"{GRAPH}/oauth/access_token", params={
-                    "grant_type": "fb_exchange_token", "client_id": app_id,
-                    "client_secret": secret, "fb_exchange_token": token})
-                if x.status_code == 200 and (x.json() or {}).get("access_token"):
-                    token = x.json()["access_token"]
-            a = c.get(f"{GRAPH}/me/accounts", params={"fields": "id,name,access_token", "limit": 200,
-                                                      "access_token": token})
-            if a.status_code != 200:
-                raise PagesError("token", _err(a))
-            match = [p for p in (a.json() or {}).get("data") or [] if str(p.get("id")) == page_id]
-            if not match or not match[0].get("access_token"):
-                raise PagesError("page", "this token has no access to that Page")
-            page_token = match[0]["access_token"]
+        page_token = _page_token(c, page_id, token, app_id, secret)
         r = c.get(f"{GRAPH}/{page_id}", params={"fields": IG_FIELDS, "access_token": page_token})
         if r.status_code != 200:
             raise PagesError("page", _err(r))
@@ -142,6 +124,70 @@ def connect(page_id, token, app_id="", secret="", ig_hint=""):
     return {"page_token": page_token, "name": info.get("name") or page_id,
             "ig_id": str(ig.get("id") or ""), "ig_username": ig.get("username") or "",
             "ig_reason": ig_reason, "warning": warning, "username": info.get("username") or ""}
+
+
+def _page_token(c, page_id, token, app_id="", secret=""):
+    """أي توكن ملصوق ⇒ توكن الصفحة. توكن مستخدم يُبدَّل بطويل الأمد (إن توفّر السرّ) ثم يُستخرج
+    منه توكن الصفحة من `/me/accounts` — وتوكن صفحة من توكن مستخدم طويل لا ينتهي."""
+    r = c.get(f"{GRAPH}/me", params={"fields": "id,name", "access_token": token})
+    if r.status_code != 200:
+        raise PagesError("token", _err(r))
+    if str((r.json() or {}).get("id")) == page_id:
+        return token
+    if app_id and secret:
+        x = c.get(f"{GRAPH}/oauth/access_token", params={
+            "grant_type": "fb_exchange_token", "client_id": app_id,
+            "client_secret": secret, "fb_exchange_token": token})
+        if x.status_code == 200 and (x.json() or {}).get("access_token"):
+            token = x.json()["access_token"]
+    a = c.get(f"{GRAPH}/me/accounts", params={"fields": "id,name,access_token", "limit": 200,
+                                              "access_token": token})
+    if a.status_code != 200:
+        raise PagesError("token", _err(a))
+    match = [p for p in (a.json() or {}).get("data") or [] if str(p.get("id")) == page_id]
+    if not match or not match[0].get("access_token"):
+        raise PagesError("page", "this token has no access to that Page")
+    return match[0]["access_token"]
+
+
+def leads_connect(page_id, token, app_id="", secret=""):
+    """ربط صفحة لنماذج Lead Ads وحدها ⇒ {page_token, name}. **يضيف** `leadgen` لحقول اشتراك الصفحة
+    الحالية (subscribed_fields يستبدل القائمة كلها — بلا دمج كانت ستنقطع رسائل ماسنجر عن بوت الصفحة).
+    يرمي PagesError بخطوة مفهومة: token · page · subscribe (غالباً إذن leads_retrieval)."""
+    page_id, token = str(page_id or "").strip(), str(token or "").strip()
+    if not _ID.match(page_id) or len(token) < 20:
+        raise PagesError("token", "invalid Page ID or token")
+    with httpx.Client(timeout=TIMEOUT) as c:
+        page_token = _page_token(c, page_id, token, app_id, secret)
+        r = c.get(f"{GRAPH}/{page_id}", params={"fields": "id,name", "access_token": page_token})
+        if r.status_code != 200:
+            raise PagesError("page", _err(r))
+        name = (r.json() or {}).get("name") or page_id
+        current = []
+        s = c.get(f"{GRAPH}/{page_id}/subscribed_apps", params={"access_token": page_token})
+        if s.status_code == 200:
+            for a in (s.json() or {}).get("data") or []:
+                if not app_id or str(a.get("id")) == str(app_id):
+                    current = [f for f in a.get("subscribed_fields") or [] if f in FIELD_NAMES]
+        want = list(dict.fromkeys(current + ["leadgen"]))
+        ok, bad = _subscribe(c, page_id, page_token, want)
+        if "leadgen" not in ok:
+            raise PagesError("subscribe", bad.get("leadgen") or "leadgen subscription was refused")
+    return {"page_token": page_token, "name": name}
+
+
+LEAD_FIELDS = "id,created_time,ad_id,ad_name,campaign_name,form_id,platform,field_data"
+
+
+def fetch_lead(leadgen_id, page_token):
+    """بيانات نموذج Lead Ads بتوكن الصفحة ⇒ dict، أو يرمي PagesError("lead", …)."""
+    if not re.fullmatch(r"\d{5,30}", str(leadgen_id or "")):
+        raise PagesError("lead", "invalid leadgen id")
+    with httpx.Client(timeout=TIMEOUT) as c:
+        r = c.get(f"{GRAPH}/{leadgen_id}", params={"fields": LEAD_FIELDS, "access_token": page_token})
+    if r.status_code != 200:
+        raise PagesError("lead", _err(r))
+    return r.json() or {}
 
 
 def _subscribe(c, page_id, page_token, fields):
@@ -212,7 +258,7 @@ def unsubscribe(page_id, page_token):
 # مشتركاً في كائنَي `page` و`instagram` بعنوان ويبهوكنا. هذا ما يُضبط يدوياً في لوحة Meta
 # (Messenger/Instagram ← Webhooks) — وهنا يُضبط ويُفحص من «/admin/meta» بتوكن التطبيق.
 PAGE_APP_FIELDS = ("messages,messaging_postbacks,messaging_referrals,message_echoes,message_reactions,"
-                   "message_reads,message_deliveries,messaging_optins,messaging_handovers,standby,feed")
+                   "message_reads,message_deliveries,messaging_optins,messaging_handovers,standby,feed,leadgen")
 IG_APP_FIELDS = ("messages,messaging_postbacks,messaging_seen,messaging_referral,message_reactions,"
                  "messaging_handover,standby,comments,mentions")
 MIN_FIELDS = "messages,messaging_postbacks"

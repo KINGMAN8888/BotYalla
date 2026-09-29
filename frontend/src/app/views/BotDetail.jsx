@@ -33,8 +33,8 @@ function MoreMenu({ children }) {
   return (
     <details ref={ref} className="relative">
       <summary className="list-none [&::-webkit-details-marker]:hidden">
-        <span className="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-white/[0.04] px-3 py-2 text-[13px]
-                         font-bold text-ink shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:bg-white/[0.09]">
+        <span className="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-ov/[0.04] px-3 py-2 text-[13px]
+                         font-bold text-ink shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] hover:bg-ov/[0.09]">
           <span aria-hidden="true" className="text-[16px] leading-none">⋯</span>{t("more_actions")}
         </span>
       </summary>
@@ -46,7 +46,7 @@ function MoreMenu({ children }) {
 }
 
 const MENU_ROW = "flex w-full items-center gap-2.5 rounded-xl border-0 bg-transparent px-3 py-2.5 text-start " +
-                 "text-[13.5px] font-bold text-ink no-underline cursor-pointer hover:bg-white/[0.07]";
+                 "text-[13.5px] font-bold text-ink no-underline cursor-pointer hover:bg-ov/[0.07]";
 
 /* ======================================================== «بوتك جاهز للعملاء» */
 function LiveCard({ bot, links, isNew }) {
@@ -146,15 +146,15 @@ function ChatPreview({ proposal }) {
     if (proposal.thanks) say(proposal.thanks);
   }
   return (
-    <div className="mx-auto w-full max-w-[380px] rounded-[26px] bg-black/40 p-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]">
+    <div className="mx-auto w-full max-w-[380px] rounded-[26px] bg-sink/40 p-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]">
       <div className="flex max-h-[420px] flex-col gap-2 overflow-y-auto p-1">
         {bubbles.map((b, i) => (
-          <div key={i} className="max-w-[88%] rounded-2xl rounded-es-md bg-white/[0.08] px-3 py-2 text-[13px] leading-relaxed text-ink">
+          <div key={i} className="max-w-[88%] rounded-2xl rounded-es-md bg-ov/[0.08] px-3 py-2 text-[13px] leading-relaxed text-ink">
             <div className="whitespace-pre-wrap">{b.text}</div>
             {b.extra?.options && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {b.extra.options.map((o) => (
-                  <span key={o} className="rounded-lg bg-au-violet/25 px-2 py-1 text-[12px] font-bold text-white">{o}</span>
+                  <span key={o} className="rounded-lg bg-au-violet/25 px-2 py-1 text-[12px] font-bold text-ink">{o}</span>
                 ))}
               </div>
             )}
@@ -234,7 +234,7 @@ function AiAgent({ bot, ai }) {
 
       {stage === "thinking" && sid && (
         <div role="status" className="flex items-center gap-3 py-6 text-[14px] font-bold text-ink-3">
-          <span className="size-5 animate-spin rounded-full border-2 border-white/15 border-t-au-cyan" />
+          <span className="size-5 animate-spin rounded-full border-2 border-ov/15 border-t-au-cyan" />
           {t("ai_agent_thinking")}
         </div>
       )}
@@ -251,8 +251,8 @@ function AiAgent({ bot, ai }) {
                     <button key={o} type="button" onClick={() => setAnswers(answers.map((a, j) => (j === i ? o : a)))}
                             aria-pressed={answers[i] === o}
                             className={"cursor-pointer rounded-xl border-0 px-3.5 py-2 text-[13px] font-bold transition-colors " +
-                                       (answers[i] === o ? "bg-au-violet/40 text-white shadow-[inset_0_0_0_1px_rgb(124_108_246/0.9)]"
-                                                         : "bg-white/[0.05] text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:bg-white/[0.1]")}>
+                                       (answers[i] === o ? "bg-au-violet/40 text-ink shadow-[inset_0_0_0_1px_rgb(124_108_246/0.9)]"
+                                                         : "bg-ov/[0.05] text-ink-2 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] hover:bg-ov/[0.1]")}>
                       {o}
                     </button>
                   ))}
@@ -288,7 +288,7 @@ function AiAgent({ bot, ai }) {
               <div className="mb-2 text-[12.5px] font-extrabold uppercase tracking-wider text-ink-3">{t("ai_agent_changes")}</div>
               <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
                 {Object.keys(res.proposal).map((k) => (
-                  <li key={k} className="rounded-xl bg-black/20 px-3.5 py-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+                  <li key={k} className="rounded-xl bg-sink/20 px-3.5 py-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]">
                     <div className="mb-1.5 text-[13px] font-extrabold text-ink">{t(FIELD_LABEL[k] || k)}</div>
                     <div className="grid grid-cols-1 gap-1 text-[12.5px] sm:grid-cols-2">
                       <span className="text-ink-3"><b>{t("ai_before")}:</b> <span className="line-clamp-2">{show(res.before?.[k])}</span></span>
@@ -336,7 +336,7 @@ function Versions({ bot, versions }) {
       <SectionTitle icon="clock" extra={<Pill tone="mute">{versions.length}</Pill>}>{t("versions_title")}</SectionTitle>
       <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {versions.slice(0, 6).map((v) => (
-          <li key={v.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.03] px-3.5 py-2.5">
+          <li key={v.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-ov/[0.03] px-3.5 py-2.5">
             <span className="text-[13px] text-ink-2">
               <b className="tnum text-ink">{new Date(v.created_at * 1000).toLocaleString(BY.lang === "ar" ? "ar-EG" : "en-GB",
                 { dateStyle: "medium", timeStyle: "short" })}</b> · {reason(v.reason)}
@@ -380,7 +380,7 @@ function BrainCard({ bot, ai, cfg }) {
                      className={"relative flex flex-col gap-2 rounded-2xl p-4 transition-colors " +
                                 (off ? "cursor-not-allowed opacity-70 " : "cursor-pointer ") +
                                 (mode === m.v ? "bg-au-violet/20 shadow-[inset_0_0_0_1.5px_rgb(124_108_246/0.85)]"
-                                              : "bg-white/[0.03] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:bg-white/[0.06]")}>
+                                              : "bg-ov/[0.03] shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] hover:bg-ov/[0.06]")}>
                 <input type="radio" name="response_mode" value={m.v} className="sr-only" disabled={off}
                        checked={mode === m.v} onChange={() => setMode(m.v)} />
                 <span className="flex items-center justify-between gap-2">
@@ -432,7 +432,7 @@ function BrainCard({ bot, ai, cfg }) {
           </label>
         )}
 
-        <details className="mt-5 rounded-2xl bg-black/20 p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]" open={mode !== "flow"}>
+        <details className="mt-5 rounded-2xl bg-sink/20 p-4 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]" open={mode !== "flow"}>
           <summary className="cursor-pointer text-[14px] font-extrabold text-ink">{t("brain_welcome_t")}</summary>
           <p className="mt-2 mb-4 text-[12.5px] leading-relaxed text-ink-3">{t("brain_welcome_hint")}</p>
           <Field label={t("brain_welcome_t")}>
@@ -476,7 +476,7 @@ function BrainCard({ bot, ai, cfg }) {
           </p>
         </details>
 
-        <details className="mt-5 rounded-2xl bg-black/20 p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]" open={mode !== "flow"}>
+        <details className="mt-5 rounded-2xl bg-sink/20 p-4 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]" open={mode !== "flow"}>
           <summary className="cursor-pointer text-[14px] font-extrabold text-ink">{t("brain_kb_title")}</summary>
           <p className="mt-2 mb-4 text-[12.5px] leading-relaxed text-ink-3">{t("brain_kb_hint")}</p>
           <Field label={t("brain_kb_about")}><Textarea name="kb_about" defaultValue={kb.about || ""} maxLength={800} /></Field>
@@ -574,7 +574,7 @@ function ProductsEditor({ products }) {
       </p>
       <div className="flex flex-col gap-4">
         {rows.map((r, i) => (
-          <div key={i} className="rounded-2xl bg-black/15 p-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
+          <div key={i} className="rounded-2xl bg-sink/15 p-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.06)]">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_120px_minmax(0,1fr)]">
               <Input name="p_name"  value={r.name}  onChange={(e) => set(i, "name", e.target.value)}  placeholder={t("product")} />
               <Input name="p_price" value={r.price} onChange={(e) => set(i, "price", e.target.value)} placeholder={t("price_egp")} inputMode="decimal" />
@@ -589,7 +589,7 @@ function ProductsEditor({ products }) {
               <AssetPicker compact name="p_asset" value={r.asset || ""} kinds={["image"]}
                            onChange={(v) => set(i, "asset", v)} />
               <button type="button" onClick={() => drop(i)}
-                      className="ms-auto cursor-pointer rounded-lg border-0 bg-white/[0.05] px-2.5 py-1.5 text-[12px]
+                      className="ms-auto cursor-pointer rounded-lg border-0 bg-ov/[0.05] px-2.5 py-1.5 text-[12px]
                                  font-bold text-ink-3 hover:bg-rose-500/20 hover:text-rose-200">
                 <Icon name="close" size={12} className="me-1" />{bi("احذف المنتج", "Remove")}
               </button>
@@ -658,7 +658,7 @@ function ShippingEditor({ cfg }) {
                      inputMode="decimal" placeholder={bi("السعر", "Fee")} />
               <button type="button" aria-label={bi("احذف المنطقة", "Remove zone")}
                       onClick={() => setZones(zones.length > 1 ? zones.filter((_, j) => j !== i) : [{ name: "", cost: "" }])}
-                      className="cursor-pointer rounded-xl border-0 bg-white/[0.05] px-3 text-ink-3 hover:bg-rose-500/20 hover:text-rose-200">
+                      className="cursor-pointer rounded-xl border-0 bg-ov/[0.05] px-3 text-ink-3 hover:bg-rose-500/20 hover:text-rose-200">
                 <Icon name="close" size={13} />
               </button>
             </div>
@@ -727,8 +727,8 @@ function BookingEditor({ cfg }) {
               <input type="checkbox" name="working_days" value={i} className="peer sr-only"
                      defaultChecked={active ? active.includes(i) : true} />
               <span className="inline-flex rounded-xl px-3.5 py-2 text-[13px] font-bold text-ink-3
-                               shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] transition-colors
-                               peer-checked:bg-au-violet/25 peer-checked:text-white
+                               shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] transition-colors
+                               peer-checked:bg-au-violet/25 peer-checked:text-ink
                                peer-checked:shadow-[inset_0_0_0_1px_rgb(124_108_246/0.6)]">{d}</span>
             </label>
           ))}
@@ -759,8 +759,8 @@ function BotPhotoCard({ bot, cfg, isWa }) {
               <img src={`/bot/${bot.id}/photo?v=${ver}`} alt=""
                    className="size-24 rounded-full object-cover shadow-[0_0_0_3px_rgb(124_108_246/0.45),0_12px_30px_-12px_rgb(124_108_246/0.8)] transition-[filter] group-hover:brightness-90" />
             ) : (
-              <span className="grid size-24 place-items-center rounded-full bg-white/[0.04] text-ink-3
-                               shadow-[inset_0_0_0_1.5px_rgb(255_255_255/0.14)] transition-colors group-hover:text-au-cyan">
+              <span className="grid size-24 place-items-center rounded-full bg-ov/[0.04] text-ink-3
+                               shadow-[inset_0_0_0_1.5px_rgb(var(--ov-rgb)/0.14)] transition-colors group-hover:text-au-cyan">
                 <Icon name="camera" size={28} />
               </span>
             )}
@@ -815,7 +815,7 @@ function MediaChip({ m, botId }) {
     return (
       <a href={url} target="_blank" rel="noopener"
          className="group relative block size-14 overflow-hidden rounded-lg no-underline
-                    shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]"
+                    shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.12)]"
          title={m.caption || kb}>
         <img src={url} alt={m.caption || t("media_kind_image")}
              className="size-full object-cover transition-transform duration-500
@@ -827,7 +827,7 @@ function MediaChip({ m, botId }) {
   if (m.kind === "audio") {
     // الصوت يُسمع في مكانه: تحميله ثم فتحه لسماع رسالة عميل احتكاك بلا داعٍ
     return (
-      <span className="inline-flex items-center gap-2 rounded-lg bg-white/5 px-2 py-1"
+      <span className="inline-flex items-center gap-2 rounded-lg bg-ov/5 px-2 py-1"
             title={m.caption || ""}>
         <audio controls preload="none" src={url} className="h-8 max-w-[190px]" />
         <span className="text-[11px] text-ink-3">{kb}</span>
@@ -838,8 +838,8 @@ function MediaChip({ m, botId }) {
   const label = t(`media_kind_${m.kind}`) || t("media_kind_document");
   return (
     <a href={url} target="_blank" rel="noopener"
-       className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-2.5 py-1
-                  text-[12px] text-ink no-underline hover:bg-white/10"
+       className="inline-flex items-center gap-1.5 rounded-lg bg-ov/5 px-2.5 py-1
+                  text-[12px] text-ink no-underline hover:bg-ov/10"
        title={m.caption || ""}>
       <Icon name={m.kind === "video" ? "play" : "download"} size={13} className="text-au-cyan" />
       {label} · <span className="text-ink-3">{kb}</span>
@@ -877,7 +877,7 @@ function WhatsAppPanel({ bot, usage }) {
           </span>
         </div>
         {!unlimited && !blocked && (
-          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
+          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-ov/10">
             <div className={"h-full rounded-full " + (near ? "bg-red-400" : "bg-au-teal")}
                  style={{ width: pct + "%" }} />
           </div>
@@ -898,9 +898,9 @@ function WhatsAppPanel({ bot, usage }) {
         )}
       </div>
 
-      <div className="rounded-xl bg-white/[0.04] p-4 text-[12.5px] leading-relaxed text-ink-3">
-        <div className="mb-2 font-bold text-white">{bi("عنوان الويبهوك في Meta", "Webhook URL in Meta")}</div>
-        <code className="block overflow-x-auto rounded bg-white/10 px-2 py-1.5">
+      <div className="rounded-xl bg-ov/[0.04] p-4 text-[12.5px] leading-relaxed text-ink-3">
+        <div className="mb-2 font-bold text-ink">{bi("عنوان الويبهوك في Meta", "Webhook URL in Meta")}</div>
+        <code className="block overflow-x-auto rounded bg-ov/10 px-2 py-1.5">
           {(usage && usage.webhook) || "/wh/whatsapp"}
         </code>
         <p className="mt-3 mb-0">
@@ -956,7 +956,7 @@ function MetaPanel({ bot, info, links }) {
     <>
       <Card className={"mb-6 " + tint}>
         <div className="flex flex-wrap items-center gap-4">
-          <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-white/95 shadow-[0_12px_30px_-12px_rgb(0_0_0/0.6)]">
+          <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-ov/95 shadow-[0_12px_30px_-12px_rgb(0_0_0/0.6)]">
             <ChannelLogo channel={info.channel} size={34} />
           </span>
           <div className="min-w-0 flex-1">
@@ -1008,7 +1008,7 @@ function MetaPanel({ bot, info, links }) {
                 "Each link opens a chat with the bot directly, and analytics know where the customer came from.")}
           </p>
           {adLinks.length ? adLinks.map(([label, u]) => (
-            <div key={u} className="mb-2 flex items-center gap-2 rounded-xl bg-black/25 px-3 py-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+            <div key={u} className="mb-2 flex items-center gap-2 rounded-xl bg-sink/25 px-3 py-2 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]">
               <div className="min-w-0 flex-1">
                 <div className="text-[12px] font-bold text-ink-2">{label}</div>
                 <code className="block truncate text-[12px] text-au-cyan" dir="ltr">{u}</code>
@@ -1038,7 +1038,7 @@ function MetaPanel({ bot, info, links }) {
               </li>
             ))}
           </ul>
-          <div className="mt-4 rounded-xl bg-white/[0.04] p-3 text-[12px] text-ink-3">
+          <div className="mt-4 rounded-xl bg-ov/[0.04] p-3 text-[12px] text-ink-3">
             <div className="mb-1 font-bold text-ink-2">{bi("عنوان الويبهوك", "Webhook URL")}</div>
             <code className="block overflow-x-auto text-au-cyan" dir="ltr">{info.webhook}</code>
           </div>
@@ -1097,6 +1097,7 @@ export default function BotDetail() {
               )}
             </Btn>
             {isFlow && <Btn variant="ghost" sm icon="flow" href={`/bot/${bot.id}/flow`}>{t("flow_builder")}</Btn>}
+            {P.flowsOn && <Btn variant="ghost" sm icon="flow" href={`/bot/${bot.id}/flows`}>{t("flows_title")}</Btn>}
             <MoreMenu>
               <a className={MENU_ROW} href={`/bot/${bot.id}/analytics`}><Icon name="chart" size={16} className="text-au-cyan" />{t("analytics")}</a>
               {plan.broadcast
@@ -1211,7 +1212,7 @@ export default function BotDetail() {
             <Field label={t("welcome_msg")}><Textarea name="welcome" defaultValue={cfg.welcome || ""} /></Field>
             <Field label={t("thanks_msg")}><Textarea name="thanks" defaultValue={cfg.thanks || ""} /></Field>
           </div>
-          <div className="mt-5 rounded-2xl bg-black/15 p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
+          <div className="mt-5 rounded-2xl bg-sink/15 p-4 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.06)]">
             <span className="block text-[13px] font-bold text-ink-2">{t("welcome_media")}</span>
             <span className="mt-1 mb-3 block text-[12px] text-ink-3">{t("welcome_media_h")}</span>
             <AssetPicker name="welcome_asset" value={cfg.welcome_asset || ""} />
@@ -1224,21 +1225,21 @@ export default function BotDetail() {
 
           {bot.template === "store" && (
             <>
-              <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
+              <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(var(--ov-rgb)/0.07)]">
                 <ProductsEditor products={cfg.products || []} />
               </div>
-              <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
+              <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(var(--ov-rgb)/0.07)]">
                 <ShippingEditor cfg={cfg} />
               </div>
             </>
           )}
           {bot.template === "faq" && (
-            <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
+            <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(var(--ov-rgb)/0.07)]">
               <MenuEditor items={cfg.menu_items || []} />
             </div>
           )}
           {bot.template === "booking" && (
-            <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
+            <div className="mt-7 pt-6 shadow-[inset_0_1px_0_rgb(var(--ov-rgb)/0.07)]">
               <BookingEditor cfg={cfg} />
             </div>
           )}
@@ -1285,7 +1286,7 @@ export default function BotDetail() {
                       {Object.entries(l.data || {})
                         .filter(([, v]) => !String(v).startsWith("media:"))
                         .map(([k, v]) => (
-                          <span key={k} className="rounded-lg bg-white/5 px-2.5 py-1 text-[12px]">
+                          <span key={k} className="rounded-lg bg-ov/5 px-2.5 py-1 text-[12px]">
                             <b className="text-ink-3">{k}:</b> {String(v)}
                           </span>
                         ))}
@@ -1304,7 +1305,7 @@ function CatalogCard({ bot, catalog, cfg }) {
   const link = cfg.bot_username ? `https://t.me/${cfg.bot_username}` : "";
   const Step = ({ n, children }) => (
     <li className="flex items-start gap-2.5">
-      <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-au-violet/25 text-[11px] font-extrabold text-white">{n}</span>
+      <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-au-violet/25 text-[11px] font-extrabold text-ink">{n}</span>
       <span>{children}</span>
     </li>
   );
@@ -1505,8 +1506,8 @@ export function AddonPay() {
   };
   const CopyRow = ({ v, k }) => (
     <div className="mt-2 flex items-center gap-2">
-      <code className="flex-1 overflow-x-auto rounded-lg bg-black/30 px-3 py-2 text-[13px] text-au-cyan
-                       shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">{v}</code>
+      <code className="flex-1 overflow-x-auto rounded-lg bg-sink/30 px-3 py-2 text-[13px] text-au-cyan
+                       shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">{v}</code>
       <Btn variant="ghost" sm type="button" onClick={() => copy(v, k)} aria-label={t("copy")}>
         <Icon name={copied === k ? "check" : "copy"} size={13} />
       </Btn>
@@ -1554,16 +1555,16 @@ export function AddonPay() {
       <Card>
         <SectionTitle icon="card">{t("pay_method")}</SectionTitle>
         <div className="mb-5 grid gap-4 lg:grid-cols-3">
-          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+          <div className="rounded-2xl bg-ov/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
             <div className="flex items-center gap-2 font-extrabold text-[#FF6B6B]"><Icon name="phone" size={16} />{t("pay_vodafone")}</div>
             <CopyRow v={plat.vodafone_number} k="vf" />
           </div>
-          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+          <div className="rounded-2xl bg-ov/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
             <div className="flex items-center gap-2 font-extrabold text-au-violet"><Icon name="card" size={16} />{t("pay_instapay")}</div>
             {qr && <img src={qr} alt="InstaPay QR" className="mx-auto my-3 w-[112px] rounded-xl bg-white p-1" />}
             <CopyRow v={plat.instapay_handle} k="ip" />
           </div>
-          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+          <div className="rounded-2xl bg-ov/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
             <div className="flex items-center gap-2 font-extrabold text-au-cyan"><Icon name="bank" size={16} />{t("pay_bank")}</div>
             <CopyRow v={plat.bank_account} k="acc" />
             <CopyRow v={plat.bank_iban} k="iban" />
@@ -1583,8 +1584,8 @@ export function AddonPay() {
           <div className="mt-4">
             <Field label={t("pay_upload")}>
               <input type="file" name="screenshot" accept="image/*" required
-                     className="w-full cursor-pointer rounded-xl bg-black/25 p-2.5 text-[13px] text-ink-3
-                                shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
+                     className="w-full cursor-pointer rounded-xl bg-sink/25 p-2.5 text-[13px] text-ink-3
+                                shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
                                 file:me-3 file:rounded-lg file:border-0 file:bg-au-violet/25
                                 file:px-3 file:py-1.5 file:text-[13px] file:font-bold file:text-white" />
             </Field>

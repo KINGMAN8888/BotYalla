@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   BY, P, t, bi, Icon, Card, Btn, Field, Input, Textarea, Select, Form,
   Grid, Stat, Pill, Empty, PageHead, SectionTitle, num,
-} from "../kit.jsx";
+ Logo } from "../kit.jsx";
 import { Flashes } from "../AppShell.jsx";
 import { PasswordField, Captcha } from "../auth.jsx";
 import { AssetPicker } from "../media.jsx";
@@ -67,7 +67,7 @@ export function FlowBuilder() {
                 initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, height: 0, marginBottom: 0 }}
                 transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-                className="mb-3 rounded-2xl bg-black/20 p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+                className="mb-3 rounded-2xl bg-sink/20 p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <span className="grid size-7 place-items-center rounded-lg text-[12.5px] font-extrabold
                                    text-au-cyan bg-au-violet/20">{i + 1}</span>
@@ -118,7 +118,7 @@ export function FlowBuilder() {
                   </>
                 )}
                 {s.type === "show" && (
-                  <div className="mt-4 rounded-xl bg-white/[0.03] p-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+                  <div className="mt-4 rounded-xl bg-ov/[0.03] p-3.5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]">
                     <AssetPicker value={s.asset} onChange={(v) => set(i, "asset", v)} />
                     <p className="mt-2.5 mb-0 text-[12px] leading-relaxed text-ink-3">{t("step_show_hint")}</p>
                   </div>
@@ -171,7 +171,7 @@ function CampaignStatus({ botId, initial }) {
       </div>
       {running && (
         <>
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/[0.08]" role="progressbar"
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-ov/[0.08]" role="progressbar"
                aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
             <div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)] transition-[width] duration-500"
                  style={{ width: `${pct}%` }} />
@@ -357,7 +357,7 @@ export function Broadcast() {
                     <div className={"mt-4 rounded-xl p-4 " + (billable
                       ? (short ? "bg-red-500/10 shadow-[inset_0_0_0_1px_rgb(248_113_113/0.35)]"
                                : "bg-[linear-gradient(120deg,rgb(124_108_246/0.18),rgb(34_211_238/0.06))]")
-                      : "bg-white/[0.03] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]")}>
+                      : "bg-ov/[0.03] shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]")}>
                       <div className="flex items-center gap-2 text-[13px] font-extrabold text-ink">
                         <Icon name="wallet" size={15} className="text-au-cyan" />{t("camp_cost_title")}
                       </div>
@@ -386,7 +386,7 @@ export function Broadcast() {
                       )}
                       <div className="mt-3 text-[11.5px] text-ink-3">{t("camp_marketing_d")}</div>
                     </div>
-                    <div className="mt-4 rounded-xl bg-white/[0.04] p-4 text-[13.5px] leading-relaxed text-ink-2">
+                    <div className="mt-4 rounded-xl bg-ov/[0.04] p-4 text-[13.5px] leading-relaxed text-ink-2">
                       {chosen.header && <div className="mb-2 font-extrabold text-ink">{chosen.header}</div>}
                       <div className="whitespace-pre-wrap">{chosen.body}</div>
                       {chosen.footer && <div className="mt-2 text-[12px] text-ink-3">{chosen.footer}</div>}
@@ -418,7 +418,7 @@ export function Broadcast() {
                         className="min-h-[140px]" />
             </Field>
             <div className="mt-3 text-[12.5px] text-ink-3">{text.length} / 4096</div>
-            <div className="mt-4 rounded-xl bg-white/[0.03] p-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+            <div className="mt-4 rounded-xl bg-ov/[0.03] p-3.5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]">
               <span className="mb-2.5 block text-[12.5px] text-ink-3">{t("bc_media")}</span>
               <AssetPicker name="asset_id" value={asset} onChange={(v) => setAsset(v)} />
             </div>
@@ -495,7 +495,7 @@ export function Analytics() {
         {d && Object.values(d.sources || {}).some(Boolean) ? (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             {[["qr", "grid"], ["link", "link"], ["poster", "image"], ["share", "users"], ["ads", "megaphone"]].map(([k, ic]) => (
-              <div key={k} className="rounded-2xl bg-white/[0.03] p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+              <div key={k} className="rounded-2xl bg-ov/[0.03] p-4 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
                 <Icon name={ic} size={18} className="text-au-cyan" />
                 <div className="mt-2 text-[24px] font-extrabold text-ink tnum">{num((d.sources || {})[k] || 0)}</div>
                 <div className="text-[12.5px] text-ink-3">{t(`src_${k}`)}</div>
@@ -520,7 +520,7 @@ export function Recover({ mode }) {
     <div className="mx-auto flex min-h-screen max-w-[440px] flex-col justify-center px-5 py-16">
       <Flashes />
       <a href={BY.urls.landing} className="mb-6 flex justify-center no-underline">
-        <img src={BY.urls.logo} alt={BY.brand} className="h-11 w-auto" />
+        <Logo className="h-11 w-auto" />
       </a>
       <Card className="!p-8">
         <h1 className="m-0 text-center text-[24px] font-extrabold tracking-tight text-ink">

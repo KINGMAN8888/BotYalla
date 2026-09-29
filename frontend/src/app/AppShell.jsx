@@ -1,11 +1,42 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { BY, t, Icon, bi, Avatar } from "./kit.jsx";
+import { BY, t, Icon, bi, Avatar, Logo } from "./kit.jsx";
 import Backdrop from "../Backdrop.jsx";
 
 /* ============================================================================
    قشرة اللوحة: شريط جانبي ثابت + شريط علوي + درج للجوال + إشعارات.
    ========================================================================== */
+
+/* مبدّل المظهر: يقلب <html data-theme> فوراً (لا انتظار للخادم) ثم يحفظ التفضيل.
+   لو فشل الحفظ يعود كما كان — لا يبقى المستخدم على مظهر لن يجده في الصفحة التالية. */
+function ThemeToggle() {
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || "dark");
+  const flip = async () => {
+    const next = theme === "light" ? "dark" : "light";
+    const apply = (v) => {
+      document.documentElement.dataset.theme = v;
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", v === "light" ? "#F3F5FA" : "#05070D");
+      setTheme(v);
+    };
+    apply(next);
+    try {
+      const r = await fetch("/account/theme", {
+        method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": BY.csrf },
+        body: JSON.stringify({ theme: next }),
+      });
+      if (!r.ok) apply(theme);
+    } catch { apply(theme); }
+  };
+  const light = theme === "light";
+  const label = light ? bi("المظهر الداكن", "Dark mode") : bi("المظهر الفاتح", "Light mode");
+  return (
+    <button type="button" onClick={flip} aria-label={label} title={label}
+            className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-transparent text-ink-2
+                       shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] transition-colors hover:text-au-cyan">
+      <Icon name={light ? "moon" : "sun"} size={17} />
+    </button>
+  );
+}
 
 function NavLink({ item, active }) {
   return (
@@ -13,7 +44,7 @@ function NavLink({ item, active }) {
        className={
          "relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-bold no-underline " +
          "transition-colors duration-300 " +
-         (active ? "text-white" : "text-ink-2 hover:bg-white/[0.06] hover:text-ink")
+         (active ? "text-ink" : "text-ink-2 hover:bg-ov/[0.06] hover:text-ink")
        }>
       {active && (
         <motion.span layoutId="nav-active"
@@ -31,7 +62,7 @@ function SideContent({ view }) {
   return (
     <>
       <a href={BY.urls.dashboard} className="mb-6 flex items-center gap-2.5 px-3 no-underline">
-        <img src={BY.urls.logo} alt={BY.brand} className="h-9 w-auto" />
+        <Logo className="h-9 w-auto" />
       </a>
 
       <div className="mb-1 px-3 text-[10.5px] font-extrabold uppercase tracking-[0.18em] text-ink-3/70">
@@ -52,9 +83,9 @@ function SideContent({ view }) {
         </>
       )}
 
-      <div className="mt-auto flex flex-col gap-1 pt-5 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
+      <div className="mt-auto flex flex-col gap-1 pt-5 shadow-[inset_0_1px_0_rgb(var(--ov-rgb)/0.07)]">
         <a href={BY.urls.account}
-           className="flex items-center gap-3 rounded-xl px-2.5 py-2 no-underline transition-colors hover:bg-white/[0.06]">
+           className="flex items-center gap-3 rounded-xl px-2.5 py-2 no-underline transition-colors hover:bg-ov/[0.06]">
           <Avatar src={BY.user.avatar} name={BY.user.name} size={34} />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[14px] font-bold text-ink" dir="auto">{BY.user.name}</span>
@@ -66,7 +97,7 @@ function SideContent({ view }) {
           <input type="hidden" name="csrf_token" value={BY.csrf} />
           <button type="submit"
                   className="flex w-full cursor-pointer items-center gap-3 rounded-xl border-0 bg-transparent px-3 py-2.5
-                             text-start text-[14px] font-bold text-ink-2 transition-colors hover:bg-white/[0.06] hover:text-ink">
+                             text-start text-[14px] font-bold text-ink-2 transition-colors hover:bg-ov/[0.06] hover:text-ink">
             <Icon name="logout" size={18} className="text-ink-3" />
             {t("logout")}
           </button>
@@ -159,8 +190,8 @@ export default function AppShell({ view, children }) {
               exit={{ width: 0, opacity: 0 }}
               transition={{ type: "spring", stiffness: 400, damping: 40 }}
               className="sticky top-0 hidden h-screen shrink-0 flex-col overflow-y-auto overflow-x-hidden
-                         bg-black/25 backdrop-blur-xl
-                         shadow-[inset_-1px_0_0_rgb(255_255_255/0.07)] lg:flex"
+                         bg-sink/25 backdrop-blur-xl
+                         shadow-[inset_-1px_0_0_rgb(var(--ov-rgb)/0.07)] lg:flex"
               aria-label={bi("التنقّل الرئيسي", "Main navigation")}>
               <div className="flex min-h-full w-[252px] flex-col p-4">
                 <SideContent view={view} />
@@ -175,7 +206,7 @@ export default function AppShell({ view, children }) {
             <>
               <motion.div key="scrim" onClick={() => setMobileOpen(false)}
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="fixed inset-0 z-[190] bg-black/60 backdrop-blur-sm lg:hidden" />
+                className="fixed inset-0 z-[190] bg-sink/60 backdrop-blur-sm lg:hidden" />
               <motion.aside key="drawer"
                 initial={{ x: BY.dir === "rtl" ? "100%" : "-100%" }}
                 animate={{ x: 0 }}
@@ -193,13 +224,13 @@ export default function AppShell({ view, children }) {
         <div className="flex min-w-0 flex-1 flex-col">
           {/* الشريط العلوي */}
           <header className="sticky top-0 z-[150] bg-ob-0/70 backdrop-blur-xl backdrop-saturate-150
-                             shadow-[inset_0_-1px_0_rgb(255_255_255/0.07)]">
+                             shadow-[inset_0_-1px_0_rgb(var(--ov-rgb)/0.07)]">
             <div className="flex items-center gap-3 px-5 py-3.5">
               <button type="button" onClick={() => setMobileOpen((o) => !o)} aria-expanded={mobileOpen}
                       aria-label={bi("القائمة", "Menu")}
                       className="grid size-10 shrink-0 place-items-center rounded-xl text-ink
-                                 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
-                                 transition-colors hover:bg-white/[0.06] lg:hidden">
+                                 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
+                                 transition-colors hover:bg-ov/[0.06] lg:hidden">
                 <span className="relative block h-0.5 w-[18px] rounded bg-current
                                  before:absolute before:-top-1.5 before:block before:h-0.5 before:w-[18px] before:rounded before:bg-current before:content-['']
                                  after:absolute after:top-1.5 after:block after:h-0.5 after:w-[18px] after:rounded after:bg-current after:content-['']" />
@@ -208,28 +239,29 @@ export default function AppShell({ view, children }) {
               <button type="button" onClick={() => setDesktopClosed((c) => !c)} aria-expanded={!desktopClosed}
                       aria-label={bi("القائمة", "Menu")}
                       className="hidden size-10 shrink-0 place-items-center rounded-xl text-ink
-                                 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
-                                 transition-colors hover:bg-white/[0.06] lg:grid">
+                                 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
+                                 transition-colors hover:bg-ov/[0.06] lg:grid">
                 <span className="relative block h-0.5 w-[18px] rounded bg-current
                                  before:absolute before:-top-1.5 before:block before:h-0.5 before:w-[18px] before:rounded before:bg-current before:content-['']
                                  after:absolute after:top-1.5 after:block after:h-0.5 after:w-[18px] after:rounded after:bg-current after:content-['']" />
               </button>
 
               <a href={BY.urls.dashboard} className="no-underline lg:hidden">
-                <img src={BY.urls.logo} alt={BY.brand} className="h-8 w-auto" />
+                <Logo className="h-8 w-auto" />
               </a>
 
               <nav className="ms-auto flex items-center gap-2">
+                <ThemeToggle />
                 <a href={BY.urls.lang}
                    className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-bold
-                              text-ink-2 no-underline shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
+                              text-ink-2 no-underline shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
                               transition-colors hover:text-au-cyan">
                   <Icon name="globe" size={15} />{BY.lang === "ar" ? "EN" : "ع"}
                 </a>
                 {/* صورة الحساب في الشريط العلوي — تظهر على الموبايل أيضاً (الاسم من sm فأعلى) */}
                 <a href={BY.urls.account} title={BY.user.name}
-                   className="inline-flex items-center gap-2 rounded-full bg-white/[0.05] py-1 pe-1 ps-1 text-[13px]
-                              font-bold text-ink-2 no-underline shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
+                   className="inline-flex items-center gap-2 rounded-full bg-ov/[0.05] py-1 pe-1 ps-1 text-[13px]
+                              font-bold text-ink-2 no-underline shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
                               transition-colors hover:text-ink sm:pe-3.5">
                   <Avatar src={BY.user.avatar} name={BY.user.name} size={30} />
                   <span className="hidden max-w-[160px] truncate sm:inline" dir="auto">{BY.user.name}</span>

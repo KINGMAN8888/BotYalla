@@ -96,6 +96,32 @@ def _meta_err(r):
         return f"HTTP {r.status_code}"
 
 
+def upload_handle(token, data, mime, file_name="sample", app_id=None):
+    """عيّنة وسائط لقالب (Template Studio): Resumable Upload ⇒ handle تراجعه Meta مع القالب.
+    نفس خطوات `set_profile_photo` الأولى (جلسة على `/{app-id}/uploads` ثم البايتات بترويسة
+    `OAuth`). متزامنة. يرجّع (handle|None, خطأ, app_id)."""
+    bearer = {"Authorization": f"Bearer {token}"}
+    try:
+        with httpx.Client(timeout=TIMEOUT) as c:
+            if not app_id:
+                r = c.get(f"{META_API}/app", headers=bearer)
+                app_id = str((r.json() or {}).get("id") or "") if r.status_code == 200 else ""
+                if not app_id:
+                    return None, "app_id", None
+            r = c.post(f"{META_API}/{app_id}/uploads", headers=bearer,
+                       params={"file_name": file_name, "file_length": len(data), "file_type": mime})
+            sid = (r.json() or {}).get("id") if r.status_code == 200 else None
+            if not sid:
+                return None, _meta_err(r), app_id
+            r = c.post(f"{META_API}/{sid}", content=data,
+                       headers={"Authorization": f"OAuth {token}", "file_offset": "0"})
+            h = (r.json() or {}).get("h") if r.status_code == 200 else None
+            return (h, "" if h else _meta_err(r), app_id)
+    except Exception as e:
+        log.warning("WhatsApp sample upload failed", exc_info=True)
+        return None, str(e)[:200], app_id
+
+
 def set_profile_photo(phone_id, token, jpeg, app_id=None):
     """صورة بروفايل رقم واتساب للأعمال. ثلاث خطوات (Resumable Upload): جلسة رفع على التطبيق
     `/{app-id}/uploads` ← رفع البايتات (ترويسة `OAuth` لا `Bearer` + `file_offset`) فيرجع handle
@@ -130,13 +156,41 @@ def set_profile_photo(phone_id, token, jpeg, app_id=None):
         return False, str(e)[:200], app_id
 
 
+def _ad_referral(m):
+    """نقرة إعلان Click-to-WhatsApp (أو منشور): Meta ترفق `referral` بأول رسالة من العميل.
+    `ctwa_clid` هو ما يربط التحويلات اللاحقة بالإعلان عند Meta (Conversions API)."""
+    r = m.get("referral")
+    if not isinstance(r, dict) or not (r.get("source_id") or r.get("ctwa_clid")):
+        return None
+    return {k: str(r.get(k) or "")[:500] for k in ("source_type", "source_id", "source_url", "headline", "body", "ctwa_clid")}
+
+
 class WhatsAppChannel(Channel):
-    def __init__(self, phone_id, token, on_send=None):
+    def __init__(self, phone_id, token, on_send=None, bot_id=None):
         """on_send: دالة async تُستدعى قبل كل إرسال — تحجز رسالة من رصيد الباقة
-        وتُرجع False لمنع الإرسال عند تجاوز الحدّ."""
+        وتُرجع False لمنع الإرسال عند تجاوز الحدّ.
+        bot_id: لتسجيل حالة كل رسالة صادرة (msg_status) — بدونه لا يُسجَّل شيء."""
         self.phone_id = phone_id
         self.token = token
         self.on_send = on_send
+        self.bot_id = bot_id
+        self.last_error = None          # (رمز, عنوان) آخر رفض فوري من Meta — لسجل مستلم الحملة
+
+    def _track(self, payload, resp=None, err=None):
+        """سجل الرسالة الصادرة لتتبّع حالتها (المرحلة 2). بعد الإرسال لا قبله، ولا يرمي أبداً."""
+        if self.bot_id is None:
+            return
+        try:
+            import database as db
+            import msg_status as MS
+            ctx = MS.SEND_CTX.get() or {}
+            code, title = MS.error_from(err) if err is not None else (None, "")
+            self.last_error = (code, title) if err is not None else None
+            db.record_wa_send(self.bot_id, self.phone_id, "wa:" + str(payload.get("to") or payload.get("recipient") or ""),
+                              payload.get("type"), MS.wamid_from(resp) if resp is not None else None,
+                              code, title, ctx.get("campaign_id"))
+        except Exception:
+            log.exception("could not track WhatsApp send")
 
     async def _raw(self, payload):
         """طلب واحد بلا حجز رصيد — تستعمله `_post` وإعادة المحاولة معاً."""
@@ -159,12 +213,21 @@ class WhatsAppChannel(Channel):
                 r2 = await self._raw(alt)
                 if r2.status_code < 400:
                     log.warning("WhatsApp: hidden-number recipient accepted via `recipient`")
-                    return r2.json()
+                    res = r2.json()
+                    self._track(payload, resp=res)
+                    return res
             if r.status_code >= 400:
                 # نص خطأ Meta هو الوحيد الذي يفسّر سبب الرفض (نافذة، قالب، توكن)
                 log.error("WhatsApp API %s: %s", r.status_code, r.text[:400])
+                try:
+                    body = r.json()
+                except ValueError:
+                    body = {}
+                self._track(payload, err=body)
                 return None
-            return r.json()
+            res = r.json()
+            self._track(payload, resp=res)
+            return res
         except Exception:
             log.exception("WhatsApp API call failed")
             return None
@@ -243,6 +306,50 @@ class WhatsAppChannel(Channel):
         # لا لوحة مفاتيح دائمة في واتساب — مجرد نص.
         return await self.send_text(peer, text)
 
+    async def send_products(self, peer, catalog_id, items, header="", body=""):
+        """منتج واحد (`product`) أو قائمة (`product_list`، حتى 30 في قسم واحد) من كتالوج Meta."""
+        p = self._base(peer, "interactive")
+        if len(items) == 1:
+            inter = {"type": "product", "action": {"catalog_id": catalog_id, "product_retailer_id": items[0]}}
+            if body:
+                inter["body"] = {"text": body[:1024]}
+        else:
+            inter = {"type": "product_list", "header": {"type": "text", "text": header[:60]},
+                     "body": {"text": body[:1024]},
+                     "action": {"catalog_id": catalog_id, "sections": [
+                         {"title": header[:24], "product_items": [{"product_retailer_id": i} for i in items[:30]]}]}}
+        p["interactive"] = inter
+        return await self._post(p)
+
+    async def send_flow(self, peer, flow_id, screen, cta, body, header="", token=""):
+        """نموذج WhatsApp Flows منشور (Form). الرد يصل `nfm_reply` بإجابات الحقول ورمزنا `flow_token`."""
+        p = self._base(peer, "interactive")
+        inter = {"type": "flow", "body": {"text": body[:1024]},
+                 "action": {"name": "flow", "parameters": {
+                     "flow_message_version": "3", "flow_token": token, "flow_id": flow_id,
+                     "flow_cta": cta[:20], "flow_action": "navigate",
+                     "flow_action_payload": {"screen": screen}}}}
+        if header:
+            inter["header"] = {"type": "text", "text": header[:60]}
+        p["interactive"] = inter
+        return await self._post(p)
+
+    async def send_cta(self, peer, text, button, url):
+        """رسالة تفاعلية بزر رابط (cta_url) — «ادفع الآن» يفتح صفحة الدفع مباشرة."""
+        p = self._base(peer, "interactive")
+        p["interactive"] = {"type": "cta_url", "body": {"text": text[:1024]},
+                            "action": {"name": "cta_url", "parameters": {"display_text": button[:20], "url": url}}}
+        return await self._post(p)
+
+    async def send_location(self, peer, lat, lng, name="", address=""):
+        p = self._base(peer, "location")
+        p["location"] = {"latitude": lat, "longitude": lng}
+        if name:
+            p["location"]["name"] = name[:100]
+        if address:
+            p["location"]["address"] = address[:200]
+        return await self._post(p)
+
     # media_id لدى Meta صالح 30 يوماً — نعيد الرفع قبل ذلك بهامش.
     MEDIA_REF_TTL = 25 * 86400
 
@@ -272,6 +379,17 @@ class WhatsAppChannel(Channel):
             p["document"]["caption"] = caption[:1024]
         return await self._post(p)
 
+    async def media_ref(self, asset, bot_id):
+        """media_id لملف من المكتبة (يُرفع مرة ويُخزَّن 30 يوماً) — لترويسة قالب بصورة/فيديو."""
+        import time as _t
+        import database as db, asset_store
+        mid = db.get_asset_ref(asset["id"], bot_id)
+        if not mid:
+            mid = await self.upload_media(asset_store.path_of(asset["fname"]), asset["mime"])
+            if mid:
+                db.set_asset_ref(asset["id"], bot_id, mid, expires_at=int(_t.time()) + self.MEDIA_REF_TTL)
+        return mid
+
     async def send_media(self, peer, asset, bot_id, caption=None, options=None):
         """حتى 3 خيارات قصيرة (≤20 حرفاً): رسالة تفاعلية بترويسة صورة/فيديو وأزرار
         تحتها — «الفيديو التفاعلي». أكثر من ذلك: الوسائط ثم الخيارات قائمة مرقّمة
@@ -284,9 +402,19 @@ class WhatsAppChannel(Channel):
             if not mid:
                 return None
             db.set_asset_ref(asset["id"], bot_id, mid, expires_at=int(_t.time()) + self.MEDIA_REF_TTL)
-        kind = "video" if asset["kind"] == "video" else "image"
         opts = [str(o) for o in (options or [])]
         caption = (caption or "").strip()
+        if asset["kind"] == "audio":
+            # الصوت في واتساب بلا تعليق ولا ترويسة تفاعلية: الملف ثم التعليق/الخيارات رسالة تالية
+            p = self._base(peer, "audio")
+            p["audio"] = {"id": mid}
+            res = await self._post(p)
+            if res and opts:
+                await self.send_buttons(peer, caption or "👇", opts)
+            elif res and caption:
+                await self.send_text(peer, caption)
+            return res
+        kind = "video" if asset["kind"] == "video" else "image"
         if opts and len(opts) <= 3 and all(len(o) <= 20 for o in opts):
             p = self._base(peer, "interactive")
             p["interactive"] = {
@@ -418,8 +546,27 @@ class WhatsAppChannel(Channel):
             text = (m.get("text") or {}).get("body", "") or ""
         elif mtype == "interactive":
             inter = m.get("interactive") or {}
+            if inter.get("type") == "nfm_reply":          # ردّ نموذج WhatsApp Flows
+                try:
+                    form = json.loads((inter.get("nfm_reply") or {}).get("response_json") or "{}")
+                except ValueError:
+                    form = {}
+                return {"id": m.get("id", ""), "peer": f"wa:{sender}", "text": "", "name": name,
+                        "kind": "form", "form": form if isinstance(form, dict) else {}}
+            if inter.get("type") == "call_permission_reply":  # ردّ طلب إذن الاتصال (Calling API)
+                rep = inter.get("call_permission_reply") or {}
+                ok = rep.get("response") == "accept"
+                return {"id": m.get("id", ""), "peer": f"wa:{sender}", "name": name, "kind": "call_permission",
+                        "text": "📞 وافق على أن نتصل به" if ok else "📞 رفض طلب الاتصال",
+                        "call_permission": {"accept": ok, "permanent": bool(rep.get("is_permanent")),
+                                            "expires": int(rep.get("expiration_timestamp") or 0)}}
             sub = inter.get(inter.get("type") or "", {})
             text = sub.get("title", "") or ""
+        elif mtype == "order":                              # سلّة من كتالوج واتساب — نصاً يقرؤه الفلو والصندوق
+            order = m.get("order") or {}
+            lines = [f"{i.get('quantity', 1)}× {i.get('product_retailer_id', '')} — {i.get('item_price', '')} {i.get('currency', '')}".strip()
+                     for i in order.get("product_items") or []]
+            text = "🛒 " + "\n".join(lines) + (f"\n{order['text']}" if order.get("text") else "")
         elif mtype == "button":       # ردّ زر قالب
             text = (m.get("button") or {}).get("text", "") or ""
         elif mtype in self.MEDIA_TYPES:
@@ -448,6 +595,9 @@ class WhatsAppChannel(Channel):
                "text": text.strip(), "name": name, "kind": kind}
         if arg:
             out["start_arg"] = arg
+        ref = _ad_referral(m)
+        if ref:
+            out["referral"] = ref
         return out
 
     def normalize(self, raw):

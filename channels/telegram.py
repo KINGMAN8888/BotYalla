@@ -65,6 +65,12 @@ class TelegramChannel(Channel):
                 if asset["kind"] == "video":
                     m = await self.bot.send_video(video=src, supports_streaming=True, **kw)
                     fid = m.video.file_id if m.video else None
+                elif asset["kind"] == "audio" and asset.get("mime") == "audio/ogg":
+                    m = await self.bot.send_voice(voice=src, **kw)          # رسالة صوتية (Opus)
+                    fid = m.voice.file_id if m.voice else None
+                elif asset["kind"] == "audio":
+                    m = await self.bot.send_audio(audio=src, **kw)
+                    fid = m.audio.file_id if m.audio else None
                 else:
                     m = await self.bot.send_photo(photo=src, **kw)
                     fid = m.photo[-1].file_id if m.photo else None

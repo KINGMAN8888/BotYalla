@@ -125,6 +125,24 @@ class LoggedChannel:
         if fn:
             await fn(peer)
 
+    async def send_cta(self, peer, text, button, url):
+        """رسالة بزر رابط (واتساب cta_url · محادثة الويب). القنوات الأخرى: النص ثم الرابط."""
+        fn = getattr(self._c, "send_cta", None)
+        r = await fn(peer, text, button, url) if fn else await self._c.send_text(peer, f"{text}\n{url}")
+        self._log(peer, f"{text}\n[{button}]", r)
+        return r
+
+    async def send_location(self, peer, lat, lng, name="", address=""):
+        """دبّوس موقع (واتساب)؛ القنوات الأخرى رابط خرائط نصاً."""
+        fn = getattr(self._c, "send_location", None)
+        label = "\n".join(x for x in (f"📍 {name}" if name else "", address) if x)
+        if fn:
+            r = await fn(peer, lat, lng, name, address)
+        else:
+            r = await self._c.send_text(peer, f"{label}\nhttps://maps.google.com/?q={lat},{lng}".strip())
+        self._log(peer, label or f"📍 {lat},{lng}", r)
+        return r
+
     async def fetch_media(self, media):
         return await self._c.fetch_media(media)
 
@@ -412,12 +430,30 @@ def _goal_of(bot_id, peer):
     return None
 
 
-async def _escalate(bot_row, channel, peer, reason, lang="ar", say=True):
+async def _escalate(bot_row, channel, peer, reason, lang="ar", say=True, team_id=None):
     """تحويل فوري لصاحب النشاط: البوت يسكت نصف ساعة (أو حتى يرجّعها صاحبه)، وتنبيه على
-    تليجرام بـ Reply مباشر. لو رد صاحب النشاط يصير التولّي كاملاً (12 ساعة)."""
+    تليجرام بـ Reply مباشر. لو رد صاحب النشاط يصير التولّي كاملاً (12 ساعة).
+    الصندوق المشترك: المحادثة تُفتح وتُوجَّه لفريق (`team_id` من الفلو، وإلا فريق القناة
+    الافتراضي `route_team`) فيستلمها التالي بالتناوب."""
     import inbox_relay
     now = int(time.time())
     db.set_conversation_mode(bot_row["id"], peer, "human", human_at=now - HUMAN_IDLE + ESCALATE_HOLD)
+    db.set_conversation_status(bot_row["id"], peer, "open")
+    team = team_id or _cfg_of(bot_row).get("route_team")
+    if team:
+        try:
+            db.route_conversation(bot_row["owner_id"], bot_row["id"], peer, int(team))
+        except Exception:
+            log.exception("routing to team %s failed for bot #%s", team, bot_row["id"])
+    # خارج ساعات عمل الفريق (إعداد القناة في الصندوق المشترك): رسالة «خارج الدوام» ليعرف العميل متى يُرد عليه
+    inbox = _cfg_of(bot_row).get("inbox") or {}
+    if inbox.get("hours") and inbox.get("away_text"):
+        import flow_graph as FG
+        if not FG.is_open(inbox["hours"]):
+            try:
+                await channel.remove_keyboard(peer, inbox["away_text"])
+            except Exception:
+                log.exception("away message failed for bot #%s", bot_row["id"])
     if say:
         await channel.remove_keyboard(peer, "Let me connect you with our team — they'll continue with you right here 🙏"
                                       if lang == "en" else
@@ -710,6 +746,12 @@ async def handle_message(bot_row, channel, msg):
     steps = f.get("steps", [])
     raw = channel
     channel = LoggedChannel(raw, bot_id)
+    # 0) النسبة: رابط تتبّع أو إعلان CTWA (المرحلة 7) — رمز الرابط يُحذف من النص قبل أي محرك
+    try:
+        import growth
+        msg = growth.attribute(bot_row, peer, msg)
+    except Exception:
+        log.exception("growth attribution failed for bot #%s", bot_id)
 
     # 1) كل رسالة واردة تُسجَّل أولاً — في كل وضع، وقبل أي قرار
     conv = db.get_conversation(bot_id, peer)
@@ -717,11 +759,25 @@ async def handle_message(bot_row, channel, msg):
     media_id = await _keep_inbox_media(bot_row, raw, peer, msg) \
         if human and msg["kind"] == "media" else None
     try:
-        db.log_message(bot_id, peer, "in", "customer", msg.get("text", ""),
+        form = msg.get("form") if msg["kind"] == "form" else None     # ردّ نموذج واتساب: إجاباته نصاً للصندوق
+        db.log_message(bot_id, peer, "in", "customer",
+                       "📝 " + " · ".join(f"{k}: {v}" for k, v in form.items() if k != "flow_token")[:900]
+                       if isinstance(form, dict) else msg.get("text", ""),
                        kind="media" if msg["kind"] == "media" else "text",
                        media_id=media_id, name=msg.get("name", ""))
     except Exception:
         log.exception("could not log inbound message")
+    try:                            # ردّ العميل يوقف التسلسلات التي تطلب ذلك (المرحلة 6)
+        db.stop_enrollments_for_peer(bot_id, peer, "replied", only_stop_on_reply=True)
+    except Exception:
+        log.exception("could not stop sequences on reply")
+    if msg["kind"] == "call_permission":          # إذن الاتصال (AGENTS §71): يُحفظ ويُسجَّل — لا فلو ولا رد
+        try:
+            import calling
+            calling.on_permission(bot_id, peer, msg.get("call_permission") or {})
+        except Exception:
+            log.exception("could not save call permission")
+        return True
 
     # واتساب: علامتا القراءة و«يكتب…» فوراً (في الخلفية — لا تؤخّر الرد) — العميل يرى أن
     # رسالته وصلت وأن الرد قادم بدل شاشة صامتة أثناء توليد الذكاء الاصطناعي
@@ -762,8 +818,20 @@ async def handle_message(bot_row, channel, msg):
 
     if msg["kind"] == "cancel":
         db.clear_chat_state(bot_id, peer)
+        db.cancel_pending_payments(bot_id, peer)     # رابط دفع معلّق يُلغى (ولو دفع لاحقاً يُقبل ويصله إيصاله)
         await channel.remove_keyboard(peer, "تم الإلغاء. للبدء أرسل من جديد.")
         return
+
+    # الفلو المرئي (المرحلة 5): بوت له فلوهات منشورة نشطة يمرّ بمحرّكها البياني. يرجّع False
+    # لمحادثة بدأت على الفلو الخطّي أو لا فلو مطابق — فيكمل هذا المحرك كما كان حرفياً.
+    import flow_graph as FG
+    if FG.has_graph(cfg) and msg["kind"] != "unsupported":
+        if await FG.handle(bot_row, cfg, channel, raw, peer, msg):
+            return
+        if not cfg.get("flow") and FG.live_flows(cfg) and not db.get_chat_state(bot_id, peer):
+            return                  # فلوهات مرئية بلا مطابق ولا فلو خطّي مضبوط: لا رد افتراضي مفاجئ
+    if msg["kind"] == "form":
+        msg = dict(msg, kind="unsupported")   # ردّ نموذج لم يعد ينتظره فلو مرئي — لا يصير إجابة خطّية
 
     if msg["kind"] == "unsupported":
         # موقع أو جهة اتصال: لا نص ولا ملف. حفظها كإجابة فارغة يقفز خطوة

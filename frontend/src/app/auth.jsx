@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BY, P, t, bi, AR, Icon, Card, Btn, Field, Input, Select, Form } from "./kit.jsx";
+import { BY, P, t, bi, AR, Icon, Card, Btn, Field, Input, Select, Form, Logo } from "./kit.jsx";
 import { Flashes } from "./AppShell.jsx";
 
 /* ============================================================================
@@ -179,7 +179,7 @@ export function UsernameField({ defaultValue = "", current = "", error, onValid,
           {bi("جرّب:", "Try:")}
           {st.sug.map((s) => (
             <button key={s} type="button" onClick={() => setV(s)} dir="auto"
-              className="cursor-pointer rounded-full border-0 bg-white/[0.06] px-2.5 py-1 text-[12px] font-bold text-ink hover:bg-au-violet/25">{s}</button>
+              className="cursor-pointer rounded-full border-0 bg-ov/[0.06] px-2.5 py-1 text-[12px] font-bold text-ink hover:bg-au-violet/25">{s}</button>
           ))}
         </span>
       )}
@@ -240,7 +240,7 @@ export function EntityPicker({ name = "entity_type", defaultValue = "", error, o
             <button key={k} type="button" role="radio" aria-checked={on} onClick={() => setV(k)}
               className={`flex cursor-pointer flex-col items-center gap-1 rounded-xl border-0 px-2 py-3 text-center transition-all duration-300
                 ${on ? "bg-[linear-gradient(150deg,rgb(124_108_246/0.25),rgb(34_211_238/0.1))] text-ink shadow-[inset_0_0_0_1.5px_rgb(124_108_246/0.8)]"
-                     : "bg-white/[0.03] text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] hover:bg-white/[0.06] hover:text-ink-2"}`}>
+                     : "bg-ov/[0.03] text-ink-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)] hover:bg-ov/[0.06] hover:text-ink-2"}`}>
               <Icon name={ic} size={19} className={on ? "text-au-cyan" : ""} />
               <b className="text-[13px]">{bi(...l)}</b>
               <span className="hidden text-[10.5px] leading-tight opacity-80 sm:block">{bi(...d)}</span>
@@ -351,7 +351,7 @@ export function SocialButtons({ mode = "login", link = false }) {
     <>
       <div className="flex flex-col gap-2.5">
         {o.google && (
-          <a href={`/auth/google${q}`} className={`${SOCIAL} bg-white text-[#1F2937] shadow-[0_6px_20px_-8px_rgb(255_255_255/0.35)]`}>
+          <a href={`/auth/google${q}`} className={`${SOCIAL} bg-white text-[#1F2937] shadow-[0_6px_20px_-8px_rgb(var(--ov-rgb)/0.35)]`}>
             <GoogleG />{link ? bi("اربط حساب جوجل", "Link Google") : bi("المتابعة بحساب جوجل", "Continue with Google")}
           </a>
         )}
@@ -363,9 +363,9 @@ export function SocialButtons({ mode = "login", link = false }) {
       </div>
       {!link && (
         <div className="my-6 flex items-center gap-3 text-[12px] text-ink-3">
-          <span className="h-px flex-1 bg-white/10" />
+          <span className="h-px flex-1 bg-ov/10" />
           {mode === "register" ? bi("أو سجّل بالبريد", "or sign up with email") : bi("أو بكلمة المرور", "or with your password")}
-          <span className="h-px flex-1 bg-white/10" />
+          <span className="h-px flex-1 bg-ov/10" />
         </div>
       )}
     </>
@@ -378,7 +378,7 @@ function Shell({ wide, children }) {
     <div className={`mx-auto flex min-h-screen flex-col justify-center px-5 py-14 ${wide ? "max-w-[540px]" : "max-w-[440px]"}`}>
       <Flashes />
       <a href={BY.urls.landing} className="mb-6 flex justify-center no-underline">
-        <img src={BY.urls.logo} alt={BY.brand} className="h-11 w-auto" />
+        <Logo className="h-11 w-auto" />
       </a>
       {children}
     </div>
@@ -509,7 +509,7 @@ function FindCode() {
   const msg = bi(`محتاج مساعدة في تأكيد حسابي على BotYalla — الإيميل: ${P.email || ""}`,
                  `I need help verifying my BotYalla account — email: ${P.email || ""}`);
   return (
-    <div className="mt-5 rounded-2xl bg-white/[0.04] p-4 text-start shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+    <div className="mt-5 rounded-2xl bg-ov/[0.04] p-4 text-start shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
         className="flex w-full cursor-pointer items-center justify-between gap-2 border-0 bg-transparent p-0 text-[13.5px] font-extrabold text-ink">
         <span className="inline-flex items-center gap-2"><Icon name="help" size={16} className="text-au-cyan" />
@@ -575,7 +575,7 @@ export function VerifyEmail() {
           </Btn>
         </Form>
         <FindCode />
-        <div className="mt-5 border-t border-white/10 pt-5 text-start">
+        <div className="mt-5 border-t border-ov/10 pt-5 text-start">
           {!edit ? (
             <button type="button" onClick={() => setEdit(true)}
               className="w-full cursor-pointer border-0 bg-transparent text-center text-[13px] font-bold text-au-cyan hover:underline">
@@ -616,7 +616,7 @@ export function CompleteProfile() {
   return (
     <Shell wide>
       <Card className="!p-7 sm:!p-8">
-        <span className="mx-auto mb-3 flex w-fit items-center gap-2 rounded-full bg-white/[0.06] px-3 py-1.5 text-[12px] font-bold text-ink-2">
+        <span className="mx-auto mb-3 flex w-fit items-center gap-2 rounded-full bg-ov/[0.06] px-3 py-1.5 text-[12px] font-bold text-ink-2">
           {pend.provider === "facebook" ? <FacebookF /> : <GoogleG />}{bi(`متصل بحساب ${prov}`, `Connected with ${prov}`)}
         </span>
         <h1 className="m-0 text-center text-[23px] font-extrabold tracking-tight text-ink">

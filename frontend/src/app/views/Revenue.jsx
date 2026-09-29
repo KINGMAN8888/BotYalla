@@ -44,8 +44,8 @@ export function AdminPricing() {
                            onChange={(e) => set(p.id, "disc", e.target.value)} />
                   </Field>
                 </div>
-                <div className="mt-5 flex items-center justify-between gap-3 rounded-2xl bg-black/25 px-5 py-4
-                                shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+                <div className="mt-5 flex items-center justify-between gap-3 rounded-2xl bg-sink/25 px-5 py-4
+                                shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
                   <span className="text-[13px] text-ink-3">{t("final_price")}</span>
                   <span className="flex items-baseline gap-2.5">
                     {has && (
@@ -109,7 +109,7 @@ export function AdminPromos() {
             <label className="flex cursor-pointer items-center gap-2.5 self-end pb-2.5">
               <input type="checkbox" name="per_user_once" defaultChecked className="peer sr-only" />
               <span className="grid size-5 place-items-center rounded-md text-transparent
-                               shadow-[inset_0_0_0_1px_rgb(255_255_255/0.2)] transition-colors
+                               shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.2)] transition-colors
                                peer-checked:bg-au-violet peer-checked:text-white">
                 <Icon name="check" size={13} />
               </span>
@@ -129,7 +129,7 @@ export function AdminPromos() {
               const exhausted = p.max_uses != null && p.used >= p.max_uses;
               return (
                 <Tr key={p.id}>
-                  <Td><code className="rounded-lg bg-black/30 px-2.5 py-1 font-bold text-au-cyan">{p.code}</code></Td>
+                  <Td><code className="rounded-lg bg-sink/30 px-2.5 py-1 font-bold text-au-cyan">{p.code}</code></Td>
                   <Td>{p.kind === "percent" ? `${num(p.value)}%` : `${num(p.value)} ${EGP()}`}</Td>
                   <Td>{p.plan ? (plans.find((x) => x.id === p.plan)?.name || p.plan) : t("promo_all_plans")}</Td>
                   <Td className="tnum">{num(p.used)}{p.max_uses != null ? ` / ${num(p.max_uses)}` : ""}</Td>
@@ -202,7 +202,7 @@ export function AdminAffiliates() {
             {rows.map((a) => (
               <Tr key={a.user_id}>
                 <Td className="font-bold text-ink">{a.username}</Td>
-                <Td><code className="rounded-lg bg-black/30 px-2.5 py-1 text-au-cyan">{a.code}</code></Td>
+                <Td><code className="rounded-lg bg-sink/30 px-2.5 py-1 text-au-cyan">{a.code}</code></Td>
                 <Td>
                   <Form action={`/admin/affiliates/${a.user_id}/rate`} className="flex items-center gap-1.5">
                     <Input name="rate_pct" defaultValue={a.rate_pct} inputMode="decimal"
@@ -293,8 +293,8 @@ export function Affiliate() {
           {t("aff_link")}
         </SectionTitle>
         <div className="flex flex-wrap items-center gap-2.5">
-          <code className="min-w-0 flex-1 overflow-x-auto rounded-xl bg-black/30 px-4 py-3 text-[13px]
-                           text-au-cyan shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">{link}</code>
+          <code className="min-w-0 flex-1 overflow-x-auto rounded-xl bg-sink/30 px-4 py-3 text-[13px]
+                           text-au-cyan shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">{link}</code>
           <Btn variant="ghost" icon={copied ? "check" : "copy"} type="button"
                onClick={() => navigator.clipboard?.writeText(link).then(() => {
                  setCopied(true); setTimeout(() => setCopied(false), 1500);

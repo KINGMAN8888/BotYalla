@@ -15,7 +15,7 @@ const AR = { risk: "عاجل", warn: "انتبه", good: "جيد", info: "معل
 const EN = { risk: "Urgent", warn: "Attention", good: "Good", info: "Info" };
 const TONE = { risk: "text-red-300", warn: "text-amber-200", good: "text-au-teal", info: "text-ink-3" };
 const BAR = {
-  risk: "bg-red-400/70", warn: "bg-amber-300/70", good: "bg-au-teal/70", info: "bg-white/25",
+  risk: "bg-red-400/70", warn: "bg-amber-300/70", good: "bg-au-teal/70", info: "bg-ov/25",
 };
 
 const pct = (x, y) => (y ? Math.round((x / y) * 100) : 0);
@@ -111,7 +111,7 @@ function Rank({ items, empty, fmt }) {
             <span className="min-w-0 flex-1 truncate text-ink-2">{fmt ? fmt(x) : x.k}</span>
             <span className="tnum font-bold text-ink">{num(x.v)}</span>
           </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
+          <div className="h-1.5 overflow-hidden rounded-full bg-ov/[0.07]">
             <div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)]"
                  style={{ width: `${(x.v / max) * 100}%` }} />
           </div>
@@ -181,8 +181,8 @@ export function WeeklyReport() {
         {(r.findings || []).length ? (
           <div className="flex flex-col gap-3">
             {r.findings.map((x, i) => (
-              <div key={i} className="rounded-xl bg-white/[0.03] p-4
-                                      shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
+              <div key={i} className="rounded-xl bg-ov/[0.03] p-4
+                                      shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.06)]">
                 <div className="mb-1.5 flex flex-wrap items-center gap-2">
                   <span className={`h-2 w-2 rounded-full ${BAR[x.level] || BAR.info}`} />
                   <b className={`text-[14px] ${TONE[x.level] || ""}`}>{x.title}</b>
@@ -254,7 +254,7 @@ export function WeeklyReport() {
                   {i > 0 && <span className="tnum text-[12px] text-ink-3">
                     · {pct(v, prev)}% {bi("من السابقة", "of previous")}</span>}
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-white/[0.07]">
+                <div className="h-2 overflow-hidden rounded-full bg-ov/[0.07]">
                   <div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)]"
                        style={{ width: `${pct(v, f.signup || 0)}%` }} />
                 </div>
@@ -406,7 +406,7 @@ export function WeeklyReport() {
                 <Td>
                   <div className="flex flex-wrap gap-1.5">
                     {Object.entries(u.problems || {}).map(([k, v]) => (
-                      <span key={k} className="rounded-full bg-white/[0.06] px-2.5 py-1 text-[11.5px] text-ink-2">
+                      <span key={k} className="rounded-full bg-ov/[0.06] px-2.5 py-1 text-[11.5px] text-ink-2">
                         {problemLabel(k)}{v > 1 ? ` ×${v}` : ""}
                       </span>
                     ))}
@@ -794,7 +794,7 @@ export function ConvInsights() {
           {(c.keywords || []).length ? (
             <div className="flex flex-wrap gap-2">
               {c.keywords.map((w) => (
-                <span key={w.k} className="rounded-full bg-white/[0.06] px-3 py-1.5 text-[13px] text-ink-2">
+                <span key={w.k} className="rounded-full bg-ov/[0.06] px-3 py-1.5 text-[13px] text-ink-2">
                   {w.k} <b className="tnum text-au-cyan">{w.v}</b>
                 </span>
               ))}

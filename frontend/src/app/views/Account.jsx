@@ -50,8 +50,8 @@ export function TicketThread({ tk, staffView = false }) {
         return (
           <div key={m.id}
                className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed
-                           shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]
-                           ${mine ? "self-end bg-au-cyan/[0.12] text-ink" : "self-start bg-white/[0.05] text-ink-2"}`}>
+                           shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]
+                           ${mine ? "self-end bg-au-cyan/[0.12] text-ink" : "self-start bg-ov/[0.05] text-ink-2"}`}>
             <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-ink-3">
               <Icon name={m.sender === "staff" ? "shield" : "user"} size={12} />
               {m.sender === "staff" ? bi("فريق BotYalla", "BotYalla team") : (tk.username || bi("العميل", "Customer"))}
@@ -106,7 +106,7 @@ export function Support() {
               <button key={k} type="button" onClick={() => setKind(k)} aria-pressed={kind === k}
                 className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-[13px] font-bold transition
                   ${kind === k ? "bg-au-cyan/15 text-ink shadow-[inset_0_0_0_1px_rgb(143_233_255/0.45)]"
-                               : "text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:text-ink"}`}>
+                               : "text-ink-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] hover:text-ink"}`}>
                 <Icon name={ic} size={15} />{bi(ar, en)}
               </button>
             ))}
@@ -152,8 +152,8 @@ export function Support() {
    ملف شخصي أعلى الصفحة (الهوية + التحقق + اكتمال الحساب)، ثم عمودان بمسافات ثابتة:
    النماذج (الدخول والأمان · بيانات النشاط) والحالة (التحقق · طرق الدخول · التنبيهات ·
    البريد) — ويصيران عموداً واحداً على الشاشات الأصغر. */
-const ROW = "flex flex-wrap items-center gap-3 rounded-xl bg-white/[0.03] px-3.5 py-3 " +
-            "shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]";
+const ROW = "flex flex-wrap items-center gap-3 rounded-xl bg-ov/[0.03] px-3.5 py-3 " +
+            "shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]";
 const NOTE = "m-0 text-[12.5px] leading-relaxed text-ink-3";
 
 /* الصورة الشخصية / اللوجو: الملف يُرسل فور اختياره، والخادم يعيد رسمه مربعاً نظيفاً (Pillow) */
@@ -277,7 +277,7 @@ export function Account() {
               <span className="font-bold text-ink-2">{bi("اكتمال الحساب", "Account completion")}</span>
               <span className={`tnum text-[16px] font-extrabold ${pct === 100 ? "text-au-teal" : "text-ink"}`}>{pct}%</span>
             </div>
-            <div className="h-2 overflow-hidden rounded-full bg-white/[0.08]">
+            <div className="h-2 overflow-hidden rounded-full bg-ov/[0.08]">
               <div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)] transition-[width] duration-700"
                    style={{ width: `${pct}%` }} />
             </div>
@@ -285,7 +285,7 @@ export function Account() {
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {steps.filter((s) => !s[0]).map(([, label, href]) => (
                   <a key={label} href={href}
-                     className="rounded-full bg-white/[0.05] px-2.5 py-1 text-[11.5px] font-bold text-ink-2 no-underline
+                     className="rounded-full bg-ov/[0.05] px-2.5 py-1 text-[11.5px] font-bold text-ink-2 no-underline
                                 transition-colors hover:bg-au-violet/25 hover:text-ink">+ {label}</a>
                 ))}
               </div>
@@ -316,7 +316,7 @@ export function Account() {
                 </Field>
               </div>
 
-              <div className="mt-5 rounded-2xl bg-white/[0.025] p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+              <div className="mt-5 rounded-2xl bg-ov/[0.025] p-4 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]">
                 {changePw ? (
                   <>
                     <PasswordField name="new_password" confirmName="new_password2" label={t("new_password")} optional
@@ -352,7 +352,7 @@ export function Account() {
                   <a href={BY.urls.forgot} className="font-bold text-au-cyan">{t("forgot_link")}</a>.
                 </p>
               ) : (
-                <div className="mt-5 border-t border-white/10 pt-5">
+                <div className="mt-5 border-t border-ov/10 pt-5">
                   <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
                     <Field label={t("current_password")}>
                       <Input type="password" name="current_password" required autoComplete="current-password" />
@@ -575,7 +575,7 @@ function AiKeyTest() {
     setBusy(false);
   };
   return (
-    <div className="mt-6 border-t border-white/10 pt-5">
+    <div className="mt-6 border-t border-ov/10 pt-5">
       <Btn variant="ghost" icon="bolt" type="button" onClick={run} disabled={busy || !provs.length}>
         {busy ? bi("جارٍ اختبار المزوّدين…", "Testing providers…") : bi("اختبر المفاتيح المحفوظة", "Test the saved keys")}
       </Btn>
@@ -589,8 +589,8 @@ function AiKeyTest() {
           {provs.filter((p) => p.id in res).map((p) => {
             const r = res[p.id];
             return (
-              <li key={p.id} className="list-none rounded-xl bg-white/[0.03] px-3.5 py-2.5 text-[13px] leading-relaxed
-                                        shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+              <li key={p.id} className="list-none rounded-xl bg-ov/[0.03] px-3.5 py-2.5 text-[13px] leading-relaxed
+                                        shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]">
                 {!r ? <span className="text-ink-3">⏳ {p.name} — {bi("جارٍ الاختبار…", "testing…")}</span>
                     : <>
                         <b className={r.ok ? "text-au-teal" : "text-red-300"}>{(r.ok ? "✓ " : "✗ ") + p.name}</b>
@@ -734,7 +734,7 @@ export function Pricing() {
       {/* مبدّل الدورة — عرضٌ فقط: المبلغ المُحصَّل يُحسب في الخادم عند الدفع */}
       <div className="mb-10 flex flex-col items-center gap-2">
         <div role="tablist" aria-label={t("sub_cycle")}
-             className="inline-flex rounded-full bg-black/25 p-1 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]">
+             className="inline-flex rounded-full bg-sink/25 p-1 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]">
           {["monthly", "annual"].map((c) => (
             <button key={c} type="button" role="tab" aria-selected={cycle === c}
                     onClick={() => setCycle(c)}
@@ -880,8 +880,8 @@ export function Subscribe() {
   };
   const CopyRow = ({ v, k }) => (
     <div className="mt-2 flex items-center gap-2">
-      <code className="flex-1 overflow-x-auto rounded-lg bg-black/30 px-3 py-2 text-[13px] text-au-cyan
-                       shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">{v}</code>
+      <code className="flex-1 overflow-x-auto rounded-lg bg-sink/30 px-3 py-2 text-[13px] text-au-cyan
+                       shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">{v}</code>
       <Btn variant="ghost" sm type="button" onClick={() => copy(v, k)}
            aria-label={t("copy")}>
         <Icon name={copied === k ? "check" : "copy"} size={13} />
@@ -953,7 +953,7 @@ export function Subscribe() {
       <Card className="mb-6">
         <SectionTitle icon="wallet">{t("pay_method")}</SectionTitle>
         <div className="grid gap-4 lg:grid-cols-3">
-          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+          <div className="rounded-2xl bg-ov/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
             <div className="flex items-center gap-2 font-extrabold text-[#FF6B6B]">
               <Icon name="phone" size={16} />{t("pay_vodafone")}
             </div>
@@ -961,7 +961,7 @@ export function Subscribe() {
             <CopyRow v={plat.vodafone_number} k="vf" />
           </div>
 
-          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+          <div className="rounded-2xl bg-ov/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
             <div className="flex items-center gap-2 font-extrabold text-au-violet">
               <Icon name="card" size={16} />{t("pay_instapay")}
             </div>
@@ -975,7 +975,7 @@ export function Subscribe() {
             )}
           </div>
 
-          <div className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+          <div className="rounded-2xl bg-ov/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
             <div className="flex items-center gap-2 font-extrabold text-au-cyan">
               <Icon name="bank" size={16} />{t("pay_bank")}
             </div>
@@ -1011,8 +1011,8 @@ export function Subscribe() {
           <div className="mt-4">
             <Field label={t("pay_upload")}>
               <input type="file" name="screenshot" accept="image/*" required
-                     className="w-full cursor-pointer rounded-xl bg-black/25 p-2.5 text-[13px] text-ink-3
-                                shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
+                     className="w-full cursor-pointer rounded-xl bg-sink/25 p-2.5 text-[13px] text-ink-3
+                                shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
                                 file:me-3 file:rounded-lg file:border-0 file:bg-au-violet/25
                                 file:px-3 file:py-1.5 file:text-[13px] file:font-bold file:text-white" />
             </Field>

@@ -117,10 +117,10 @@ function ConsentModal({ u, onClose, onGo }) {
     onGo([w.ar, what && "المطلوب: " + what, extra.trim(), when].filter(Boolean).join(" — "));
   };
   const chip = (on) => "flex cursor-pointer items-center gap-2 rounded-xl border-0 px-3 py-2.5 text-start text-[13px] font-bold " +
-    "transition-colors " + (on ? "bg-au-violet/25 text-white shadow-[inset_0_0_0_1.5px_rgb(124_108_246/0.9)]"
-                             : "bg-white/[0.04] text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:bg-white/[0.08]");
+    "transition-colors " + (on ? "bg-au-violet/25 text-ink shadow-[inset_0_0_0_1.5px_rgb(124_108_246/0.9)]"
+                             : "bg-ov/[0.04] text-ink-2 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] hover:bg-ov/[0.08]");
   return (
-    <div className="fixed inset-0 z-[360] grid place-items-center bg-black/65 p-4 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-[360] grid place-items-center bg-sink/65 p-4 backdrop-blur-sm" onClick={onClose}>
       <Card className="max-h-[92vh] w-full max-w-[560px] overflow-y-auto !p-0" onClick={(e) => e.stopPropagation()}>
         <div className="bg-[linear-gradient(120deg,rgb(124_108_246/0.25),rgb(34_211_238/0.08))] px-6 pb-4 pt-5">
           <div className="flex items-start justify-between gap-3">
@@ -135,7 +135,7 @@ function ConsentModal({ u, onClose, onGo }) {
               </p>
             </div>
             <button type="button" onClick={onClose} aria-label={bi("إغلاق", "Close")}
-              className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg border-0 bg-white/[0.06] text-ink-2 hover:text-white">
+              className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg border-0 bg-ov/[0.06] text-ink-2 hover:text-ink">
               <Icon name="close" size={16} />
             </button>
           </div>
@@ -146,7 +146,7 @@ function ConsentModal({ u, onClose, onGo }) {
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup">
               {CONSENT_WAYS.map((x) => (
                 <button key={x.k} type="button" role="radio" aria-checked={way === x.k} onClick={() => setWay(x.k)} className={chip(way === x.k)}>
-                  <span className={"grid size-7 shrink-0 place-items-center rounded-lg " + (way === x.k ? "bg-au-violet text-white" : "bg-white/[0.06] text-au-cyan")}>
+                  <span className={"grid size-7 shrink-0 place-items-center rounded-lg " + (way === x.k ? "bg-au-violet text-white" : "bg-ov/[0.06] text-au-cyan")}>
                     <Icon name={x.icon} size={15} />
                   </span>
                   {bi(x.ar, x.en)}
@@ -162,7 +162,7 @@ function ConsentModal({ u, onClose, onGo }) {
                 <button key={x.k} type="button" aria-pressed={needs.includes(x.k)} onClick={() => toggle(x.k)}
                   className={"cursor-pointer rounded-full border-0 px-3.5 py-2 text-[12.5px] font-bold transition-colors " +
                     (needs.includes(x.k) ? "bg-au-teal/20 text-au-teal shadow-[inset_0_0_0_1px_rgb(45_212_191/0.5)]"
-                                         : "bg-white/[0.05] text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]")}>
+                                         : "bg-ov/[0.05] text-ink-2 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]")}>
                   {needs.includes(x.k) ? "✓ " : ""}{bi(x.ar, x.en)}
                 </button>
               ))}
@@ -263,7 +263,7 @@ function EasySignup() {
             {bi("الرابط جاهز — انسخه دلوقتي، مش هيظهر تاني:", "Link ready — copy it now, it won't be shown again:")}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <code dir="ltr" className="min-w-0 flex-1 break-all rounded-lg bg-black/40 px-3 py-2 text-[12.5px] text-ink">{url}</code>
+            <code dir="ltr" className="min-w-0 flex-1 break-all rounded-lg bg-sink/40 px-3 py-2 text-[12.5px] text-ink">{url}</code>
             <Btn sm icon={copied ? "check" : "copy"} type="button" onClick={copy}>{copied ? bi("اتنسخ", "Copied") : bi("انسخ", "Copy")}</Btn>
           </div>
         </div>
@@ -273,7 +273,7 @@ function EasySignup() {
           {list.slice(0, 8).map((i) => {
             const [label, tone] = state(i);
             return (
-              <div key={i.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-2 text-[12.5px]">
+              <div key={i.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-ov/[0.03] px-3 py-2 text-[12.5px]">
                 <span className="tnum text-ink-3">#{i.id}</span>
                 <span className="min-w-0 flex-1 truncate text-ink-2" dir="auto">{i.note || "—"}</span>
                 <span className="text-ink-3">{fmtDate(i.created_at)}</span>
@@ -338,7 +338,7 @@ export function AdminUsers() {
           <button type="button" onClick={() => setOnly(!only)} aria-pressed={only}
             className={"cursor-pointer rounded-full border-0 px-4 py-2 text-[12.5px] font-bold transition-colors " +
                        (only ? "bg-amber-400/20 text-amber-200 shadow-[inset_0_0_0_1px_rgb(251_191_36/0.4)]"
-                             : "bg-white/[0.05] text-ink-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]")}>
+                             : "bg-ov/[0.05] text-ink-2 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]")}>
             {bi("مستنيين كود الإيميل", "Waiting for email code")} ({num(waiting)})
           </button>
         </div>
@@ -465,7 +465,7 @@ function ReceiptEngine({ ocr = {}, refused24 = 0, refusals = [] }) {
             {bi("من غيره مفيش رفض آلي — كل صورة بتستنى مراجعتك. الحل على السيرفر:",
                 "Without it nothing is refused automatically — every image waits for you. Fix it on the server:")}
           </p>
-          <code dir="ltr" className="mt-3 block overflow-x-auto rounded-lg bg-black/40 px-3 py-2 text-[12.5px] text-ink">
+          <code dir="ltr" className="mt-3 block overflow-x-auto rounded-lg bg-sink/40 px-3 py-2 text-[12.5px] text-ink">
             sudo bash /opt/botyalla/deploy/hostinger_deploy.sh --update
           </code>
         </Card>
@@ -489,7 +489,7 @@ function ReceiptEngine({ ocr = {}, refused24 = 0, refusals = [] }) {
         {refusals.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {refusals.map((r) => (
-              <span key={r.id} className="rounded-lg bg-white/[0.04] px-2.5 py-1 text-[12px] text-ink-3">
+              <span key={r.id} className="rounded-lg bg-ov/[0.04] px-2.5 py-1 text-[12px] text-ink-3">
                 <b className="text-ink-2">{r.username || "?"}</b> · {REFUSED[r.reason] ? bi(...REFUSED[r.reason]) : r.reason}
                 {" · "}<span className="tnum">{fmtDate(r.created_at)}</span>
               </span>
@@ -536,7 +536,7 @@ export function AdminPayments() {
                        title={t("view_receipt")}>
                       <img src={`/admin/payments/${x.id}/screenshot`} alt="receipt"
                            className="size-[52px] rounded-lg bg-white object-cover
-                                      shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]" />
+                                      shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.12)]" />
                     </a>
                   ) : <span className="text-ink-3">{t("no_receipt")}</span>}
                 </Td>
@@ -630,7 +630,7 @@ function WaConnect({ tk }) {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   return (
     <details open={tk.status !== "closed"}
-             className="mt-4 rounded-xl bg-white/[0.03] p-4 shadow-[inset_0_0_0_1px_rgb(45_212_167/0.3)]">
+             className="mt-4 rounded-xl bg-ov/[0.03] p-4 shadow-[inset_0_0_0_1px_rgb(45_212_167/0.3)]">
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 text-[14px] font-extrabold text-ink
                           [&::-webkit-details-marker]:hidden">
         <Icon name="phone" size={16} className="text-au-teal" />
@@ -647,7 +647,7 @@ function WaConnect({ tk }) {
         <li>{bi("من developers.facebook.com: تطبيق Business ← WhatsApp ← أضف رقمه ووثّقه، ثم System User بتوكن دائم (whatsapp_business_messaging و whatsapp_business_management).",
                 "On developers.facebook.com: Business app → WhatsApp → add and verify the number, then a System User with a permanent token (whatsapp_business_messaging and whatsapp_business_management).")}</li>
         <li>
-          Webhook: <code className="rounded bg-white/10 px-1.5 py-0.5" dir="ltr">{origin}/wh/whatsapp</code>
+          Webhook: <code className="rounded bg-ov/10 px-1.5 py-0.5" dir="ltr">{origin}/wh/whatsapp</code>
           {bi(" بالـ Verify token من إعدادات المنصة، واشترك في messages.",
               " with the Verify token from platform settings; subscribe to messages.")}
         </li>
@@ -717,7 +717,7 @@ export function AdminTickets() {
           <button key={k} type="button" onClick={() => setShow(k)} aria-pressed={show === k}
             className={`rounded-xl px-3.5 py-2 text-[13px] font-bold transition
               ${show === k ? "bg-au-cyan/15 text-ink shadow-[inset_0_0_0_1px_rgb(143_233_255/0.45)]"
-                           : "text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:text-ink"}`}>
+                           : "text-ink-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] hover:text-ink"}`}>
             {l} <span className="tnum opacity-70">{n}</span>
           </button>
         ))}
@@ -822,7 +822,7 @@ export function AdminAnalytics() {
                   <span className="ms-auto tnum text-ink-2">{num(n)}</span>
                   {i > 0 && <span className="tnum text-[12px] text-ink-3">· {pct(n, prev)}% {bi("من السابقة", "of previous")}</span>}
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-white/[0.07]">
+                <div className="h-2 overflow-hidden rounded-full bg-ov/[0.07]">
                   <div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)]"
                        style={{ width: `${pct(n, f.signup || 0)}%` }} />
                 </div>
@@ -903,8 +903,8 @@ export function AdminPlatform() {
           </SectionTitle>
           <p className="mt-0 mb-4 text-[13px] text-ink-3">{t("plat_bot_desc")}</p>
           {/* الإنشاء بضغطة يحتاج «Bot Management Mode» لبوت المنصة (can_manage_bots من getMe) */}
-          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-white/[0.03] px-3.5 py-3
-                          shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-ov/[0.03] px-3.5 py-3
+                          shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]">
             <span className="text-[13px] font-bold text-ink">{t("plat_managed")}</span>
             {managed.can_manage
               ? <Pill tone="on" dot>{t("plat_managed_on")}{managed.username ? ` · @${managed.username}` : ""}</Pill>
@@ -942,7 +942,7 @@ export function AdminPlatform() {
           </p>
           <p className="mt-3 mb-0 text-[12.5px] text-ink-3">
             {bi("عنوان الويبهوك في Meta:", "Webhook URL in Meta:")}{" "}
-            <code className="rounded bg-white/10 px-1.5 py-0.5">
+            <code className="rounded bg-ov/10 px-1.5 py-0.5">
               {typeof window !== "undefined" ? window.location.origin : ""}/wh/whatsapp
             </code>
           </p>
@@ -995,7 +995,7 @@ export function AdminGrowth() {
   const Link = ({ id, label, url, qr }) => url ? (
     <div className="flex flex-wrap items-center gap-2">
       <span className="w-[74px] shrink-0 text-[12px] font-extrabold text-ink-3">{label}</span>
-      <code dir="ltr" className="min-w-0 flex-1 truncate rounded-lg bg-black/25 px-2.5 py-1.5 text-[12px] text-ink-2">{url}</code>
+      <code dir="ltr" className="min-w-0 flex-1 truncate rounded-lg bg-sink/25 px-2.5 py-1.5 text-[12px] text-ink-2">{url}</code>
       <Btn sm variant="ghost" icon={copied === id ? "check" : "link"} type="button" onClick={() => copy(id, url)}>
         {copied === id ? bi("اتنسخ", "Copied") : bi("نسخ", "Copy")}
       </Btn>
@@ -1085,7 +1085,7 @@ export function AdminMeta() {
 
       <Card className="mb-5">
         <SectionTitle icon="link">{bi("عنوان الويبهوك في Meta", "Webhook URL in Meta")}</SectionTitle>
-        <code className="block overflow-x-auto rounded-xl bg-black/30 px-4 py-3 text-[13px] text-au-cyan" dir="ltr">{webhook}</code>
+        <code className="block overflow-x-auto rounded-xl bg-sink/30 px-4 py-3 text-[13px] text-au-cyan" dir="ltr">{webhook}</code>
         <p className="mt-2 mb-0 text-[12.5px] text-ink-3">
           {bi("حطه في إعدادات Messenger وInstagram في تطبيق Meta بنفس Verify Token بتاع واتساب.",
               "Set it in the Messenger and Instagram settings of the Meta app with the same Verify Token as WhatsApp.")}
@@ -1125,7 +1125,7 @@ export function AdminMeta() {
         </div>
         <Msg d={out.page} />
         {page.configured && (
-          <div className="mt-5 flex flex-wrap gap-2.5 border-t border-white/10 pt-4">
+          <div className="mt-5 flex flex-wrap gap-2.5 border-t border-ov/10 pt-4">
             <Btn icon="rocket" type="button" disabled={busy === "official"}
                  onClick={() => run("official", "/admin/meta/official", { messenger: true, instagram: true })}>
               {bi("شغّل المساعد الرسمي على ماسنجر وإنستجرام", "Run the official assistant on Messenger & Instagram")}
@@ -1151,7 +1151,7 @@ export function AdminMeta() {
           </SectionTitle>
           <div className="grid gap-4 md:grid-cols-2">
             {Object.entries(groups).map(([g, list]) => (
-              <div key={g} className="rounded-xl bg-white/[0.03] p-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+              <div key={g} className="rounded-xl bg-ov/[0.03] p-3.5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]">
                 <div className="mb-2 text-[12.5px] font-extrabold text-ink-3">{g}</div>
                 {list.map((f) => (
                   <label key={f.k} className="flex cursor-pointer items-center gap-2 py-1 text-[13px] text-ink" dir="ltr">
@@ -1191,8 +1191,8 @@ export function AdminMeta() {
         {out.diag && out.diag.checks && (
           <ul className="mt-4 mb-0 flex list-none flex-col gap-2 p-0">
             {out.diag.checks.map((c, i) => (
-              <li key={i} className="flex items-start gap-2.5 rounded-xl bg-white/[0.03] px-3.5 py-2.5 text-[13px]
-                                     shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+              <li key={i} className="flex items-start gap-2.5 rounded-xl bg-ov/[0.03] px-3.5 py-2.5 text-[13px]
+                                     shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]">
                 <span className={"mt-0.5 grid size-5 shrink-0 place-items-center rounded-full " +
                                  (c.ok ? "bg-au-teal/20 text-au-teal" : "bg-red-400/15 text-red-300")}>
                   <Icon name={c.ok ? "check" : "close"} size={12} />

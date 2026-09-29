@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="{{ lang }}" dir="{{ dir }}">
+<html lang="{{ lang }}" dir="{{ dir }}" data-theme="{{ theme or 'dark' }}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ page_title }} · {{ brand }}</title>
-<meta name="theme-color" content="#05070D">
+<meta name="theme-color" content="{{ '#F3F5FA' if theme == 'light' else '#05070D' }}">
 <meta name="csrf-token" content="{{ csrf_token }}">
 <link rel="icon" type="image/svg+xml" href="{{ static_v('mark.svg') }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -25,6 +25,9 @@
 {% include "_analytics.html" %}
 <style nonce="{{ csp_nonce }}">
   html{background:#05070D;}
+  html[data-theme=light]{background:#F3F5FA;}
+  html[data-theme=light] #boot{color:#5B6782;}
+  html[data-theme=light] .sk{background:rgba(15,23,42,.06);}
   body{margin:0;font-family:{% if lang=='en' %}'Inter',{% endif %}'Cairo','Segoe UI',Tahoma,sans-serif;}
   /* هيكل تحميل (skeleton) بشكل الصفحة الحقيقية — قشرة اللوحة أو بطاقة الدخول — يختفي فور
      تركيب React (react-on). CSS داخلي بلا أي سكربت، ولمعة تتبع اتجاه القراءة وتتوقف مع

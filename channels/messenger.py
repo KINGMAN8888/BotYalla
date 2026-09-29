@@ -404,12 +404,14 @@ class MessengerChannel(Channel):
             out = {"id": pb.get("mid") or f"pb:{sender}:{ev.get('timestamp')}", "peer": peer,
                    "text": "" if kind == "start" else (pb.get("title") or payload), "name": "",
                    "kind": kind}
-            if kind == "start" and ref.startswith(("seg-", "src-")):
+            if kind == "start" and ref.startswith(("seg-", "src-", "test-", "l-")):
                 out["start_arg"] = ref
             return out
         if ev.get("referral") and not m:               # m.me/…?ref=seg-market لمحادثة قائمة
+            # test-…: رابط «جرّب الفلو» من باني الفلو المرئي (flow_graph.TEST_RE)
             return {"id": f"ref:{sender}:{ev.get('timestamp')}", "peer": peer, "text": "",
-                    "name": "", "kind": "start", **({"start_arg": ref} if ref.startswith(("seg-", "src-")) else {})}
+                    "name": "", "kind": "start",
+                    **({"start_arg": ref} if ref.startswith(("seg-", "src-", "test-", "l-")) else {})}
         if not m or m.get("is_echo"):
             return None
         mid = m.get("mid") or ""

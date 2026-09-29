@@ -75,7 +75,7 @@ function Typing() {
   return (
     <div className="flex items-end gap-2">
       <Face size={28} />
-      <div className="flex gap-1 rounded-2xl rounded-es-md bg-white/[0.06] px-4 py-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+      <div className="flex gap-1 rounded-2xl rounded-es-md bg-ov/[0.06] px-4 py-3.5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
         {[0, 1, 2].map((i) => (
           <motion.span key={i} className="block size-1.5 rounded-full bg-[#8FE9FF]"
             animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
@@ -93,7 +93,7 @@ function Chip({ children, onClick, href, tone = "ghost", external }) {
       ? "bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] text-[#07090F] shadow-[0_6px_20px_-8px_rgb(143_233_255/0.7)]"
       : tone === "wa"
         ? "bg-[#25D366]/15 text-[#5BE38F] shadow-[inset_0_0_0_1px_rgb(37_211_102/0.4)] hover:bg-[#25D366]/25"
-        : "bg-white/[0.05] text-[#dfe6f7] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)] hover:bg-white/[0.1]");
+        : "bg-ov/[0.05] text-[#dfe6f7] shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.12)] hover:bg-ov/[0.1]");
   if (href) {
     return <a href={href} className={cls} {...(external ? { target: "_blank", rel: "noopener" } : {})}>
       <span className="truncate">{children}</span><IcArrow size={13} /></a>;
@@ -114,8 +114,8 @@ function ActionCard({ a, onDo, onSkip, busy }) {
           className="flex-1 cursor-pointer rounded-xl border-0 bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] px-4 py-2.5
                      text-[13.5px] font-extrabold text-[#07090F] disabled:opacity-50">{bi("نفّذ ✓", "Do it ✓")}</button>
         <button type="button" disabled={busy} onClick={onSkip}
-          className="cursor-pointer rounded-xl border-0 bg-white/[0.06] px-4 py-2.5 text-[13px] font-bold text-[#dfe6f7]
-                     shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]">{bi("مش دلوقتي", "Not now")}</button>
+          className="cursor-pointer rounded-xl border-0 bg-ov/[0.06] px-4 py-2.5 text-[13px] font-bold text-[#dfe6f7]
+                     shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.12)]">{bi("مش دلوقتي", "Not now")}</button>
       </div>
     </div>
   );
@@ -127,7 +127,7 @@ function ResultExtra({ r }) {
   return (
     <div className="mt-2 flex flex-col gap-2">
       {r.qr && (
-        <div className="flex items-center gap-3 rounded-2xl bg-white/[0.05] p-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]">
+        <div className="flex items-center gap-3 rounded-2xl bg-ov/[0.05] p-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]">
           <img src={r.qr} alt="" className="size-24 rounded-lg bg-white p-1" />
           <span className="text-[12px] leading-relaxed text-[#aeb9d4]">{bi("من الموبايل: امسح الكود بالكاميرا", "On your phone: scan with the camera")}</span>
         </div>
@@ -157,7 +157,7 @@ function Bubble({ m, onPick, onHandoff, last, onAct, onSkip, busy }) {
       <div className="min-w-0 max-w-[86%]">
         <div dir="auto" className={"whitespace-pre-wrap break-words rounded-2xl rounded-es-md px-4 py-3 text-[14px] leading-[1.75] " +
              (m.err ? "bg-red-400/10 text-red-200 shadow-[inset_0_0_0_1px_rgb(248_113_113/0.3)]"
-                    : "bg-white/[0.06] text-[#e8edf9] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]")}>
+                    : "bg-ov/[0.06] text-[#e8edf9] shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]")}>
           {m.text}
         </div>
         <ResultExtra r={m.result} />
@@ -188,8 +188,8 @@ function Welcome({ onPick }) {
     <div className="flex flex-col gap-4">
       <div className="flex items-end gap-2">
         <Face size={28} />
-        <div dir="auto" className="max-w-[86%] rounded-2xl rounded-es-md bg-white/[0.06] px-4 py-3 text-[14px] leading-[1.75]
-                        text-[#e8edf9] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+        <div dir="auto" className="max-w-[86%] rounded-2xl rounded-es-md bg-ov/[0.06] px-4 py-3 text-[14px] leading-[1.75]
+                        text-[#e8edf9] shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
           {signed
             ? bi(`أهلاً ${name} 👋 أنا مساعد BotYalla الذكي. اسألني عن أي حاجة في المنصة وأنا أشرحهالك خطوة بخطوة.`,
                  `Hi ${name} 👋 I'm BotYalla's AI assistant. Ask me anything about the platform and I'll walk you through it.`)
@@ -352,19 +352,19 @@ export default function Assistant() {
         {open && (
           <>
             <motion.div key="scrim" onClick={() => setOpen(false)} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[345] bg-black/50 backdrop-blur-[2px] sm:hidden" />
+              className="fixed inset-0 z-[345] bg-sink/50 backdrop-blur-[2px] sm:hidden" />
             <motion.section key="panel" role="dialog" aria-modal="true" aria-label={bi("مساعد BotYalla", "BotYalla assistant")}
               initial={{ opacity: 0, y: 24, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 18, scale: 0.97 }} transition={{ type: "spring", stiffness: 380, damping: 32 }}
               style={{ transformOrigin: AR ? "bottom left" : "bottom right" }}
               className="fixed inset-x-0 bottom-0 z-[350] flex h-[88dvh] flex-col overflow-hidden rounded-t-[26px]
                          bg-[#080b14]/[0.97] text-[#f2f5fc] backdrop-blur-2xl
-                         shadow-[0_30px_90px_-20px_rgb(0_0_0/0.85),inset_0_0_0_1px_rgb(255_255_255/0.09)]
+                         shadow-[0_30px_90px_-20px_rgb(0_0_0/0.85),inset_0_0_0_1px_rgb(var(--ov-rgb)/0.09)]
                          sm:inset-x-auto sm:bottom-5 sm:end-5 sm:h-[min(640px,calc(100dvh-40px))] sm:w-[400px] sm:rounded-[26px]">
               {/* وهج علوي */}
               <div aria-hidden="true" className="pointer-events-none absolute -top-24 start-1/2 h-48 w-[130%] -translate-x-1/2 rounded-full
                                                   bg-[radial-gradient(closest-side,rgb(124_108_246/0.35),transparent)] rtl:translate-x-1/2" />
-              <header className="relative flex items-center gap-3 px-4 pb-3 pt-4 shadow-[inset_0_-1px_0_rgb(255_255_255/0.07)]">
+              <header className="relative flex items-center gap-3 px-4 pb-3 pt-4 shadow-[inset_0_-1px_0_rgb(var(--ov-rgb)/0.07)]">
                 <Face size={42} live />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[15.5px] font-extrabold tracking-tight">{bi("مساعد BotYalla", "BotYalla Assistant")}</div>
@@ -375,12 +375,12 @@ export default function Assistant() {
                 </div>
                 {msgs.length > 0 && (
                   <button type="button" onClick={reset} title={bi("محادثة جديدة", "New chat")} aria-label={bi("محادثة جديدة", "New chat")}
-                    className="grid size-9 cursor-pointer place-items-center rounded-xl border-0 bg-transparent text-[#aeb9d4] hover:bg-white/[0.07] hover:text-white">
+                    className="grid size-9 cursor-pointer place-items-center rounded-xl border-0 bg-transparent text-[#aeb9d4] hover:bg-ov/[0.07] hover:text-white">
                     <IcReset size={17} />
                   </button>
                 )}
                 <button type="button" onClick={() => setOpen(false)} aria-label={bi("إغلاق", "Close")}
-                  className="grid size-9 cursor-pointer place-items-center rounded-xl border-0 bg-transparent text-[#aeb9d4] hover:bg-white/[0.07] hover:text-white">
+                  className="grid size-9 cursor-pointer place-items-center rounded-xl border-0 bg-transparent text-[#aeb9d4] hover:bg-ov/[0.07] hover:text-white">
                   <IcClose size={18} />
                 </button>
               </header>
@@ -396,8 +396,8 @@ export default function Assistant() {
               </div>
 
               <form onSubmit={(e) => { e.preventDefault(); send(); }}
-                className="relative px-3 pb-3 pt-2 shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]">
-                <div className="flex items-end gap-2 rounded-2xl bg-white/[0.05] p-1.5 ps-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]
+                className="relative px-3 pb-3 pt-2 shadow-[inset_0_1px_0_rgb(var(--ov-rgb)/0.07)]">
+                <div className="flex items-end gap-2 rounded-2xl bg-ov/[0.05] p-1.5 ps-3.5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
                                 focus-within:shadow-[inset_0_0_0_1px_rgb(143_233_255/0.5)]">
                   <textarea ref={input} value={text} rows={1} maxLength={1200} dir="auto"
                     onChange={(e) => { setText(e.target.value); e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px"; }}

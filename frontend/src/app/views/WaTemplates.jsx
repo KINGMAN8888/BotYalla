@@ -86,7 +86,7 @@ function TemplateCard({ tpl, bot }) {
         </Form>
       </div>
 
-      <div className="mt-4 rounded-xl bg-white/[0.04] p-4">
+      <div className="mt-4 rounded-xl bg-ov/[0.04] p-4">
         {tpl.header && <div className="mb-2 text-[13.5px] font-extrabold text-ink">{tpl.header}</div>}
         <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-ink-2">{tpl.body}</div>
         {tpl.footer && <div className="mt-2 text-[12px] text-ink-3">{tpl.footer}</div>}
@@ -94,7 +94,7 @@ function TemplateCard({ tpl, bot }) {
           <div className="mt-3 flex flex-wrap gap-2">
             {tpl.buttons.map((b, i) => (
               <span key={i} className="rounded-lg px-3 py-1.5 text-[12.5px] font-bold text-au-cyan
-                                       shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]">{b}</span>
+                                       shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.12)]">{b}</span>
             ))}
           </div>
         )}

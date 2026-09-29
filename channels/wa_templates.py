@@ -8,6 +8,7 @@
 الدوال متزامنة لأنها تُستدعى من Flask."""
 import logging, re
 import httpx
+import tpl_studio as TS
 
 log = logging.getLogger("wa_templates")
 META_API = "https://graph.facebook.com/v20.0"
@@ -70,13 +71,17 @@ def list_templates(waba_id, token, limit=200):
     out = []
     for t in data.get("data") or []:
         body = header = footer = ""
+        header_format = ""
         buttons = []
         for comp in t.get("components") or []:
             ctype = (comp.get("type") or "").upper()
             if ctype == "BODY":
                 body = comp.get("text", "")
-            elif ctype == "HEADER" and (comp.get("format") or "TEXT").upper() == "TEXT":
-                header = comp.get("text", "")
+            elif ctype == "HEADER":
+                # صيغة الترويسة تقرّر معامل الإرسال: قالب بترويسة صورة يُرفض (132000) بدون صورة
+                header_format = (comp.get("format") or "TEXT").upper()
+                if header_format == "TEXT":
+                    header = comp.get("text", "")
             elif ctype == "FOOTER":
                 footer = comp.get("text", "")
             elif ctype == "BUTTONS":
@@ -85,8 +90,13 @@ def list_templates(waba_id, token, limit=200):
             "id": t.get("id"), "name": t.get("name"), "status": (t.get("status") or "").upper(),
             "category": t.get("category"), "language": t.get("language"),
             "header": header, "body": body, "footer": footer, "buttons": buttons,
+            "header_format": header_format, "header_vars": placeholders(header) if header else [],
             "vars": placeholders(body),
             "rejected_reason": t.get("rejected_reason") or "",
+            # الوصف الكامل للإرسال (Template Studio): أزرار بمتغيّر، كوبون، عدّاد، بطاقات
+            "components": t.get("components") or [],
+            "spec": TS.spec_of(t.get("components")),
+            "quality": ((t.get("quality_score") or {}).get("score") or "").upper(),
         })
     out.sort(key=lambda x: (x["status"] != "APPROVED", x["name"] or ""))
     return {"ok": True, "items": out}
@@ -139,6 +149,15 @@ def create_template(waba_id, token, name, language, category, body,
     if err:
         return {"ok": False, "error": err}
     return {"ok": True, "id": data.get("id"), "status": data.get("status", "PENDING")}
+
+
+def create_raw(waba_id, token, payload):
+    """حمولة كاملة من tpl_studio.build_create (مُتحقَّق منها هناك)."""
+    data, err = _call("POST", waba_id, token, json=payload)
+    if err:
+        return {"ok": False, "error": err}
+    return {"ok": True, "id": data.get("id"), "status": (data.get("status") or "PENDING").upper(),
+            "category": data.get("category")}
 
 
 def delete_template(waba_id, token, name):

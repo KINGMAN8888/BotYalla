@@ -91,7 +91,7 @@ function OneTapCreate() {
                   <span className={"grid size-7 shrink-0 place-items-center rounded-full text-[12.5px] font-extrabold " +
                                    (i < stepIdx ? "bg-au-teal text-[#04140E]"
                                      : i === stepIdx ? "bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)] text-[#07090F]"
-                                     : "bg-white/[0.07] text-ink-3")}>
+                                     : "bg-ov/[0.07] text-ink-3")}>
                     {i < stepIdx ? <Icon name="check" size={14} /> : i + 1}
                   </span>
                   <span className={i <= stepIdx ? "font-bold text-ink" : "text-ink-3"}>{t(k)}</span>
@@ -108,7 +108,7 @@ function OneTapCreate() {
                  className={"mt-4 mb-0 flex items-center gap-2 text-[13.5px] font-bold " +
                             (st === "created" ? "text-au-teal" : st === "failed" || st === "expired" ? "text-red-300" : "text-ink-2")}>
                 {(st === "pending" || st === "linked" || st === "creating") &&
-                  <span className="size-4 animate-spin rounded-full border-2 border-white/15 border-t-au-cyan" />}
+                  <span className="size-4 animate-spin rounded-full border-2 border-ov/15 border-t-au-cyan" />}
                 {statusText}
                 {(st === "failed" || st === "expired") &&
                   <Btn sm variant="ghost" type="button" onClick={reset}>{t("onetap_retry")}</Btn>}
@@ -140,7 +140,7 @@ function BotCard({ b, i }) {
           <div className="flex min-w-0 items-center gap-3">
             <span className="grid size-11 shrink-0 place-items-center rounded-xl text-au-cyan
                              bg-[linear-gradient(150deg,rgb(124_108_246/0.28),rgb(34_211_238/0.12))]
-                             shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]
+                             shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.09)]
                              transition-transform duration-500 ease-[cubic-bezier(0.175,0.885,0.32,1.275)]
                              group-hover:-rotate-6 group-hover:scale-110">
               <Icon name={meta.icon} size={21} />
@@ -323,8 +323,8 @@ function WaOneTapTop({ cfg }) {
     <Card id="wa-onetap" className={WA_CARD}>
       <WaHead />
       <div role="radiogroup" aria-label={bi("نوع الرقم", "Number type")}
-           className="mt-4 inline-flex flex-wrap gap-1 rounded-xl bg-black/25 p-1
-                      shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+           className="mt-4 inline-flex flex-wrap gap-1 rounded-xl bg-sink/25 p-1
+                      shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
         {MODES.map(([v, label]) => (
           <button key={String(v)} type="button" role="radio" aria-checked={coexist === v}
                   onClick={() => { setCoexist(v); setAgree(false); }}
@@ -397,7 +397,7 @@ function WaOneTapTop({ cfg }) {
 /* نفس الكارت مقفولاً لمن باقته بلا واتساب: معاينة مموّهة غير تفاعلية + دعوة للترقية.
    لا يحمل أي إعدادات Meta — الخادم لا يرسلها أصلاً لهذه الباقات. */
 function WaOneTapLocked() {
-  const ghost = "h-[46px] rounded-xl bg-white/[0.06] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]";
+  const ghost = "h-[46px] rounded-xl bg-ov/[0.06] shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]";
   return (
     <Card id="wa-onetap" className={WA_CARD}>
       <WaHead locked />
@@ -407,19 +407,19 @@ function WaOneTapLocked() {
              className="pointer-events-none grid select-none grid-cols-1 gap-3 p-1 blur-[4px]
                         sm:grid-cols-[minmax(0,1fr)_220px_170px] sm:items-end">
           <div>
-            <div className="mb-1.5 h-3 w-24 rounded bg-white/25" />
+            <div className="mb-1.5 h-3 w-24 rounded bg-ov/25" />
             <div className={ghost} />
           </div>
           <div>
-            <div className="mb-1.5 h-3 w-16 rounded bg-white/25" />
+            <div className="mb-1.5 h-3 w-16 rounded bg-ov/25" />
             <div className={ghost} />
           </div>
           <div className="h-[46px] rounded-xl bg-[linear-gradient(100deg,#5EEAD4,#2DD4A7)] opacity-80" />
         </div>
         <div className="absolute inset-0 flex flex-wrap items-center justify-center gap-3 p-2 text-center
                         bg-[rgb(7_9_15/0.45)] backdrop-blur-[1px]">
-          <span className="grid size-10 shrink-0 place-items-center rounded-full bg-white/10 text-ink
-                           shadow-[inset_0_0_0_1px_rgb(255_255_255/0.2)]">
+          <span className="grid size-10 shrink-0 place-items-center rounded-full bg-ov/10 text-ink
+                           shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.2)]">
             <Icon name="lock" size={18} />
           </span>
           <span className="text-[13.5px] font-bold text-ink">
@@ -673,14 +673,14 @@ function CreateWizard({ collapsed = false }) {
                   {bi("بعد الإنشاء اضبط Webhook في Meta على العنوان أسفل، ثم شغّل البوت.",
                       "After creating it, point the Meta webhook to the URL below, then start the bot.")}
                   {" "}
-                  <code className="rounded bg-white/10 px-1.5 py-0.5">
+                  <code className="rounded bg-ov/10 px-1.5 py-0.5">
                     {typeof window !== "undefined" ? window.location.origin : ""}/wh/whatsapp
                   </code>
                 </p>
               </>
             );
             return P.waEs ? (
-              <details className="rounded-xl bg-black/20 p-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+              <details className="rounded-xl bg-sink/20 p-4 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.07)]">
                 <summary className="cursor-pointer text-[13px] font-bold text-ink-2">
                   {bi("ربط يدوي بـ Phone Number ID و Token (للمطورين)", "Manual connection with Phone Number ID & token (developers)")}
                 </summary>
@@ -724,10 +724,10 @@ function CreateWizard({ collapsed = false }) {
       <Form action={BY.urls.botCreate}>
         {steps.map((s, i) => (
           <div key={s.n}
-               className={"flex gap-4 py-6 " + (i ? "shadow-[inset_0_1px_0_rgb(255_255_255/0.07)]" : "pt-0")}>
+               className={"flex gap-4 py-6 " + (i ? "shadow-[inset_0_1px_0_rgb(var(--ov-rgb)/0.07)]" : "pt-0")}>
             <span className="grid size-9 shrink-0 place-items-center rounded-xl text-[15px] font-extrabold text-au-cyan
                              bg-[linear-gradient(150deg,rgb(124_108_246/0.25),rgb(34_211_238/0.1))]
-                             shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]">{s.n}</span>
+                             shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.09)]">{s.n}</span>
             <div className="min-w-0 flex-1">
               <h3 className="m-0 text-[15px] font-extrabold text-ink">
                 {s.title}
@@ -780,7 +780,7 @@ function FirstBotGuide() {
                target="_blank" rel="noopener" className="mt-3">{t("open_botfather")}</Btn>
           <div className="mt-3 text-[12px] text-ink-3">
             {t("ob_s1_hint")}{" "}
-            <code className="rounded bg-black/30 px-1.5 py-0.5 text-au-cyan" dir="ltr">
+            <code className="rounded bg-sink/30 px-1.5 py-0.5 text-au-cyan" dir="ltr">
               123456789:AAE-xxxxxxxx
             </code>
           </div>
@@ -798,7 +798,7 @@ function FirstBotGuide() {
       <div className="grid gap-5 md:grid-cols-3">
         {steps.map((s, i) => (
           <div key={s.k}
-               className="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+               className="rounded-2xl bg-ov/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)]">
             <div className="flex items-center gap-2.5">
               <span className="grid size-8 shrink-0 place-items-center rounded-xl text-[14px] font-extrabold
                                text-[#07090F] bg-[linear-gradient(100deg,#8FE9FF,#B9AFFF)]">{i + 1}</span>
@@ -841,7 +841,7 @@ function FirstRunChecklist({ ob }) {
         </Pill>
       </div>
 
-      <div className="mb-5 h-1.5 w-full overflow-hidden rounded-full bg-white/10"
+      <div className="mb-5 h-1.5 w-full overflow-hidden rounded-full bg-ov/10"
            role="progressbar" aria-valuenow={done} aria-valuemin={0} aria-valuemax={steps.length}>
         <div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)]
                         transition-[width] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]"
@@ -855,7 +855,7 @@ function FirstRunChecklist({ ob }) {
             <li key={s.k} className="flex items-start gap-3">
               <span className={"mt-0.5 grid size-6 shrink-0 place-items-center rounded-full " +
                 (s.done ? "bg-au-teal/20 text-au-teal"
-                        : "bg-white/[0.06] text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]")}>
+                        : "bg-ov/[0.06] text-ink-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.12)]")}>
                 <Icon name={s.done ? "check" : "clock"} size={13} />
               </span>
               <div className="min-w-0 flex-1">
@@ -1046,7 +1046,7 @@ function DoneForYouModal({ onClose, onDone }) {
     onDone(r.grant);
   };
   return (
-    <div className="fixed inset-0 z-[360] grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-[360] grid place-items-center bg-sink/60 p-4 backdrop-blur-sm" onClick={onClose}>
       <Card className="w-full max-w-[520px] !p-6" onClick={(e) => e.stopPropagation()}>
         <h3 className="m-0 flex items-center gap-2 text-[18px] font-extrabold text-ink">
           <Icon name="users" size={19} className="text-au-cyan" />{bi("خلّي فريقنا يجهّز بوتك", "Let our team set up your bot")}
@@ -1059,10 +1059,10 @@ function DoneForYouModal({ onClose, onDone }) {
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={800}
             placeholder={bi("مثلاً: محل ملابس أطفال في المنصورة، عايز البوت يعرض الموديلات والأسعار وياخد الطلبات…",
                             "e.g. kids' clothing shop, show models and prices and take orders…")}
-            className="w-full resize-none rounded-xl bg-black/25 px-3.5 py-2.5 text-[14px] text-ink outline-none
-                       shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] focus:shadow-[inset_0_0_0_1px_rgb(124_108_246/0.8)]" />
+            className="w-full resize-none rounded-xl bg-sink/25 px-3.5 py-2.5 text-[14px] text-ink outline-none
+                       shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] focus:shadow-[inset_0_0_0_1px_rgb(124_108_246/0.8)]" />
         </Field>
-        <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-xl bg-white/[0.04] p-3 text-[12.5px] leading-relaxed text-ink-2">
+        <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-xl bg-ov/[0.04] p-3 text-[12.5px] leading-relaxed text-ink-2">
           <input type="checkbox" checked={ok} onChange={(e) => setOk(e.target.checked)} className="mt-1 size-4 accent-[#7c6cf6]" />
           <span>{bi("أوافق إن فريق BotYalla يدخل حسابي 7 أيام عشان يجهّز البوتات بس. مش هيشوف كلمة السر ولا المدفوعات ولا الرصيد ولا محادثات عملائي، وكل تعديل هيتسجّل، وأقدر أوقف الإذن في أي وقت.",
                     "I allow the BotYalla team into my account for 7 days to set up my bots only. They won't see my password, payments, wallet or customer chats; every change is logged and I can stop it any time.")}</span>
@@ -1146,7 +1146,7 @@ function Journey() {
           </h2>
           <span className="text-[12.5px] font-bold text-ink-2">{doneN} / {steps.length}</span>
         </div>
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-valuenow={doneN} aria-valuemax={steps.length}>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-ov/10" role="progressbar" aria-valuenow={doneN} aria-valuemax={steps.length}>
           <motion.div className="h-full rounded-full bg-[linear-gradient(90deg,#8FE9FF,#B9AFFF)]"
             initial={{ width: 0 }} animate={{ width: `${(doneN / Math.max(1, steps.length)) * 100}%` }} transition={{ duration: 0.8 }} />
         </div>
@@ -1154,7 +1154,7 @@ function Journey() {
           {steps.map((s, i) => (
             <button key={s.k} type="button" onClick={() => setOpen(s.k)}
               className={"flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border-0 px-3 py-1.5 text-[12px] font-bold " +
-                (s.k === cur ? "bg-white text-[#07090F]" : s.done ? "bg-au-teal/15 text-au-teal" : "bg-white/[0.06] text-ink-3")}>
+                (s.k === cur ? "bg-white text-[#07090F]" : s.done ? "bg-au-teal/15 text-au-teal" : "bg-ov/[0.06] text-ink-3")}>
               {s.done ? "✓" : i + 1}<span>{bi(...J_STEPS[s.k].t)}</span>
             </button>
           ))}
@@ -1172,7 +1172,7 @@ function Journey() {
             <ol className="m-0 flex list-none flex-col gap-2 p-0">
               {S.how.map((h, i) => (
                 <li key={i} className="flex items-start gap-2.5 text-[13.5px] leading-relaxed text-ink-2">
-                  <span className="grid size-6 shrink-0 place-items-center rounded-full bg-white/[0.08] text-[12px] font-extrabold text-ink">{i + 1}</span>
+                  <span className="grid size-6 shrink-0 place-items-center rounded-full bg-ov/[0.08] text-[12px] font-extrabold text-ink">{i + 1}</span>
                   {bi(...h)}
                 </li>
               ))}
