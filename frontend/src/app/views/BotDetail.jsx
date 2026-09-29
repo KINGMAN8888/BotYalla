@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  BY, P, t, bi, Icon, Card, Btn, Field, Input, Textarea, Select, Form, Grid, Stat,
+  BY, P, t, bi, Icon, Card, Btn, Field, Input, Textarea, Select, Form, Kpi, Tabs,
   Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate,
 } from "../kit.jsx";
 import { AssetPicker, postJSON } from "../media.jsx";
@@ -1070,6 +1070,16 @@ export default function BotDetail() {
   const isWa = ch === "whatsapp";
   const isMeta = ch === "messenger" || ch === "instagram";
   const { meta: metaInfo = null } = P;
+  const [tab, setTab] = useState(() => botTab(bot.id));
+  const go = (k) => { setTab(k); try { sessionStorage.setItem(`by:bt:${bot.id}`, k); } catch { /* */ } };
+  // الإعادة بعد الحفظ (#pay · #brain) تفتح تبويبها ثم تمرّر إلى القسم نفسه
+  useEffect(() => {
+    const h = location.hash.slice(1);
+    if (!HASH_TAB[h]) return;
+    const s = setTimeout(() => document.getElementById(h)?.scrollIntoView({ block: "start" }), 60);
+    return () => clearTimeout(s);
+  }, []);
+  const dataRows = bot.template === "store" ? orders.length : bot.template === "booking" ? bookings.length : isFlow ? leads.length : null;
 
   return (
     <>
@@ -1096,8 +1106,11 @@ export default function BotDetail() {
                 </span>
               )}
             </Btn>
-            {isFlow && <Btn variant="ghost" sm icon="flow" href={`/bot/${bot.id}/flow`}>{t("flow_builder")}</Btn>}
-            {P.flowsOn && <Btn variant="ghost" sm icon="flow" href={`/bot/${bot.id}/flows`}>{t("flows_title")}</Btn>}
+            {/* الاثنان معاً كانا بنفس الاسم «باني الفلو» — نميّز الأساسي عن متعدّد الفلوهات */}
+            {isFlow && <Btn variant="ghost" sm icon="flow" href={`/bot/${bot.id}/flow`}>
+              {P.flowsOn ? bi("الفلو الأساسي", "Main flow") : t("flow_builder")}</Btn>}
+            {P.flowsOn && <Btn variant="ghost" sm icon="flow" href={`/bot/${bot.id}/flows`}>
+              {isFlow ? bi("كل الفلوهات", "All flows") : t("flows_title")}</Btn>}
             <MoreMenu>
               <a className={MENU_ROW} href={`/bot/${bot.id}/analytics`}><Icon name="chart" size={16} className="text-au-cyan" />{t("analytics")}</a>
               {plan.broadcast
@@ -1146,17 +1159,30 @@ export default function BotDetail() {
 
       <LiveCard bot={bot} links={links} isNew={isNew} />
 
-      <Grid cols={4} className="mb-7">
-        <Stat icon="users"  value={bot.stats.subscribers} label={t("stat_subs")} />
-        <Stat icon="inbox"  value={bot.stats.leads}       label={t("stat_leads")} />
-        <Stat icon="store"  value={bot.stats.orders}      label={t("stat_orders")} />
-        <Stat icon="wallet" value={bot.stats.revenue}     label={t("stat_revenue")} />
-      </Grid>
+      <Tabs sync value={tab} onChange={go} items={[
+        ["overview", bi("نظرة عامة", "Overview"), "chart", dataRows || null],
+        ["ai",       bi("الذكاء الاصطناعي", "AI"), "sparkles"],
+        ["channel",  CHANNELS[ch].name, "link"],
+        ["settings", t("settings_title"), "settings"],
+      ]} />
 
+      {tab === "overview" && (<>
+      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Kpi icon="users"  value={num(bot.stats.subscribers)} label={t("stat_subs")} href={`/bot/${bot.id}/inbox`} />
+        <Kpi icon="inbox"  value={num(bot.stats.leads)}       label={t("stat_leads")} tone="text-au-violet" />
+        <Kpi icon="store"  value={num(bot.stats.orders)}      label={t("stat_orders")} tone="text-amber-300" />
+        <Kpi icon="wallet" value={num(bot.stats.revenue)}     label={t("stat_revenue")} tone="text-au-teal" />
+      </div>
+      <OverviewData bot={bot} isFlow={isFlow} leads={leads} orders={orders} bookings={bookings} />
+      </>)}
+
+      {tab === "ai" && (<>
       <AiAgent bot={bot} ai={ai} />
       <BrainCard bot={bot} ai={ai} cfg={cfg} />
       <Versions bot={bot} versions={versions} />
+      </>)}
 
+      {tab === "channel" && (<>
       {isMeta ? (
         <MetaPanel bot={bot} info={metaInfo} links={links} />
       ) : isWa ? (
@@ -1183,8 +1209,10 @@ export default function BotDetail() {
 
       {/* صورة ماسنجر/إنستجرام هي صورة الصفحة نفسها — تُدار من فيسبوك لا من هنا */}
       {!isMeta && <BotPhotoCard bot={bot} cfg={cfg} isWa={isWa} />}
+      </>)}
 
       {/* الإعدادات */}
+      {tab === "settings" && (<>
       <Card className="mb-6">
         <SectionTitle icon="settings">{t("settings_title")}</SectionTitle>
         <Form action={`/bot/${bot.id}/config`}>
@@ -1251,48 +1279,75 @@ export default function BotDetail() {
       <CatalogCard bot={bot} catalog={catalog} cfg={cfg} />
       <PaymentsCard bot={bot} pay={pay} />
 
-      {/* البيانات المُجمّعة — وبجانب كل عميل زرّ المحادثة */}
-      {bot.template === "store" && (
-        <DataCard icon="store" title={t("orders_h")} empty={t("no_orders")} rows={orders}
-                  exportUrl={`/bot/${bot.id}/export/orders`}
-                  head={[t("col_customer"), t("col_phone"), t("col_address"), t("col_total"),
-                         bi("الدفع", "Payment"), t("col_date"), ""]}
-                  render={(o) => [o.customer, o.phone,
-                                  <div>
-                                    <div>{o.address}</div>
-                                    {Number(o.shipping) > 0 && (
-                                      <div className="mt-0.5 text-[11.5px] text-ink-3">
-                                        🚚 {o.ship_zone || bi("توصيل", "Delivery")} — {num(o.shipping)} {t("egp")}
-                                      </div>
-                                    )}
-                                  </div>,
-                                  `${num(o.total)} ${t("egp")}`,
-                                  <OrderPay s={o.pay_status} />, fmtDate(o.created_at),
-                                  <ChatBtn botId={bot.id} peer={o.peer} />]} />
-      )}
-      {bot.template === "booking" && (
-        <DataCard icon="calendar" title={t("bookings_h")} empty={t("no_bookings")} rows={bookings}
-                  exportUrl={`/bot/${bot.id}/export/bookings`}
-                  head={[t("col_customer"), t("col_phone"), t("col_slot"), t("col_status"), ""]}
-                  render={(b) => [b.customer, b.phone, b.slot, <Pill tone="on">{b.status}</Pill>,
-                                  <ChatBtn botId={bot.id} peer={b.peer} />]} />
-      )}
-      {isFlow && (
-        <DataCard icon="inbox" title={t("customers")} empty={t("no_customers")} rows={leads}
-                  exportUrl={`/bot/${bot.id}/export/leads`}
-                  head={[t("field_name"), t("col_date"), ""]}
-                  render={(l) => [
-                    <div className="flex flex-wrap items-center gap-2">
-                      {Object.entries(l.data || {})
-                        .filter(([, v]) => !String(v).startsWith("media:"))
-                        .map(([k, v]) => (
-                          <span key={k} className="rounded-lg bg-ov/5 px-2.5 py-1 text-[12px]">
-                            <b className="text-ink-3">{k}:</b> {String(v)}
-                          </span>
-                        ))}
-                      {(l.media || []).map((m) => <MediaChip key={m.id} m={m} botId={bot.id} />)}
-                    </div>, fmtDate(l.created_at), <ChatBtn botId={bot.id} peer={l.peer} />]} />
-      )}
+      </>)}
+    </>
+  );
+}
+
+/* ============================================================ تبويبات صفحة البوت
+   كانت الصفحة عموداً واحداً طويلاً من ~12 قسماً. التبويب يُحفظ في ?tab= (رابط قابل
+   للمشاركة) وفي sessionStorage لكل بوت — فالحفظ الذي يعيد التوجيه لنفس الصفحة يُبقيك
+   حيث كنت. روابط #pay · #brain · #catalog القديمة تفتح تبويبها. */
+const BOT_TABS = ["overview", "ai", "channel", "settings"];
+const HASH_TAB = { pay: "settings", catalog: "settings", brain: "ai" };
+function botTab(id) {
+  try {
+    const q = new URL(location.href).searchParams.get("tab");
+    if (BOT_TABS.includes(q)) return q;
+    const h = HASH_TAB[location.hash.slice(1)];
+    if (h) return h;
+    if (P.isNew) return "overview";
+    const s = sessionStorage.getItem(`by:bt:${id}`);
+    if (BOT_TABS.includes(s)) return s;
+  } catch { /* */ }
+  return "overview";
+}
+
+/* البيانات المُجمّعة — وبجانب كل عميل زرّ المحادثة */
+function OverviewData({ bot, isFlow, leads, orders, bookings }) {
+  return (
+    <>
+            {bot.template === "store" && (
+      <DataCard icon="store" title={t("orders_h")} empty={t("no_orders")} rows={orders}
+                exportUrl={`/bot/${bot.id}/export/orders`}
+                head={[t("col_customer"), t("col_phone"), t("col_address"), t("col_total"),
+                       bi("الدفع", "Payment"), t("col_date"), ""]}
+                render={(o) => [o.customer, o.phone,
+                                <div>
+                                  <div>{o.address}</div>
+                                  {Number(o.shipping) > 0 && (
+                                    <div className="mt-0.5 text-[11.5px] text-ink-3">
+                                      🚚 {o.ship_zone || bi("توصيل", "Delivery")} — {num(o.shipping)} {t("egp")}
+                                    </div>
+                                  )}
+                                </div>,
+                                `${num(o.total)} ${t("egp")}`,
+                                <OrderPay s={o.pay_status} />, fmtDate(o.created_at),
+                                <ChatBtn botId={bot.id} peer={o.peer} />]} />
+    )}
+    {bot.template === "booking" && (
+      <DataCard icon="calendar" title={t("bookings_h")} empty={t("no_bookings")} rows={bookings}
+                exportUrl={`/bot/${bot.id}/export/bookings`}
+                head={[t("col_customer"), t("col_phone"), t("col_slot"), t("col_status"), ""]}
+                render={(b) => [b.customer, b.phone, b.slot, <Pill tone="on">{b.status}</Pill>,
+                                <ChatBtn botId={bot.id} peer={b.peer} />]} />
+    )}
+    {isFlow && (
+      <DataCard icon="inbox" title={t("customers")} empty={t("no_customers")} rows={leads}
+                exportUrl={`/bot/${bot.id}/export/leads`}
+                head={[t("field_name"), t("col_date"), ""]}
+                render={(l) => [
+                  <div className="flex flex-wrap items-center gap-2">
+                    {Object.entries(l.data || {})
+                      .filter(([, v]) => !String(v).startsWith("media:"))
+                      .map(([k, v]) => (
+                        <span key={k} className="rounded-lg bg-ov/5 px-2.5 py-1 text-[12px]">
+                          <b className="text-ink-3">{k}:</b> {String(v)}
+                        </span>
+                      ))}
+                    {(l.media || []).map((m) => <MediaChip key={m.id} m={m} botId={bot.id} />)}
+                  </div>, fmtDate(l.created_at), <ChatBtn botId={bot.id} peer={l.peer} />]} />
+    )}
     </>
   );
 }

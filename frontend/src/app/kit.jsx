@@ -6,6 +6,9 @@ import { motion, useInView, useReducedMotion, animate, AnimatePresence } from "m
    عناصر واجهة مشتركة للوحة التحكم. البيانات كلها من الخادم (window.BY).
    ========================================================================== */
 export const BY = window.BY || { t: {}, urls: {}, icons: {}, props: {}, nav: [], adminNav: [] };
+/* «حجم العرض» يكبّر <html> بـ CSS zoom: إحداثيات الفأرة و getBoundingClientRect بالبكسل المكبَّر، بينما
+   top/left/transform بالبكسل الأصلي — كل تموضع يحسب من الإحداثيات يقسم على هذا المعامل. */
+export const zoomOf = () => parseFloat(document.documentElement.style.zoom) || 1;
 export const t = (k) => (BY.t[k] != null ? BY.t[k] : k);
 export const P = BY.props || {};
 export const isRTL = BY.dir === "rtl";
@@ -58,9 +61,9 @@ export function Reveal({ children, delay = 0, className = "" }) {
 /* --------------------------------------------------------------- بقعة ضوء */
 export function useSpotlight() {
   return useCallback((e) => {
-    const el = e.currentTarget, r = el.getBoundingClientRect();
-    el.style.setProperty("--mx", `${e.clientX - r.left}px`);
-    el.style.setProperty("--my", `${e.clientY - r.top}px`);
+    const el = e.currentTarget, r = el.getBoundingClientRect(), z = zoomOf();
+    el.style.setProperty("--mx", `${(e.clientX - r.left) / z}px`);
+    el.style.setProperty("--my", `${(e.clientY - r.top) / z}px`);
   }, []);
 }
 
@@ -100,10 +103,24 @@ export function Logo({ className = "h-9 w-auto" }) {
   );
 }
 
+/* مسار الصفحة «المجموعة › الصفحة» من التنقّل المجمَّع (BY.navGroups) — يظهر تلقائياً في كل صفحة لها مكان في القائمة */
+function Crumbs() {
+  const g = (BY.navGroups || []).find((x) => x.k !== "home" && x.items.some((it) => it.k === BY.view));
+  if (!g) return null;
+  const home = (BY.navGroups[0] && BY.navGroups[0].k === "home" && BY.navGroups[0].items[0]) || null;
+  return (
+    <nav aria-label={bi("مسار الصفحة", "Breadcrumb")} className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[12px] font-bold text-ink-3">
+      {home && <><a href={home.u} className="text-ink-3 no-underline hover:text-au-cyan">{home.l}</a><span aria-hidden="true">›</span></>}
+      <span>{g.l}</span>
+    </nav>
+  );
+}
+
 export function PageHead({ icon, title, sub, actions }) {
   return (
     <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
       <div className="min-w-0">
+        <Crumbs />
         <h1 className="m-0 flex items-center gap-2.5 text-[clamp(22px,3vw,30px)] font-extrabold tracking-tight text-ink">
           {icon && <Icon name={icon} size={24} className="text-au-cyan" />}
           <span className="truncate">{title}</span>
@@ -219,8 +236,9 @@ export function Select({ children, className = "", value: controlledValue, defau
   const place = useCallback(() => {
     const b = btnRef.current;
     if (!b) return;
-    const r = b.getBoundingClientRect();
-    const vh = window.innerHeight, vw = window.innerWidth, gap = 6, margin = 8;
+    const z = zoomOf(), R = b.getBoundingClientRect();     // كل شيء بالبكسل الأصلي (انظر zoomOf)
+    const r = { top: R.top / z, bottom: R.bottom / z, left: R.left / z, right: R.right / z, width: R.width / z };
+    const vh = window.innerHeight / z, vw = window.innerWidth / z, gap = 6, margin = 8;
     const below = vh - r.bottom - gap - margin, above = r.top - gap - margin;
     const want = Math.min(240, options.length * 38 + 12);
     const up = below < want && above > below;
@@ -383,6 +401,63 @@ export function Pill({ tone = "on", children, dot }) {
 }
 
 /* ---------------------------------------------------------------- إحصاءة */
+/* بطاقة رقم موحّدة (الرئيسية · المدفوعات · النمو · الدعم): عنوان صغير · أيقونة · رقم كبير · سطر فرعي · رابط اختياري */
+export function Kpi({ icon, label, value, sub, href, tone = "text-au-cyan" }) {
+  const body = (
+    <div className="h-full rounded-2xl bg-ov/[0.04] p-4 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.06)] transition-colors hover:bg-ov/[0.06]">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11.5px] font-extrabold text-ink-3">{label}</span>
+        {icon && <span className={`grid size-8 shrink-0 place-items-center rounded-xl bg-ov/[0.06] ${tone}`}><Icon name={icon} size={15} /></span>}
+      </div>
+      <div className="tnum mt-2 text-[24px] font-extrabold leading-none text-ink">{value}</div>
+      {sub && <div className="tnum mt-1.5 text-[11.5px] text-ink-3">{sub}</div>}
+    </div>
+  );
+  return href ? <a href={href} className="block no-underline">{body}</a> : body;
+}
+
+/* تبويبات موحّدة (شريط مقسَّم): role=tablist · الأسهم للتنقّل بلوحة المفاتيح · عدّاد اختياري ·
+   `sync` يحفظ التبويب في ?tab= فيبقى بعد التحديث ويمكن مشاركة الرابط. items: [[مفتاح, عنوان, أيقونة?, عدد?]] */
+export function Tabs({ items, value, onChange, sync = false, size = "md", className = "" }) {
+  const pick = (k) => {
+    onChange(k);
+    if (sync) { try { const u = new URL(location.href); u.searchParams.set("tab", k); history.replaceState(null, "", u); } catch { /* */ } }
+  };
+  const onKey = (e, i) => {
+    const d = (e.key === "ArrowLeft") === isRTL ? 1 : -1;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const j = (i + d + items.length) % items.length;
+    pick(items[j][0]);
+    e.currentTarget.parentElement.children[j]?.focus();
+  };
+  const sm = size === "sm";
+  // على الموبايل يُمرَّر الشريط أفقياً — التبويب النشط (من ?tab= أو بعد الحفظ) قد يقع خارج
+  // الجزء الظاهر فلا يعرف المستخدم أين هو. نمرّر الشريط وحده (لا الصفحة) ليظهر.
+  const bar = useRef(null);
+  useEffect(() => {
+    const box = bar.current, el = box?.querySelector('[aria-selected="true"]');
+    if (!box || !el || box.scrollWidth <= box.clientWidth) return;
+    const B = box.getBoundingClientRect(), R = el.getBoundingClientRect(), z = zoomOf();
+    if (R.left < B.left) box.scrollLeft -= (B.left - R.left) / z + 8;
+    else if (R.right > B.right) box.scrollLeft += (R.right - B.right) / z + 8;
+  }, [value]);
+  return (
+    <div ref={bar} role="tablist" className={`mb-5 flex w-fit max-w-full gap-1 overflow-x-auto rounded-2xl bg-sink/20 p-1 ${className}`}>
+      {items.map(([k, l, i, n], idx) => (
+        <button key={k} role="tab" type="button" aria-selected={value === k} tabIndex={value === k ? 0 : -1}
+                onClick={() => pick(k)} onKeyDown={(e) => onKey(e, idx)}
+                className={`flex shrink-0 cursor-pointer items-center gap-2 rounded-xl border-0 font-bold transition-colors
+                            ${sm ? "px-3 py-1.5 text-[12.5px]" : "px-4 py-2 text-[13.5px]"}
+                            ${value === k ? "bg-au-violet/80 text-white shadow" : "bg-transparent text-ink-3 hover:bg-ov/5 hover:text-ink"}`}>
+          {i && <Icon name={i} size={sm ? 13 : 15} />}{l}
+          {n != null && <span className={`tnum rounded-full px-1.5 text-[11px] ${value === k ? "bg-white/20" : "bg-ov/[0.08]"}`}>{n}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Stat({ icon, value, label, decimals = 0 }) {
   return (
     <Card className="!p-5">

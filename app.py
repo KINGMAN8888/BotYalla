@@ -60,6 +60,7 @@ import analytics as AN
 import weekly_report as WR
 import conv_insights as CI
 import wa_signup as WAS
+import ui as UI
 import captcha as CAP
 import msg_status as MS
 import tpl_studio as TS
@@ -852,7 +853,7 @@ def login():
         if ok:
             session["uid"] = row["id"]; session["uname"] = row["username"]; session["role"] = row.get("role","user")
             session["pwv"] = _pw_stamp(row["pw_hash"])
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("home_page"))         # الرئيسية — ومن بلا بوتات تحوّله لرحلة الإعداد
         _rate_limited(acct, limit=_ACCT_FAIL_LIMIT, window=_ACCT_FAIL_WINDOW, bucket="login_acct")
         _rate_limited(acct, limit=CAP.LOGIN_AFTER_FAILS, window=CAP.LOGIN_FAIL_WINDOW, bucket="login_fail_acct")
         _rate_limited(request.remote_addr or "?", limit=CAP.LOGIN_AFTER_FAILS,
@@ -1031,7 +1032,7 @@ def _oauth_login(u, lang):
         return redirect(url_for("login"))
     session["uid"] = u["id"]; session["uname"] = u["username"]; session["role"] = u.get("role", "user")
     session["pwv"] = _pw_stamp(u["pw_hash"])
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("home_page"))
 
 @app.route("/auth/<any(google,facebook):provider>")
 def oauth_start(provider):
@@ -1354,7 +1355,7 @@ def _home_for(user_id):
     موظّف انضمّ لفريق: العبرة ببوتات الحساب لا ببوتاته هو — فلا نطلب منه إنشاء بوت
     بينما حساب شركته مليء بالبوتات."""
     return (url_for("first_bot") if not db.count_user_bots(db.account_of(user_id))
-            else url_for("dashboard"))
+            else url_for("home_page"))
 
 
 def _journey(bots, plan_id):
@@ -3798,7 +3799,36 @@ def admin_tickets():
     for tk in tickets:
         if tk["kind"] == "wa_setup":
             tk["wa"] = _wa_setup_status(tk, lang)
-    return react_page("admin_tickets", "nav_tickets", {"tickets": tickets})
+    # مركز الدعم: ملف كل عميل بجانب تذكرته · مؤشرات زمن الرد · الردود الجاهزة المشتركة للفريق
+    customers = db.customer_360(t["user_id"] for t in tickets)
+    for c in customers.values():
+        c["plan_name"] = plans.plan_name(c["plan"], lang)
+    return react_page("admin_tickets", "nav_tickets", {"tickets": tickets, "customers": {str(k): v for k, v in customers.items()},
+                                                       "metrics": db.support_metrics(), "canned": _support_canned(),
+                                                       "sla": 4 * 3600, "now": int(_time.time())})
+
+
+def _support_canned():
+    try:
+        items = json.loads(db.get_platform("support_canned", "") or "[]")
+    except ValueError:
+        items = []
+    return [x for x in items if isinstance(x, dict)][:50]
+
+
+@app.route("/admin/support/canned", methods=["POST"])
+@require_roles("admin", "support")
+def admin_support_canned():
+    """ردود الدعم الجاهزة — قائمة واحدة للفريق كله. {{name}} يصير اسم العميل عند الإدراج."""
+    items = []
+    for x in (_json_body().get("items") or [])[:50]:
+        if not isinstance(x, dict):
+            continue
+        title, body = str(x.get("title") or "").strip()[:80], str(x.get("body") or "").strip()[:SD.BODY_MAX]
+        if title and len(body) >= 2:
+            items.append({"title": title, "body": body})
+    db.set_platform("support_canned", json.dumps(items, ensure_ascii=False))
+    return jsonify({"ok": True, "items": items})
 
 # ---------- ربط واتساب بمساعدة الفريق (مشمول في باقات واتساب) ----------
 def _active_plan(user_id):
@@ -4859,7 +4889,7 @@ def _inbox_send(b, peer, data):
     # الصندوق المشترك: من يرد على محادثة بلا مسؤول يصير مسؤولها (ولا يُنتزع إسناد قائم)
     conv = db.get_conversation(bot_id, peer) or {}
     if not conv.get("assignee_id"):
-        db.assign_conversation(bot_id, peer, uid(), conv.get("team_id"))
+        db.assign_conversation(bot_id, peer, uid(), conv.get("team_id"), actor=uid())
     if conv.get("status") != "open":
         db.set_conversation_status(bot_id, peer, "open")
     return jsonify({"ok": True, "conv": db.get_conversation(bot_id, peer)})
@@ -5168,66 +5198,203 @@ def set_theme():
     return jsonify({"ok": True, "theme": v})
 
 
+def _ui_ctx():
+    """من يرى ماذا في اللوحة — نفس شروط الصلاحيات في المسارات (الواجهة لا تقرّر)."""
+    logged = bool(uid())
+    team = my_team_role() if logged else None
+    return {"role": current_role(), "crm": logged and _crm_on(), "team_admin": team in ("owner", "admin"),
+            "member": team == "member"}
+
+
+def _home_widgets(persona, prefs):
+    """ترتيب المستخدم أولاً ثم أي أداة جديدة لم يرها بعد — والمخفية تبقى في القائمة (يعيدها من «تخصيص»)."""
+    catalog = UI.WIDGETS[persona]
+    order = [w for w in prefs.get("widgets") or [] if w in catalog]
+    for i, w in enumerate(catalog):                    # أداة جديدة لم يرها: في موضعها الطبيعي لا آخر القائمة
+        if w not in order:
+            order.insert(min(i, len(order)), w)
+    return order, [w for w in prefs.get("hidden") or [] if w in catalog]
+
+
+def _home_insights(persona, props, lang):
+    """اقتراحات ذكية من بيانات الحساب الحقيقية — أهم 3 فقط، كل واحد بخطوة واضحة. لا اقتراح بلا دليل رقمي."""
+    ar = lang != "en"
+    L = lambda a, e: a if ar else e
+    out = []
+    if persona == "owner":
+        s = db.owner_signals(acct())
+        unassigned = ((props.get("inbox") or {}).get("counts") or {}).get("unassigned", 0)
+        comments_on = any((json.loads(b.get("config_json") or "{}").get("comment_auto") or {}).get("enabled")
+                          for b in db.list_bots(acct()) if (b.get("channel") or "") in ("instagram", "messenger"))
+        if s["stale_pay"]:
+            out.append(("stale_pay", "card", "warn", L(f"{s['stale_pay']} روابط دفع أُرسلت منذ أكثر من ساعتين ولم تُدفع بعد — تذكير قصير يرفع الإتمام.",
+                                                       f"{s['stale_pay']} payment links sent over 2 hours ago are still unpaid — a short reminder lifts completion."),
+                        L("راجع المدفوعات", "Review payments"), url_for("payments_page")))
+        if s["leads_prev"] >= 3 and s["leads_week"] <= s["leads_prev"] * 0.7:
+            drop = round(100 - 100 * s["leads_week"] / s["leads_prev"])
+            out.append(("leads_drop", "chart", "bad", L(f"العملاء المحتملون أقل {drop}% من الأسبوع الماضي ({s['leads_week']} مقابل {s['leads_prev']}) — افحص مصادرك.",
+                                                        f"Leads are down {drop}% on last week ({s['leads_week']} vs {s['leads_prev']}) — check your sources."),
+                        L("افتح النمو والإعلانات", "Open growth & ads"), url_for("growth_page")))
+        elif s["leads_prev"] >= 1 and s["leads_week"] >= s["leads_prev"] * 1.3:
+            up = round(100 * s["leads_week"] / s["leads_prev"] - 100)
+            out.append(("leads_up", "rocket", "on", L(f"🎉 العملاء المحتملون زادوا {up}% عن الأسبوع الماضي — تابعهم تلقائياً قبل أن يبردوا.",
+                                                      f"🎉 Leads are up {up}% on last week — follow up automatically before they go cold."),
+                        L("تسلسل متابعة", "Follow-up sequence"), url_for("sequences_page")))
+        if s["dormant"] >= 20:
+            out.append(("dormant", "megaphone", "info", L(f"{s['dormant']} عميلاً لم يتواصلوا منذ أكثر من 30 يوماً — حملة بقالب تعيدهم.",
+                                                          f"{s['dormant']} customers haven't been in touch for 30+ days — a template campaign can bring them back."),
+                        L("ابدأ حملة", "Start a campaign"), url_for("broadcasts_page")))
+        if unassigned >= 3 and not s["teams"]:
+            out.append(("teams", "users", "info", L(f"{unassigned} محادثات تنتظر موظفاً — أنشئ فِرقاً بالتوزيع التلقائي فلا تنتظر أي محادثة.",
+                                                    f"{unassigned} chats are waiting — create round-robin teams so none waits."),
+                        L("إعداد الفِرق", "Set up teams"), url_for("shared_inbox")))
+        if "whatsapp" in s["channels"] and not s["pay_ready"]:
+            out.append(("pay", "card", "info", L("اقبل الدفع داخل محادثة واتساب (Moyasar · Tap · HyperPay) — المال لحسابك مباشرة.",
+                                                 "Accept payments inside the WhatsApp chat (Moyasar · Tap · HyperPay) — money goes straight to you."),
+                        L("اربط بوابة الدفع", "Connect a gateway"), url_for("payments_page")))
+        if ({"instagram", "messenger"} & set(s["channels"])) and not comments_on:
+            out.append(("comments", "chat", "info", L("حوّل تعليقات منشوراتك لعملاء: ردّ علني + رسالة خاصة تلقائياً.",
+                                                      "Turn post comments into customers: an automatic public reply + DM."),
+                        L("أتمتة التعليقات", "Comment automation"), url_for("growth_page", tab="comments")))
+        if "whatsapp" in s["channels"] and not s["integrations"]:
+            out.append(("integ", "link", "info", L("اربط متجرك أو نظام الحجز: كل طلب أو حجز يصل العميل تأكيده على واتساب فوراً.",
+                                                   "Connect your store or booking system: every order or booking gets a WhatsApp confirmation instantly."),
+                        L("التكاملات", "Integrations"), url_for("integrations_page")))
+    elif persona == "basic":
+        up = upgrade_moment(props.get("plan") or "free", props.get("bots") or [], props.get("total") or {})
+        if up:
+            txt = {"broadcast": L(f"عندك {up['n']} مشتركاً — ابعث لهم عرضاً بضغطة مع باقة التاجر.", f"You have {up['n']} subscribers — send them an offer in one tap with Merchant."),
+                   "inbox": L(f"وصلتك {up['n']} نتائج — ردّ على عملائك بنفسك من صندوق الوارد مع باقة التاجر.", f"You got {up['n']} results — reply to customers yourself from the inbox with Merchant."),
+                   "bots": L("وصلت لحد بوتات الباقة المجانية — باقة التاجر حتى 3 بوتات.", "You've reached the free bot limit — Merchant allows up to 3 bots.")}[up["key"]]
+            out.append(("upgrade", "crown", "on", txt, L("شوف الباقات", "See plans"), url_for("pricing")))
+    elif persona in ("admin", "support"):
+        q, m = props.get("queues") or {}, props.get("support") or {}
+        rev = props.get("revenue") or {}
+        if rev.get("stale_payments"):
+            out.append(("stale_pay", "wallet", "bad", L(f"{rev['stale_payments']} دفعات تنتظر المراجعة منذ أكثر من 24 ساعة.", f"{rev['stale_payments']} payments have waited over 24 hours for review."),
+                        L("راجعها الآن", "Review now"), url_for("admin_payments")))
+        if m.get("waiting"):
+            out.append(("sla", "clock", "warn", L(f"{m['waiting']} تذاكر ينتظر أصحابها رداً منذ أكثر من 4 ساعات.", f"{m['waiting']} tickets have waited over 4 hours for a reply."),
+                        L("افتح التذاكر", "Open tickets"), url_for("admin_tickets")))
+        if q.get("webhook_bad") and persona == "admin":
+            out.append(("webhook", "shield", "bad", L("ويبهوك Meta يرفض تواقيع في آخر ساعة — غالباً سرّ تطبيق خاطئ.", "Meta webhook rejected signatures in the last hour — likely a wrong app secret."),
+                        L("تشخيص Meta", "Meta diagnostics"), url_for("admin_meta")))
+    return [{"k": k, "i": i, "tone": tone, "text": text, "cta": cta, "u": u} for k, i, tone, text, cta, u in out[:3]]
+
+
+@app.route("/home")
+@login_required
+def home_page():
+    """مركز القيادة: أهم ما يخص هذا المستخدم الآن — حسب دوره وباقته وما يستعمله فعلاً."""
+    lang = session.get("lang", i18n.DEFAULT)
+    ctx = _ui_ctx()
+    persona = UI.persona(ctx)
+    bots = db.list_bots(acct())
+    if persona in ("owner", "basic") and not bots:
+        return redirect(url_for("dashboard"))            # أول بوت: رحلة الإعداد في «بوتاتي»
+    prefs = UI.prefs(uid())
+    order, hidden = _home_widgets(persona, prefs)
+    acts = UI.actions(ctx, lang, url_for)
+    chosen = [a for a in prefs.get("actions") or [] if any(x["k"] == a for x in acts)] or \
+        [a for a in UI.DEFAULT_ACTIONS[persona] if any(x["k"] == a for x in acts)]
+    _groups, flat, admin_flat = UI.build_nav(ctx, lang, url_for)
+    visible = {it["k"]: it for it in flat + admin_flat}
+    now = int(_time.time())
+    props = {"persona": persona, "widgets": order, "hidden": hidden, "actions": chosen, "catalog": UI.WIDGETS[persona],
+             "frequent": [visible[k] for k in UI.frequent(uid(), set(visible))], "now": now,
+             "canCustomize": True}
+    if persona in ("owner", "basic", "member"):
+        props["metrics"] = db.home_metrics(acct())
+        props["bots"] = [{"id": b["id"], "name": b["name"], "channel": b.get("channel") or "telegram",
+                          "running": manager.is_running(b["id"]), "url": url_for("bot_detail", bot_id=b["id"])}
+                         for b in bots[:8]]
+    if persona in ("owner", "member") and ctx["crm"]:
+        own, teams = _inbox_scope()
+        team_views = [t["id"] for t in _hub_teams_for_me()]
+        counts = db.inbox_counts(acct(), uid(), own, team_views)
+        props["inbox"] = {"counts": counts,
+                          "rows": db.inbox_list(acct(), uid(), "mine" if persona == "member" else "open", None, None,
+                                                own, teams, limit=6)}
+    if persona == "owner":
+        m, c = props["metrics"], props["inbox"]["counts"]
+        sub = db.get_subscription(acct())
+        exp = (sub or {}).get("expires_at") or 0
+        att = [("unassigned", c.get("unassigned", 0), url_for("shared_inbox"), "warn"),
+               ("mentions", c.get("mentions", 0), url_for("shared_inbox"), "info"),
+               ("pay_pending", m.get("pay_pending", 0), url_for("payments_page"), "info"),
+               ("integ_failed", m.get("integ_failed", 0), url_for("integrations_page"), "bad"),
+               ("bots_stopped", m.get("bots", 0) - m.get("bots_live", 0), url_for("dashboard"), "warn")]
+        if sub and sub.get("status") == "active" and exp and exp - now < 7 * 86400:
+            att.append(("renew", max(0, (exp - now) // 86400), url_for("billing"), "bad"))
+        props["attention"] = [{"k": k, "n": n, "u": u, "tone": tone} for k, n, u, tone in att if n or k == "renew"]
+    if persona == "basic":
+        sub = db.get_subscription(uid())
+        plan_id = sub["plan"] if sub and sub["status"] == "active" else "free"
+        full = [dict(b, stats=db.stats_summary(b["id"]), running=manager.is_running(b["id"])) for b in bots]
+        total = {k: sum((b["stats"] or {}).get(k, 0) for b in full) for k in ("subscribers", "orders", "leads", "bookings", "revenue")}
+        props.update(total=total, journey=_journey(full, plan_id), plan=plan_id)
+    if persona in ("admin", "support"):
+        st = db.platform_stats()
+        props["queues"] = {"payments": st["pending"], "tickets": db.count_open_tickets(),
+                           "requests": db.count_new_bot_requests(),
+                           "webhook_bad": sum(1 for t in _WH_STATE["bad"].values() if now - t < 3600)}
+        props["signups"] = db.recent_signups(6)
+        props["support"] = db.support_metrics(now)
+        if persona == "admin":
+            props["stats"] = st
+            props["chart"] = db.revenue_daily(14)
+            props["revenue"] = db.admin_revenue_stats({k: plans.plan(k)["price"] for k in plans.PLANS}, now)
+    props["insights"] = _home_insights(persona, props, lang)
+    return react_page("home", "home_title", props)
+
+
+@app.route("/api/notifications")
+@login_required
+def api_notifications():
+    """جرس الإشعارات: الأحدث 30 وعدد غير المقروء — للمستخدم نفسه لا للحساب (كل موظف إشعاراته)."""
+    items, unread = db.list_notifications(uid())
+    return jsonify({"ok": True, "items": items, "unread": unread})
+
+
+@app.route("/api/notifications/read", methods=["POST"])
+@login_required
+def api_notifications_read():
+    d = _json_body()
+    n = db.mark_notifications_read(uid(), None if d.get("all") else (d.get("ids") or []))
+    return jsonify({"ok": True, "marked": n})
+
+
+@app.route("/api/ui/prefs", methods=["POST"])
+@login_required
+def api_ui_prefs():
+    """تفضيلات اللوحة: تُنظَّف مقابل ما يحقّ لهذا المستخدم رؤيته — لا مفتاح غريب يُحفظ."""
+    lang = session.get("lang", i18n.DEFAULT)
+    ctx = _ui_ctx()
+    groups, flat, admin_flat = UI.build_nav(ctx, lang, url_for)
+    persona = UI.persona(ctx)
+    old = UI.prefs(uid())
+    new = dict(old, **{k: v for k, v in _json_body().items() if k in ("pins", "collapsed", "compact", "widgets", "hidden", "actions", "tour", "scale")})
+    p = UI.clean_prefs(new, {it["k"] for it in flat + admin_flat}, {a["k"] for a in UI.actions(ctx, lang, url_for)},
+                       set(UI.WIDGETS[persona]), {g["k"] for g in groups})
+    UI.save_prefs(uid(), p)
+    return jsonify({"ok": True, "prefs": p})
+
+
 def react_page(view, title_key, props=None, needs_chart=False, title=None):
     """يرسم صفحة React مع قشرة اللوحة وبياناتها."""
     lang = session.get("lang", i18n.DEFAULT)
     role = current_role()
-    nav = [
-        {"k": "dashboard",   "u": url_for("dashboard"),    "i": "grid",     "l": i18n.t("nav_bots", lang)},
-        {"k": "media",       "u": url_for("media_page"),   "i": "image",    "l": i18n.t("media_nav", lang)},
-        {"k": "pricing",     "u": url_for("pricing"),      "i": "tag",      "l": i18n.t("nav_pricing", lang)},
-        {"k": "billing",     "u": url_for("billing"),      "i": "card",     "l": i18n.t("nav_billing", lang)},
-        {"k": "wallet",      "u": url_for("wallet_page"),  "i": "wallet",   "l": i18n.t("wallet_nav", lang)},
-        {"k": "request_bot", "u": url_for("request_bot"),  "i": "sparkles", "l": i18n.t("custom_bot", lang)},
-        {"k": "support",     "u": url_for("support"),      "i": "help",     "l": i18n.t("nav_support", lang)},
-        {"k": "affiliate",   "u": url_for("affiliate"),    "i": "crown",    "l": i18n.t("aff_title", lang)},
-    ]
-    # «جهات الاتصال» لباقة فيها CRM (Enterprise) أو حساب الإدارة — بعد «بوتاتي» مباشرةً
-    if uid() and _crm_on():
-        nav.insert(1, {"k": "shared_inbox", "u": url_for("shared_inbox"), "i": "inbox",
-                       "l": i18n.t("hub_nav", lang)})
-        nav.insert(2, {"k": "contacts", "u": url_for("contacts_page"), "i": "users",
-                       "l": i18n.t("contacts_nav", lang)})
-        nav.insert(3, {"k": "broadcasts", "u": url_for("broadcasts_page"), "i": "megaphone",
-                       "l": i18n.t("bc_nav", lang)})
-        nav.insert(4, {"k": "tpl_studio", "u": url_for("templates_studio"), "i": "mail",
-                       "l": i18n.t("tpl_studio_nav", lang)})
-        nav.insert(5, {"k": "sequences", "u": url_for("sequences_page"), "i": "clock",
-                       "l": i18n.t("seq_title", lang)})
-        nav.insert(6, {"k": "growth", "u": url_for("growth_page"), "i": "rocket",
-                       "l": i18n.t("growth_title", lang)})
-        nav.insert(7, {"k": "chat_payments", "u": url_for("payments_page"), "i": "card",
-                       "l": i18n.t("cpay_title", lang)})
-        nav.insert(8, {"k": "integrations", "u": url_for("integrations_page"), "i": "link",
-                       "l": i18n.t("integ_title", lang)})
-    # «الفريق» لصاحب الحساب ومن يديره معه — لا يراه الموظف العادي
-    if uid() and my_team_role() in ("owner", "admin"):
-        nav.insert(11 if _crm_on() else 6, {"k": "team", "u": url_for("team_page"), "i": "users",
-                       "l": i18n.t("team_nav", lang)})
-    admin_nav = []
-    if role in ("admin", "support"):
-        admin_nav = [
-            {"k": "admin_overview", "u": url_for("admin_home"),     "i": "shield", "l": i18n.t("nav_admin", lang)},
-            {"k": "admin_users",    "u": url_for("admin_users"),    "i": "users",  "l": i18n.t("admin_users_t", lang)},
-            {"k": "admin_payments", "u": url_for("admin_payments"), "i": "wallet", "l": i18n.t("admin_payments_t", lang)},
-            {"k": "admin_requests", "u": url_for("admin_requests"), "i": "inbox",  "l": i18n.t("nav_requests", lang)},
-            {"k": "admin_tickets",  "u": url_for("admin_tickets"),  "i": "chat",   "l": i18n.t("nav_tickets", lang)},
-        ]
-        if role == "admin":
-            # مزايا المالك وحده — لا يراها الدعم إطلاقاً
-            admin_nav += [
-                {"k": "admin_pricing",    "u": url_for("admin_pricing"),    "i": "tag",      "l": i18n.t("adm_pricing", lang)},
-                {"k": "admin_promos",     "u": url_for("admin_promos"),     "i": "bolt",     "l": i18n.t("adm_promos", lang)},
-                {"k": "admin_affiliates", "u": url_for("admin_affiliates"), "i": "users",    "l": i18n.t("adm_affiliates", lang)},
-                {"k": "settings",         "u": url_for("settings"),         "i": "sparkles", "l": i18n.t("nav_ai", lang)},
-                {"k": "admin_report",     "u": url_for("admin_report"),     "i": "chart",    "l": i18n.t("adm_report", lang)},
-                {"k": "admin_convo",      "u": url_for("admin_conversations"), "i": "chat",  "l": i18n.t("adm_convo", lang)},
-                {"k": "admin_analytics",  "u": url_for("admin_analytics"),  "i": "chart",    "l": i18n.t("adm_analytics", lang)},
-                {"k": "admin_growth",     "u": url_for("admin_growth"),     "i": "megaphone", "l": i18n.t("adm_growth", lang)},
-                {"k": "admin_meta",       "u": url_for("admin_meta"),       "i": "chat",     "l": i18n.t("adm_meta", lang)},
-                {"k": "admin_emails",     "u": url_for("admin_emails"),     "i": "mail",     "l": i18n.t("adm_emails", lang)},
-                {"k": "admin_platform",   "u": url_for("admin_platform"),   "i": "settings", "l": i18n.t("nav_platform", lang)},
-            ]
+    # التنقّل المجمَّع من كتالوج واحد (ui.NAV): كل صفحة تحت مجموعتها الأم، والشرط يُفحص هنا لا في الواجهة
+    ctx = _ui_ctx()
+    nav_groups, nav, admin_nav = UI.build_nav(ctx, lang, url_for)
+    ui_boot = None
+    if uid():
+        try:
+            UI.track(uid(), view)                         # «الأكثر استخداماً» يتعلّم من كل زيارة
+        except Exception:
+            log.exception("ui usage tracking failed")
+        ui_boot = {"prefs": UI.prefs(uid()), "persona": UI.persona(ctx), "actions": UI.actions(ctx, lang, url_for),
+                   "unread": db.list_notifications(uid(), 1)[1]}
 
     payload = {
         "view": view, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
@@ -5240,7 +5407,7 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
                  "avatar": _avatar_url(session.get("uid"))},
         "t": {k: i18n.t(k, lang) for k in i18n.T},
         "icons": {n: _icon_svg(n) for n in icons._P},
-        "nav": nav, "adminNav": admin_nav,
+        "nav": nav, "adminNav": admin_nav, "navGroups": nav_groups, "ui": ui_boot,
         "flashes": [{"c": c, "m": m} for c, m in get_flashed_messages(with_categories=True)],
         "urls": {
             "dashboard": url_for("dashboard"), "pricing": url_for("pricing"),
@@ -7704,9 +7871,10 @@ def api_broadcasts():
     per = min(max(_int_or_none(request.args.get("per")) or 20, 1), 100)
     page = max(_int_or_none(request.args.get("page")) or 1, 1)
     days = min(max(_int_or_none(request.args.get("days")) or 7, 1), 365)
-    rows, total = db.list_campaigns(owner, per, (page - 1) * per)
+    status = request.args.get("status") or None
+    rows, total = db.list_campaigns(owner, per, (page - 1) * per, status=status)
     return jsonify({"ok": True, "rows": [_campaign_out(r) for r in rows], "total": total, "page": page,
-                    "per": per, "overview": db.campaigns_overview(owner, int(_time.time()) - days * 86400),
+                    "per": per, "counts": db.campaign_status_counts(owner), "overview": db.campaigns_overview(owner, int(_time.time()) - days * 86400),
                     "balance": db.wallet_balance(owner)})
 
 
@@ -8291,7 +8459,7 @@ def api_hub_assign():
     if team and not user and d.get("route"):
         db.assign_conversation(b["id"], peer, None, team, takeover=False)
         user = db.next_in_team(acct(), team)
-    db.assign_conversation(b["id"], peer, user, team, takeover=bool(user) and _can_reply())
+    db.assign_conversation(b["id"], peer, user, team, takeover=bool(user) and _can_reply(), actor=uid())
     log.info("conversation %s/%s assigned to user=%s team=%s by=%s", b["id"], peer, user, team, uid())
     return jsonify({"ok": True, "conv": db.get_conversation(b["id"], peer)})
 

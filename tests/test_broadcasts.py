@@ -239,6 +239,18 @@ class ScheduleRetryTests(Base):
         BC.tick(now=int(time.time()) + 7200)
         self.assertEqual(db.get_campaign(r["id"])["status"], "cancelled")
 
+    def test_list_filters_by_status_and_ignores_unknown_ones(self):
+        cid = self.create(scheduled_at=int(time.time()) + 3600).get_json()["id"]
+        d = self.c.get("/api/broadcasts?status=scheduled&per=100").get_json()
+        self.assertIn(cid, [r["id"] for r in d["rows"]])
+        self.assertTrue(all(r["status"] == "scheduled" for r in d["rows"]))
+        self.assertEqual(d["total"], d["counts"]["scheduled"])
+        self.assertNotIn(cid, [r["id"] for r in self.c.get("/api/broadcasts?status=done&per=100").get_json()["rows"]])
+        # حالة غير معروفة (أو محاولة حقن) = الكل، لا خطأ
+        bad = self.c.get("/api/broadcasts?status=x'%20OR%201=1--").get_json()
+        self.assertEqual(bad["total"], sum(bad["counts"].values()))
+        post(self.c, f"/api/broadcasts/{cid}/cancel")   # لا تُطلق في tick اختبارات أخرى
+
     def test_smart_retry_resends_only_temporary_failures(self):
         db.wallet_topup(self.owner, 100 * PRICE)
         r = self.create(retry=True, retry_hours=24).get_json()

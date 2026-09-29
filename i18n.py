@@ -47,6 +47,7 @@ T = {
  "seq_title":        {"ar": "التسلسلات", "en": "Sequences"},
  "growth_title":     {"ar": "النمو والإعلانات", "en": "Growth & ads"},
  "cpay_title":       {"ar": "المدفوعات", "en": "Payments"},
+ "home_title":       {"ar": "الرئيسية", "en": "Home"},
  "integ_title":      {"ar": "التكاملات", "en": "Integrations"},
  "tpl_studio_nav":   {"ar": "القوالب", "en": "Templates"},
  "tpl_studio_title": {"ar": "قوالب واتساب", "en": "WhatsApp templates"},

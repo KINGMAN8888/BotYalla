@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   BY, P, t, bi, Icon, Card, Btn, Field, Input, Select, Textarea, Form, Grid, Stat,
-  Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate, daysLeft,
+  Pill, Empty, PageHead, SectionTitle, Table, Tr, Td, num, fmtDate, daysLeft, Kpi, Tabs,
 } from "../kit.jsx";
 import { TicketHead, TicketThread } from "./Account.jsx";
 import { entityLabel } from "../auth.jsx";
@@ -296,7 +296,7 @@ function EasySignup() {
 export function AdminUsers() {
   const { users = [], plans = [] } = P;
   const isAdmin = BY.user.role === "admin";
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(() => new URLSearchParams(location.search).get("q") || "");   // رابط «فتح في المستخدمين» من مركز الدعم
   const [only, setOnly] = useState(false);
   const waiting = users.filter(waitingEmail).length;
   const needle = q.trim().toLowerCase();
@@ -697,51 +697,184 @@ function WaConnect({ tk }) {
   );
 }
 
-/* ---------------------------------------------------------- تذاكر الدعم */
+/* ---------------------------------------------------------- مركز الدعم (التذاكر) */
+const ago = (sec) => (sec < 3600 ? bi(`${Math.max(1, Math.round(sec / 60))} د`, `${Math.max(1, Math.round(sec / 60))}m`)
+  : sec < 86400 ? bi(`${Math.round(sec / 3600)} س`, `${Math.round(sec / 3600)}h`) : bi(`${Math.round(sec / 86400)} يوم`, `${Math.round(sec / 86400)}d`));
+const KIND_L = { support: bi("دعم", "Support"), complaint: bi("شكوى", "Complaint"), payment: bi("دفع", "Payment"), wa_setup: bi("ربط واتساب", "WhatsApp setup"), other: bi("أخرى", "Other") };
+
+/* من ينتظر من؟ آخر رسالة من العميل = الفريق مطالب بالرد منذ وقتها */
+function waitingOf(tk, now) {
+  const last = (tk.msgs || [])[tk.msgs.length - 1];
+  return tk.status !== "closed" && last && last.sender === "user" ? now - last.created_at : 0;
+}
+
+function Customer({ c }) {
+  if (!c) return null;
+  const exp = c.expires ? Math.round((c.expires * 1000 - Date.now()) / 86400000) : null;
+  return (
+    <aside className="rounded-2xl bg-ov/[0.035] p-3.5 text-[12.5px] shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.06)]">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="grid size-9 place-items-center rounded-full bg-au-violet/25 font-extrabold text-ink">{(c.username || "?").slice(0, 1).toUpperCase()}</span>
+        <div className="min-w-0"><b className="block truncate text-[13.5px] text-ink" dir="auto">{c.username}</b>
+          <span className="block truncate text-ink-3" dir="ltr">{c.email || "—"} {c.verified ? "✓" : ""}</span></div>
+      </div>
+      <div className="grid gap-1.5 text-ink-2">
+        <div className="flex justify-between gap-2"><span className="text-ink-3">{bi("الباقة", "Plan")}</span>
+          <span><Pill tone={c.plan === "free" ? "mute" : "on"}>{c.plan_name}</Pill>{exp !== null && c.plan !== "free" && <span className={`ms-1.5 ${exp <= 7 ? "text-yellow-300" : "text-ink-3"}`}>{bi(`${exp} يوم`, `${exp}d`)}</span>}</span></div>
+        <div className="flex justify-between gap-2"><span className="text-ink-3">{bi("عميل منذ", "Customer since")}</span><span>{fmtDate(c.since)}</span></div>
+        <div className="flex justify-between gap-2"><span className="text-ink-3">{bi("الرصيد", "Wallet")}</span><span className="tnum">{num((c.wallet || 0) / 100)}</span></div>
+        <div className="flex justify-between gap-2"><span className="text-ink-3">{bi("تذاكره", "Tickets")}</span><span className="tnum">{num(c.tickets)}</span></div>
+        {c.last_payment && <div className="flex justify-between gap-2"><span className="text-ink-3">{bi("آخر دفعة", "Last payment")}</span>
+          <span><Pill tone={c.last_payment.status === "approved" ? "on" : c.last_payment.status === "pending" ? "warn" : "off"}>{c.last_payment.status}</Pill> <span className="tnum">{num(c.last_payment.amount || 0)}</span></span></div>}
+        {c.blocked && <Pill tone="off">{bi("محظور", "Blocked")}</Pill>}
+      </div>
+      <div className="mt-2.5 border-t border-ov/10 pt-2">
+        <div className="mb-1 font-bold text-ink-3">{bi(`البوتات (${c.bots.length})`, `Bots (${c.bots.length})`)}</div>
+        {c.bots.length ? c.bots.slice(0, 6).map((b, i) => (
+          <div key={i} className="flex items-center gap-2 py-0.5"><i className={`size-2 rounded-full ${b.active ? "bg-au-teal" : "bg-ink-3/50"}`} />
+            <span className="min-w-0 flex-1 truncate" dir="auto">{b.name}</span><span className="text-ink-3">{b.channel}</span></div>))
+          : <span className="text-ink-3">{bi("لا بوتات", "No bots")}</span>}
+      </div>
+      <a href={`/admin/users?q=${encodeURIComponent(c.username)}`} className="mt-2.5 inline-block text-[12px] font-bold text-au-cyan no-underline">{bi("فتح في المستخدمين ←", "Open in users →")}</a>
+    </aside>
+  );
+}
+
+function CannedManager({ items, onClose, onSaved }) {
+  const [list, setList] = useState(items.map((x) => ({ ...x })));
+  const [err, setErr] = useState("");
+  const save = async () => {
+    const r = await postJSON("/admin/support/canned", { items: list.filter((x) => x.title.trim() && x.body.trim()) });
+    if (r && r.ok) { onSaved(r.items); onClose(); } else setErr(bi("تعذّر الحفظ", "Could not save"));
+  };
+  return (
+    <div className="fixed inset-0 z-[300] grid place-items-center bg-sink/60 p-4 backdrop-blur-sm" onMouseDown={onClose}>
+      <Card className="max-h-[85vh] w-full max-w-[640px] overflow-y-auto" onMouseDown={(e) => e.stopPropagation()}>
+        <b className="mb-1 block text-[16px] text-ink">{bi("ردود الدعم الجاهزة", "Support canned replies")}</b>
+        <p className="mb-3 mt-0 text-[12.5px] text-ink-3">{bi("مشتركة للفريق كله. {{name}} يصير اسم العميل عند الإدراج.", "Shared with the whole team. {{name}} becomes the customer's name when inserted.")}</p>
+        {err && <p className="text-[13px] font-bold text-red-300">{err}</p>}
+        <div className="grid gap-3">{list.map((x, i) => (
+          <div key={i} className="grid gap-2 rounded-xl bg-ov/[0.035] p-3">
+            <div className="flex gap-2">
+              <Input value={x.title} placeholder={bi("العنوان", "Title")} onChange={(e) => setList(list.map((y, j) => (j === i ? { ...y, title: e.target.value } : y)))} />
+              <Btn sm variant="ghost" onClick={() => setList(list.filter((_, j) => j !== i))} aria-label={bi("حذف", "Delete")}><Icon name="trash" size={14} /></Btn>
+            </div>
+            <Textarea rows={3} value={x.body} onChange={(e) => setList(list.map((y, j) => (j === i ? { ...y, body: e.target.value } : y)))} />
+          </div>))}</div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Btn sm variant="ghost" icon="plus" onClick={() => setList([...list, { title: "", body: "" }])}>{bi("رد جديد", "New reply")}</Btn>
+          <span className="flex-1" />
+          <Btn sm variant="ghost" onClick={onClose}>{bi("إلغاء", "Cancel")}</Btn>
+          <Btn sm onClick={save}>{bi("حفظ", "Save")}</Btn>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function ReplyBox({ tk, canned, customer }) {
+  const box = useRef(null);
+  const insert = (i) => {
+    const x = canned[i];
+    if (!x || !box.current) return;
+    const text = x.body.replace(/\{\{\s*name\s*\}\}/g, customer?.username || tk.username || "");
+    box.current.value = (box.current.value ? box.current.value.trimEnd() + "\n\n" : "") + text;
+    box.current.focus();
+  };
+  return (
+    <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end">
+      <Form action={`/admin/tickets/${tk.id}/reply`} className="flex flex-1 flex-col gap-2">
+        {canned.length > 0 && (
+          <select defaultValue="" onChange={(e) => { insert(Number(e.target.value)); e.target.value = ""; }} aria-label={bi("إدراج رد جاهز", "Insert canned reply")}
+                  className="w-fit rounded-lg border-0 bg-ov/[0.06] px-2.5 py-1.5 text-[12.5px] font-bold text-ink-2">
+            <option value="" disabled>{bi("⚡ رد جاهز…", "⚡ Canned reply…")}</option>
+            {canned.map((x, i) => <option key={i} value={i}>{x.title}</option>)}
+          </select>
+        )}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <Textarea ref={box} name="body" required minLength={2} maxLength={3000} className="min-h-[52px] flex-1"
+                    placeholder={bi("اكتب ردّك للعميل…", "Write your reply…")} />
+          <Btn sm icon="chat" type="submit">{bi("رد", "Reply")}</Btn>
+        </div>
+      </Form>
+      <Form action={`/admin/tickets/${tk.id}/${tk.status === "closed" ? "open" : "close"}`} className="inline">
+        <Btn sm variant={tk.status === "closed" ? "ghost" : "green"}
+             icon={tk.status === "closed" ? "refresh" : "check"} type="submit">
+          {tk.status === "closed" ? bi("افتحها تاني", "Reopen") : bi("تم الحل", "Resolve")}
+        </Btn>
+      </Form>
+    </div>
+  );
+}
+
 export function AdminTickets() {
   const tickets = P.tickets || [];
+  const customers = P.customers || {};
+  const m = P.metrics || {};
+  const now = P.now || Math.floor(Date.now() / 1000), sla = P.sla || 4 * 3600;
   const [show, setShow] = useState("open");
+  const [q, setQ] = useState("");
+  const [kind, setKind] = useState("");
+  const [sort, setSort] = useState("waiting");
+  const [canned, setCanned] = useState(P.canned || []);
+  const [manage, setManage] = useState(false);
   const open = tickets.filter((x) => x.status !== "closed");
-  const list = show === "open" ? open : show === "closed" ? tickets.filter((x) => x.status === "closed") : tickets;
-  const tabs = [["open", bi("مفتوحة", "Open"), open.length],
-                ["closed", bi("مقفولة", "Closed"), tickets.length - open.length],
-                ["all", bi("الكل", "All"), tickets.length]];
+  const waiting = open.filter((x) => waitingOf(x, now) > 0);
+  const base = show === "open" ? open : show === "waiting" ? waiting : show === "closed" ? tickets.filter((x) => x.status === "closed") : tickets;
+  const n = q.trim().toLowerCase();
+  const list = base
+    .filter((x) => !kind || x.kind === kind)
+    .filter((x) => !n || [x.username, x.subject, ...(x.msgs || []).map((mm) => mm.body)].some((s) => String(s || "").toLowerCase().includes(n)))
+    .sort((a, b) => (sort === "waiting" ? waitingOf(b, now) - waitingOf(a, now) || b.updated_at - a.updated_at : b.updated_at - a.updated_at));
+  const tabs = [["open", bi("مفتوحة", "Open"), open.length], ["waiting", bi("تنتظر ردّنا", "Awaiting us"), waiting.length],
+                ["closed", bi("مقفولة", "Closed"), tickets.length - open.length], ["all", bi("الكل", "All"), tickets.length]];
+  const fmtDur = (s) => (s == null ? "—" : ago(s));
   return (
     <>
-      <PageHead icon="chat" title={t("nav_tickets")}
-        sub={bi("كل تذكرة بتوصلك على بوت المنصة لحظة إرسالها — ردّ عليها بـ Reply في تليجرام أو من هنا.",
-                "Every ticket reaches you on the platform bot the moment it's sent — answer with Reply in Telegram or here.")}
-        actions={<Btn variant="ghost" sm icon="back" href="/admin">{t("back")}</Btn>} />
-      <div className="mb-5 flex flex-wrap gap-2">
-        {tabs.map(([k, l, n]) => (
-          <button key={k} type="button" onClick={() => setShow(k)} aria-pressed={show === k}
-            className={`rounded-xl px-3.5 py-2 text-[13px] font-bold transition
-              ${show === k ? "bg-au-cyan/15 text-ink shadow-[inset_0_0_0_1px_rgb(143_233_255/0.45)]"
-                           : "text-ink-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] hover:text-ink"}`}>
-            {l} <span className="tnum opacity-70">{n}</span>
-          </button>
-        ))}
+      <PageHead icon="chat" title={bi("مركز الدعم", "Support center")}
+        sub={bi("كل تذكرة مع ملف صاحبها كاملاً، مرتّبة بمن ينتظر أطول — والردود الجاهزة بضغطة.",
+                "Every ticket with its customer's full profile, sorted by who's waited longest — canned replies in one click.")}
+        actions={<><Btn variant="ghost" sm icon="edit" onClick={() => setManage(true)}>{bi("الردود الجاهزة", "Canned replies")}</Btn>
+          <Btn variant="ghost" sm icon="back" href="/home">{t("back")}</Btn></>} />
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <Kpi icon="chat" label={bi("مفتوحة", "Open")} value={num(m.open || 0)} />
+        <Kpi icon="clock" label={bi("تنتظر أكثر من 4 ساعات", "Waiting 4h+")} value={num(m.waiting || 0)} tone={m.waiting ? "text-red-300" : "text-au-teal"} />
+        <Kpi icon="bolt" label={bi("متوسط أول رد (7 أيام)", "Avg first reply (7d)")} value={fmtDur(m.avg_first)} />
+        <Kpi icon="check" label={bi("رُدّ عليها خلال ساعة", "Answered within 1h")} value={m.within_hour == null ? "—" : `${m.within_hour}%`} />
+        <Kpi icon="check" label={bi("حُلّت هذا الأسبوع", "Resolved this week")} value={num(m.closed_week || 0)} tone="text-au-teal" />
       </div>
-      {list.length ? list.map((tk) => (
-        <Card key={tk.id} id={`t${tk.id}`} className="mb-4">
-          <TicketHead tk={tk} who />
-          <TicketThread tk={tk} staffView />
-          {tk.kind === "wa_setup" && <WaConnect tk={tk} />}
-          <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end">
-            <Form action={`/admin/tickets/${tk.id}/reply`} className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-end">
-              <Textarea name="body" required minLength={2} maxLength={3000} className="min-h-[52px] flex-1"
-                        placeholder={bi("اكتب ردّك للعميل…", "Write your reply…")} />
-              <Btn sm icon="chat" type="submit">{bi("رد", "Reply")}</Btn>
-            </Form>
-            <Form action={`/admin/tickets/${tk.id}/${tk.status === "closed" ? "open" : "close"}`} className="inline">
-              <Btn sm variant={tk.status === "closed" ? "ghost" : "green"}
-                   icon={tk.status === "closed" ? "refresh" : "check"} type="submit">
-                {tk.status === "closed" ? bi("افتحها تاني", "Reopen") : bi("تم الحل", "Resolve")}
-              </Btn>
-            </Form>
-          </div>
-        </Card>
-      )) : <Card><Empty icon="chat" title={bi("مفيش تذاكر هنا", "No tickets here")} /></Card>}
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <Tabs className="!mb-0" items={tabs.map(([k, l, cnt]) => [k, l, null, cnt])} value={show} onChange={setShow} />
+        <span className="flex-1" />
+        <Input className="!w-56 !py-2" value={q} onChange={(e) => setQ(e.target.value)} placeholder={bi("بحث: اسم، موضوع، نص…", "Search: name, subject, text…")} />
+        <Select className="!w-auto" value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="">{bi("كل الأنواع", "All types")}</option>{Object.entries(KIND_L).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </Select>
+        <Select className="!w-auto" value={sort} onChange={(e) => setSort(e.target.value)}>
+          <option value="waiting">{bi("الأطول انتظاراً أولاً", "Longest waiting first")}</option><option value="recent">{bi("الأحدث أولاً", "Most recent first")}</option>
+        </Select>
+      </div>
+      {list.length ? list.map((tk) => {
+        const w = waitingOf(tk, now), c = customers[String(tk.user_id)];
+        return (
+          <Card key={tk.id} id={`t${tk.id}`} className={`mb-4 ${w > sla ? "ring-1 ring-red-400/50" : ""}`}>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
+              <div className="min-w-0">
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  <Pill tone="mute">{KIND_L[tk.kind] || tk.kind}</Pill>
+                  {w > 0 && <Pill tone={w > sla ? "off" : "warn"} dot>{bi(`ينتظر ردّنا منذ ${ago(w)}`, `Awaiting us for ${ago(w)}`)}</Pill>}
+                </div>
+                <TicketHead tk={tk} who />
+                <TicketThread tk={tk} staffView />
+                {tk.kind === "wa_setup" && <WaConnect tk={tk} />}
+                <ReplyBox tk={tk} canned={canned} customer={c} />
+              </div>
+              <Customer c={c} />
+            </div>
+          </Card>
+        );
+      }) : <Card><Empty icon="chat" title={bi("مفيش تذاكر هنا", "No tickets here")} /></Card>}
+      {manage && <CannedManager items={canned} onClose={() => setManage(false)} onSaved={setCanned} />}
     </>
   );
 }

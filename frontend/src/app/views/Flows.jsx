@@ -3,7 +3,7 @@
    تراجع، وخريطة تسرّب من الجلسات الحقيقية. المسودة تُحفظ كما هي؛ التحقق الكامل عند النشر في الخادم.
    الكانفس بلا مكتبة: هندسة البطاقات ثابتة (ارتفاعات محسوبة) فتُرسم التوصيلات دون قياس DOM. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BY, P, bi, AR, Icon, Card, Btn, Field, Input, Textarea, Select, Pill, Empty, PageHead, num, Modal, Toggle } from "../kit.jsx";
+import { BY, P, bi, AR, Icon, Card, Btn, Field, Input, Textarea, Select, Pill, Empty, PageHead, num, Modal, Toggle, zoomOf } from "../kit.jsx";
 import { AssetPicker } from "../media.jsx";
 
 async function call(url, body, method = "POST") {
@@ -723,13 +723,13 @@ function Editor({ botId, fid, onClose, onChanged }) {
     if (!el || !ns.length) return;
     const x0 = Math.min(...ns.map((n) => n.x)), y0 = Math.min(...ns.map((n) => n.y));
     const x1 = Math.max(...ns.map((n) => n.x + W)), y1 = Math.max(...ns.map((n) => n.y + heightOf(n)));
-    const r = el.getBoundingClientRect();
+    const z = zoomOf(), R = el.getBoundingClientRect(), r = { width: R.width / z, height: R.height / z };   // «حجم العرض»
     const k = Math.max(0.35, Math.min(1.1, Math.min((r.width - 80) / (x1 - x0 || 1), (r.height - 80) / (y1 - y0 || 1))));
     setView({ k, x: (r.width - (x1 - x0) * k) / 2 - x0 * k, y: (r.height - (y1 - y0) * k) / 2 - y0 * k });
   };
   const toCanvas = (cx, cy) => {
-    const r = box.current.getBoundingClientRect();
-    return { x: (cx - r.left - view.x) / view.k, y: (cy - r.top - view.y) / view.k };
+    const r = box.current.getBoundingClientRect(), z = zoomOf();
+    return { x: ((cx - r.left) / z - view.x) / view.k, y: ((cy - r.top) / z - view.y) / view.k };
   };
 
   // تكبير بعجلة الماوس حول المؤشّر — مستمع غير سلبي لنمنع تمرير الصفحة
@@ -737,7 +737,7 @@ function Editor({ botId, fid, onClose, onChanged }) {
     const el = box.current; if (!el) return undefined;
     const onWheel = (e) => {
       e.preventDefault();
-      const r = el.getBoundingClientRect(); const mx = e.clientX - r.left, my = e.clientY - r.top;
+      const r = el.getBoundingClientRect(), z = zoomOf(); const mx = (e.clientX - r.left) / z, my = (e.clientY - r.top) / z;
       setView((v) => {
         const k = Math.max(0.3, Math.min(1.8, v.k * (1 - e.deltaY * 0.0015)));
         return { k, x: mx - (mx - v.x) * (k / v.k), y: my - (my - v.y) * (k / v.k) };
@@ -751,9 +751,10 @@ function Editor({ botId, fid, onClose, onChanged }) {
   useEffect(() => {
     const move = (e) => {
       const d = drag.current; if (!d) return;
-      if (d.kind === "pan") setView((v) => ({ ...v, x: d.vx + e.clientX - d.sx, y: d.vy + e.clientY - d.sy }));
+      const z = zoomOf();
+      if (d.kind === "pan") setView((v) => ({ ...v, x: d.vx + (e.clientX - d.sx) / z, y: d.vy + (e.clientY - d.sy) / z }));
       else if (d.kind === "node") {
-        const dx = (e.clientX - d.sx) / view.k, dy = (e.clientY - d.sy) / view.k;
+        const dx = (e.clientX - d.sx) / z / view.k, dy = (e.clientY - d.sy) / z / view.k;
         if (!d.moved && Math.abs(dx) + Math.abs(dy) < 3) return;
         if (!d.moved) { d.moved = true; hist.current.push(draftRef.current); }
         const cur = draftRef.current;
@@ -800,7 +801,7 @@ function Editor({ botId, fid, onClose, onChanged }) {
   const add = (type, at) => {
     if (Object.keys(draft.nodes).length >= (P.limits?.nodes || 200)) { flash(false, bi("وصلت للحد الأقصى من البطاقات", "Card limit reached")); return; }
     const el = box.current.getBoundingClientRect();
-    const p = at || toCanvas(el.left + el.width / 2 - W / 2, el.top + el.height / 3);
+    const p = at || toCanvas(el.left + el.width / 2 - (W / 2) * zoomOf() * view.k, el.top + el.height / 3);
     const id = newId();
     const n = { type, x: Math.round(p.x), y: Math.round(p.y), ...JSON.parse(JSON.stringify(DEFAULTS[type])) };
     if (!BRANCHING.includes(type)) n.next = null;
@@ -852,7 +853,7 @@ function Editor({ botId, fid, onClose, onChanged }) {
       const nid = c.split(":")[1];
       setErrs({ [nid]: errText(c) }); setSel({ node: nid });
       const n = draft.nodes[nid];
-      if (n && box.current) { const b = box.current.getBoundingClientRect(); setView((v) => ({ ...v, x: b.width / 2 - (n.x + W / 2) * v.k, y: b.height / 3 - n.y * v.k })); }
+      if (n && box.current) { const z = zoomOf(), b = box.current.getBoundingClientRect(); setView((v) => ({ ...v, x: b.width / z / 2 - (n.x + W / 2) * v.k, y: b.height / z / 3 - n.y * v.k })); }
     }
     flash(false, errText(c, r.other));
   };

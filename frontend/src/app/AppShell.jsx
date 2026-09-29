@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { BY, t, Icon, bi, Avatar, Logo } from "./kit.jsx";
 import Backdrop from "../Backdrop.jsx";
+import { SideNav, CommandPalette, prefs, savePrefs } from "./nav.jsx";
+import Bell from "./bell.jsx";
 
 /* ============================================================================
    قشرة اللوحة: شريط جانبي ثابت + شريط علوي + درج للجوال + إشعارات.
@@ -58,48 +60,65 @@ function NavLink({ item, active }) {
   );
 }
 
-function SideContent({ view }) {
+const SCALES = [90, 100, 110, 125];
+/* حجم العرض لكل مستخدم (يُحفظ في حسابه) — تكبير الواجهة كلها لا الخط وحده، فلا تنكسر التخطيطات */
+function applyScale(s) { document.documentElement.style.zoom = s && s !== 100 ? String(s / 100) : ""; }
+function ScaleControl({ compact }) {
+  const [s, setS] = useState(() => prefs().scale || 100);
+  const step = (d) => { const i = Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(s) + d)); const v = SCALES[i]; setS(v); applyScale(v); savePrefs({ scale: v }); };
+  if (compact) return null;
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 text-[12.5px] font-bold text-ink-3">
+      <span className="flex-1">{bi("حجم العرض", "Display size")}</span>
+      <button type="button" onClick={() => step(-1)} disabled={s === SCALES[0]} aria-label={bi("تصغير", "Smaller")}
+              className="grid size-7 cursor-pointer place-items-center rounded-lg border-0 bg-ov/[0.06] text-ink-2 disabled:opacity-40">A−</button>
+      <span className="tnum w-10 text-center text-ink-2">{s}%</span>
+      <button type="button" onClick={() => step(1)} disabled={s === SCALES[SCALES.length - 1]} aria-label={bi("تكبير", "Larger")}
+              className="grid size-7 cursor-pointer place-items-center rounded-lg border-0 bg-ov/[0.06] text-ink-2 disabled:opacity-40">A+</button>
+    </div>
+  );
+}
+
+function SideContent({ view, compact = false, onCompact, onPalette }) {
+  const home = BY.navGroups?.length ? (BY.navGroups[0].items[0]?.u || BY.urls.dashboard) : BY.urls.dashboard;
   return (
     <>
-      <a href={BY.urls.dashboard} className="mb-6 flex items-center gap-2.5 px-3 no-underline">
-        <Logo className="h-9 w-auto" />
+      <a href={home} className={`mb-4 flex items-center gap-2.5 no-underline ${compact ? "justify-center" : "px-3"}`}>
+        <Logo className={compact ? "h-8 w-auto" : "h-9 w-auto"} />
       </a>
 
-      <div className="mb-1 px-3 text-[10.5px] font-extrabold uppercase tracking-[0.18em] text-ink-3/70">
-        {bi("المنصة", "Workspace")}
-      </div>
-      <nav className="flex flex-col gap-1">
-        {BY.nav.map((it) => <NavLink key={it.k} item={it} active={it.k === view} />)}
-      </nav>
-
-      {BY.adminNav.length > 0 && (
-        <>
-          <div className="mt-6 mb-1 px-3 text-[10.5px] font-extrabold uppercase tracking-[0.18em] text-ink-3/70">
-            {bi("الإدارة", "Admin")}
-          </div>
-          <nav className="flex flex-col gap-1">
-            {BY.adminNav.map((it) => <NavLink key={it.k} item={it} active={it.k === view} />)}
-          </nav>
-        </>
-      )}
+      {BY.navGroups?.length ? <SideNav view={view} compact={compact} onPalette={onPalette} /> : <>
+        <nav className="flex flex-col gap-1">
+          {BY.nav.map((it) => <NavLink key={it.k} item={it} active={it.k === view} />)}
+        </nav>
+        {BY.adminNav.length > 0 && <nav className="mt-6 flex flex-col gap-1">{BY.adminNav.map((it) => <NavLink key={it.k} item={it} active={it.k === view} />)}</nav>}
+      </>}
 
       <div className="mt-auto flex flex-col gap-1 pt-5 shadow-[inset_0_1px_0_rgb(var(--ov-rgb)/0.07)]">
-        <a href={BY.urls.account}
-           className="flex items-center gap-3 rounded-xl px-2.5 py-2 no-underline transition-colors hover:bg-ov/[0.06]">
-          <Avatar src={BY.user.avatar} name={BY.user.name} size={34} />
-          <span className="min-w-0 flex-1">
+        {BY.ui && <ScaleControl compact={compact} />}
+        {onCompact && (
+          <button type="button" onClick={onCompact} title={compact ? bi("توسيع القائمة", "Expand menu") : bi("قائمة مضغوطة", "Compact menu")}
+                  className={`flex cursor-pointer items-center gap-3 rounded-xl border-0 bg-transparent py-2 text-[13px] font-bold text-ink-3 hover:bg-ov/[0.06] hover:text-ink ${compact ? "justify-center" : "px-3"}`}>
+            <span className="text-[15px]">{compact ? (BY.dir === "rtl" ? "«" : "»") : (BY.dir === "rtl" ? "»" : "«")}</span>
+            {!compact && bi("قائمة مضغوطة", "Compact menu")}
+          </button>
+        )}
+        <a href={BY.urls.account} title={compact ? BY.user.name : undefined}
+           className={`flex items-center gap-3 rounded-xl py-2 no-underline transition-colors hover:bg-ov/[0.06] ${compact ? "justify-center" : "px-2.5"}`}>
+          <Avatar src={BY.user.avatar} name={BY.user.name} size={compact ? 30 : 34} />
+          {!compact && <span className="min-w-0 flex-1">
             <span className="block truncate text-[14px] font-bold text-ink" dir="auto">{BY.user.name}</span>
             <span className="block truncate text-[11.5px] text-ink-3">{t("account_title")}</span>
-          </span>
+          </span>}
         </a>
         {/* الخروج POST مع CSRF: رابط GET كان يُخرج المستخدم من أي موقع بـ <img src=".../logout"> */}
         <form method="post" action={BY.urls.logout} className="m-0">
           <input type="hidden" name="csrf_token" value={BY.csrf} />
-          <button type="submit"
-                  className="flex w-full cursor-pointer items-center gap-3 rounded-xl border-0 bg-transparent px-3 py-2.5
-                             text-start text-[14px] font-bold text-ink-2 transition-colors hover:bg-ov/[0.06] hover:text-ink">
+          <button type="submit" title={compact ? t("logout") : undefined}
+                  className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border-0 bg-transparent py-2.5
+                             text-start text-[14px] font-bold text-ink-2 transition-colors hover:bg-ov/[0.06] hover:text-ink ${compact ? "justify-center" : "px-3"}`}>
             <Icon name="logout" size={18} className="text-ink-3" />
-            {t("logout")}
+            {!compact && t("logout")}
           </button>
         </form>
       </div>
@@ -163,6 +182,10 @@ function AssistBanner() {
 export default function AppShell({ view, children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopClosed, setDesktopClosed] = useState(false);
+  const [compact, setCompact] = useState(() => !!prefs().compact);
+  const [palette, setPalette] = useState(false);
+  const smart = !!(BY.navGroups && BY.navGroups.length && BY.ui);
+  const width = compact ? 76 : 264;
 
   useEffect(() => {
     document.body.style.overflow = mobileOpen ? "hidden" : "";
@@ -170,6 +193,14 @@ export default function AppShell({ view, children }) {
     document.addEventListener("keydown", esc);
     return () => { document.removeEventListener("keydown", esc); document.body.style.overflow = ""; };
   }, [mobileOpen]);
+  useEffect(() => {                                   // Ctrl/⌘+K — لوحة الأوامر من أي صفحة
+    if (!smart) return undefined;
+    const key = (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((p) => !p); } };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [smart]);
+  const toggleCompact = () => { const c = !compact; setCompact(c); savePrefs({ compact: c }); };
+  useEffect(() => { if (smart) applyScale(prefs().scale || 100); }, [smart]);
 
   return (
     <>
@@ -186,15 +217,15 @@ export default function AppShell({ view, children }) {
           {!desktopClosed && (
             <motion.aside
               initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 252, opacity: 1 }}
+              animate={{ width, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
               transition={{ type: "spring", stiffness: 400, damping: 40 }}
               className="sticky top-0 hidden h-screen shrink-0 flex-col overflow-y-auto overflow-x-hidden
                          bg-sink/25 backdrop-blur-xl
                          shadow-[inset_-1px_0_0_rgb(var(--ov-rgb)/0.07)] lg:flex"
               aria-label={bi("التنقّل الرئيسي", "Main navigation")}>
-              <div className="flex min-h-full w-[252px] flex-col p-4">
-                <SideContent view={view} />
+              <div className="flex min-h-full flex-col p-3" style={{ width }}>
+                <SideContent view={view} compact={compact} onCompact={smart ? toggleCompact : null} onPalette={() => setPalette(true)} />
               </div>
             </motion.aside>
           )}
@@ -215,7 +246,7 @@ export default function AppShell({ view, children }) {
                 className="fixed inset-y-0 z-[200] flex w-[280px] flex-col overflow-y-auto bg-ob-1 p-4
                            shadow-2xl lg:hidden start-0"
                 aria-label={bi("التنقّل الرئيسي", "Main navigation")}>
-                <SideContent view={view} />
+                <SideContent view={view} onPalette={() => { setMobileOpen(false); setPalette(true); }} />
               </motion.aside>
             </>
           )}
@@ -250,7 +281,20 @@ export default function AppShell({ view, children }) {
                 <Logo className="h-8 w-auto" />
               </a>
 
+              {smart && (
+                <button type="button" onClick={() => setPalette(true)} aria-label={bi("بحث سريع", "Quick search")}
+                        className="hidden cursor-pointer items-center gap-2 rounded-xl border-0 bg-ov/[0.05] px-3 py-2 text-[13px] text-ink-3
+                                   shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.08)] transition-colors hover:text-ink md:flex md:min-w-[260px]">
+                  <Icon name="search" size={15} />
+                  <span className="flex-1 text-start">{bi("ابحث أو انتقل إلى…", "Search or jump to…")}</span>
+                  <kbd className="rounded-md bg-ov/[0.08] px-1.5 py-0.5 font-mono text-[10.5px]">Ctrl K</kbd>
+                </button>
+              )}
               <nav className="ms-auto flex items-center gap-2">
+                {smart && <button type="button" onClick={() => setPalette(true)} aria-label={bi("بحث سريع", "Quick search")}
+                                  className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-transparent text-ink-2 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] md:hidden">
+                  <Icon name="search" size={16} /></button>}
+                {smart && <Bell />}
                 <ThemeToggle />
                 <a href={BY.urls.lang}
                    className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-bold
@@ -271,6 +315,7 @@ export default function AppShell({ view, children }) {
           </header>
 
           <main className="mx-auto w-full max-w-[1180px] flex-1 px-5 py-8">{children}</main>
+          {smart && <CommandPalette open={palette} onClose={() => setPalette(false)} />}
         </div>
       </div>
     </>

@@ -2,6 +2,7 @@
 جداول: users (لوحة التحكم)، bots، bot_users (مشتركو كل بوت للبث)،
 leads، orders، bookings، events (للتحليلات)."""
 import sqlite3, json, os, re, time, logging, hmac, hashlib
+import urllib.parse
 from contextlib import contextmanager
 
 log = logging.getLogger("database")
@@ -788,6 +789,7 @@ def init_db():
         _comment_tables(c)
         _crm_sync_tables(c)
         _call_tables(c)
+        _notify_tables(c)
 
 def _hot_indexes(c):
     """فهارس الاستعلامات الساخنة. EXPLAIN QUERY PLAN كان يُظهر مسحاً كاملاً لـ events و
@@ -2092,16 +2094,22 @@ def create_ticket(user_id, kind, subject, body):
                         "VALUES(?,?,?,'open',?,?)", (user_id, kind, subject, now, now)).lastrowid
         c.execute("INSERT INTO ticket_msgs(ticket_id,sender,body,via,created_at) VALUES(?,?,?,?,?)",
                   (tid, "user", body, "web", now))
+        _notify_staff(c, "ticket_new", {"subject": subject[:120], "user": _username(c, user_id)}, f"/admin/tickets#t{tid}")
         return tid
 
 def add_ticket_msg(tid, sender, body, via="web"):
-    """رسالة العميل تفتح التذكرة، ورد الفريق يجعلها «اتردّ عليها»."""
+    """رسالة العميل تفتح التذكرة، ورد الفريق يجعلها «اتردّ عليها». الطرف الآخر يصله إشعار."""
     now = int(time.time())
     with get_conn() as c:
         c.execute("INSERT INTO ticket_msgs(ticket_id,sender,body,via,created_at) VALUES(?,?,?,?,?)",
                   (tid, sender, body, via, now))
         c.execute("UPDATE tickets SET status=?, updated_at=? WHERE id=?",
                   ("answered" if sender == "staff" else "open", now, tid))
+        t = c.execute("SELECT user_id, subject FROM tickets WHERE id=?", (tid,)).fetchone()
+        if t and sender == "staff":
+            _notify(c, t["user_id"], "ticket_reply", {"subject": t["subject"][:120]}, f"/support#t{tid}")
+        elif t:
+            _notify_staff(c, "ticket_user", {"subject": t["subject"][:120], "user": _username(c, t["user_id"])}, f"/admin/tickets#t{tid}")
 
 def get_ticket(tid):
     with get_conn() as c:
@@ -5356,14 +5364,29 @@ def campaign_stats(cid):
     return s
 
 
-def list_campaigns(owner_id, limit=50, offset=0):
+CAMPAIGN_STATES = ("draft", "scheduled", "running", "done", "cancelled", "failed")
+
+
+def list_campaigns(owner_id, limit=50, offset=0, status=None):
+    """`status` تصفية اختيارية — من قائمة ثابتة فقط (غيرها يُتجاهل = الكل)."""
+    where, args = "cp.owner_id=?", [owner_id]
+    if status in CAMPAIGN_STATES:
+        where += " AND cp.status=?"
+        args.append(status)
     with get_conn() as c:
-        total = c.execute("SELECT COUNT(*) FROM campaigns WHERE owner_id=?", (owner_id,)).fetchone()[0]
+        total = c.execute(f"SELECT COUNT(*) FROM campaigns cp WHERE {where}", args).fetchone()[0]
         rows = [_campaign_row(r) for r in c.execute(
             "SELECT cp.*, b.name AS bot_name, u.username AS creator FROM campaigns cp"
             " LEFT JOIN bots b ON b.id=cp.bot_id LEFT JOIN users u ON u.id=cp.created_by"
-            " WHERE cp.owner_id=? ORDER BY cp.id DESC LIMIT ? OFFSET ?", (owner_id, int(limit), int(offset)))]
+            f" WHERE {where} ORDER BY cp.id DESC LIMIT ? OFFSET ?", args + [int(limit), int(offset)])]
     return rows, total
+
+
+def campaign_status_counts(owner_id):
+    """عدد الحملات لكل حالة ⇒ {status: n} — لعدّادات تبويبات صفحة البث."""
+    with get_conn() as c:
+        return {r[0]: r[1] for r in c.execute(
+            "SELECT status, COUNT(*) FROM campaigns WHERE owner_id=? GROUP BY status", (owner_id,))}
 
 
 def _contact_peer(row):
@@ -5793,12 +5816,16 @@ def _conv_touch(c, bot_id, peer):
     c.execute("INSERT OR IGNORE INTO conversations(bot_id,peer,last_at) VALUES(?,?,?)", (bot_id, peer, int(time.time())))
 
 
-def assign_conversation(bot_id, peer, user_id=None, team_id=None, takeover=True):
+def assign_conversation(bot_id, peer, user_id=None, team_id=None, takeover=True, actor=None):
     """مسؤول و/أو فريق المحادثة. إسنادها لموظف = تولٍّ بشري (البوت يسكت) ما لم `takeover=False`.
-    المستدعي يتحقق أن الموظف والفريق من الحساب."""
+    المستدعي يتحقق أن الموظف والفريق من الحساب. الموظف الجديد يصله إشعار — إلا من أسندها لنفسه (`actor`)."""
     now = int(time.time())
     with get_conn() as c:
         _conv_touch(c, bot_id, peer)
+        prev = c.execute("SELECT assignee_id, name FROM conversations WHERE bot_id=? AND peer=?", (bot_id, peer)).fetchone()
+        if user_id and user_id != actor and (not prev or prev["assignee_id"] != user_id):
+            _notify(c, user_id, "assigned", {"name": (prev["name"] if prev else "") or peer.split(":", 1)[-1]},
+                    f"/inbox?bot={bot_id}&peer={urllib.parse.quote(peer)}")
         c.execute("UPDATE conversations SET assignee_id=?, team_id=?,"
                   " status=CASE WHEN status='resolved' THEN 'open' ELSE status END, status_at=?"
                   " WHERE bot_id=? AND peer=?", (user_id, team_id, now, bot_id, peer))
@@ -5864,10 +5891,14 @@ def add_note(bot_id, peer, user_id, text, mention_ids=()):
         mid = c.execute("INSERT INTO messages(bot_id,peer,direction,sender,kind,text,created_at,user_id)"
                         " VALUES(?,?,?,?,?,?,?,?)", (bot_id, peer, "note", "human", "note", text, now, user_id)).lastrowid
         owner = c.execute("SELECT owner_id FROM bots WHERE id=?", (bot_id,)).fetchone()[0]
+        by = (c.execute("SELECT username FROM users WHERE id=?", (user_id,)).fetchone() or [""])[0]
+        name = (c.execute("SELECT name FROM conversations WHERE bot_id=? AND peer=?", (bot_id, peer)).fetchone() or [""])[0]
         for u in set(mention_ids):
             if u != user_id:
                 c.execute("INSERT INTO inbox_mentions(owner_id,user_id,bot_id,peer,message_id,by_user,created_at)"
                           " VALUES(?,?,?,?,?,?,?)", (owner, u, bot_id, peer, mid, user_id, now))
+                _notify(c, u, "mention", {"by": by, "name": name or peer.split(":", 1)[-1], "text": text[:140]},
+                        f"/inbox?bot={bot_id}&peer={urllib.parse.quote(peer)}")
     return mid
 
 
@@ -7037,6 +7068,226 @@ def ringing_calls(owner_id, since):
             " WHERE b.owner_id=? AND w.status IN ('ringing','answered','dialing') AND w.ended_at IS NULL"
             " AND (w.created_at>=? OR w.status!='ringing') AND w.created_at>?"
             " ORDER BY w.id", (owner_id, since, int(time.time()) - 4 * 3600))]
+
+
+# ════════════════════════ مركز الإشعارات ════════════════════════
+# تُخزَّن بنوعها وبياناتها (لا نصاً جاهزاً) — الواجهة تكتبها بلغة المستخدم. آخر 200 لكل مستخدم.
+NOTIFY_KEEP = 200
+
+
+def _notify_tables(c):
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS notifications(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            data_json TEXT NOT NULL DEFAULT '{}',
+            url TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            read_at INTEGER,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_notify_user ON notifications(user_id, id);
+    """)
+
+
+def _username(c, user_id):
+    r = c.execute("SELECT username FROM users WHERE id=?", (user_id,)).fetchone()
+    return r[0] if r else ""
+
+
+def _notify(c, user_id, kind, data, url="", dedupe=0):
+    """داخل معاملة المستدعي (نفس الاتصال — لا كاتب ثانٍ ينتظر القفل). `dedupe` ثوانٍ: لا تكرار لنفس النوع والرابط."""
+    if not user_id:
+        return
+    now = int(time.time())
+    if dedupe and c.execute("SELECT 1 FROM notifications WHERE user_id=? AND kind=? AND url=? AND created_at>? LIMIT 1",
+                            (user_id, kind, url, now - dedupe)).fetchone():
+        return
+    c.execute("INSERT INTO notifications(user_id,kind,data_json,url,created_at) VALUES(?,?,?,?,?)",
+              (user_id, kind, json.dumps(data or {}, ensure_ascii=False)[:2000], url[:500], now))
+    c.execute("DELETE FROM notifications WHERE user_id=? AND id <= (SELECT id FROM notifications WHERE user_id=?"
+              " ORDER BY id DESC LIMIT 1 OFFSET ?)", (user_id, user_id, NOTIFY_KEEP))
+
+
+def _notify_staff(c, kind, data, url):
+    for (sid,) in c.execute("SELECT id FROM users WHERE role IN ('admin','support') AND COALESCE(is_blocked,0)=0").fetchall():
+        _notify(c, sid, kind, data, url)
+
+
+def notify(user_id, kind, data, url="", dedupe=0):
+    """من خارج قاعدة البيانات (الدفع · التكاملات). لا يرمي — الإشعار لا يُسقط العملية الأصلية."""
+    try:
+        with get_conn() as c:
+            _notify(c, user_id, kind, data, url, dedupe)
+    except Exception:
+        pass
+
+
+def list_notifications(user_id, limit=30):
+    with get_conn() as c:
+        rows = [dict(r) for r in c.execute("SELECT id, kind, data_json, url, created_at, read_at FROM notifications"
+                                           " WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit))]
+        unread = c.execute("SELECT COUNT(*) FROM notifications WHERE user_id=? AND read_at IS NULL", (user_id,)).fetchone()[0]
+    for r in rows:
+        r["data"] = json.loads(r.pop("data_json") or "{}")
+    return rows, unread
+
+
+def mark_notifications_read(user_id, ids=None):
+    now = int(time.time())
+    with get_conn() as c:
+        if ids is None:
+            return c.execute("UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL", (now, user_id)).rowcount
+        ids = [int(i) for i in ids if str(i).isdigit()][:100]
+        if not ids:
+            return 0
+        return c.execute(f"UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL AND id IN ({','.join('?' * len(ids))})",
+                         (now, user_id, *ids)).rowcount
+
+
+def support_metrics(now=None, sla=4 * 3600):
+    """مؤشرات الدعم: المفتوحة · المنتظرة فوق حدّ الخدمة · متوسط أول رد (7 أيام) · نسبة الرد خلال ساعة · المحلولة."""
+    now = int(now or time.time())
+    week = now - 7 * 86400
+    with get_conn() as c:
+        opened = c.execute("SELECT COUNT(*) FROM tickets WHERE status='open'").fetchone()[0]
+        waiting = c.execute(
+            "SELECT COUNT(*) FROM tickets t WHERE t.status<>'closed' AND"
+            " (SELECT sender FROM ticket_msgs m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1)='user' AND"
+            " (SELECT created_at FROM ticket_msgs m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1)<?", (now - sla,)).fetchone()[0]
+        firsts = [r[0] for r in c.execute(
+            "SELECT (SELECT MIN(m.created_at) FROM ticket_msgs m WHERE m.ticket_id=t.id AND m.sender='staff') - t.created_at"
+            " FROM tickets t WHERE t.created_at>=?", (week,))]
+        answered = [x for x in firsts if x is not None and x >= 0]
+        closed = c.execute("SELECT COUNT(*) FROM tickets WHERE status='closed' AND updated_at>=?", (week,)).fetchone()[0]
+    return {"open": opened, "waiting": waiting, "new_week": len(firsts), "closed_week": closed,
+            "avg_first": int(sum(answered) / len(answered)) if answered else None,
+            "within_hour": round(100 * sum(1 for x in answered if x <= 3600) / len(firsts)) if firsts else None}
+
+
+def customer_360(user_ids):
+    """ملف العميل لفريق الدعم: الباقة وانتهاؤها · البوتات وحالتها · الرصيد · آخر دفعة · تذاكره — بلا أسرار."""
+    ids = [int(x) for x in set(user_ids) if x]
+    if not ids:
+        return {}
+    q = ",".join("?" * len(ids))
+    out = {}
+    with get_conn() as c:
+        for r in c.execute(f"SELECT u.id, u.username, u.email, u.email_verified_at, u.created_at, u.is_blocked,"
+                           f" s.plan, s.status sub_status, s.expires_at FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id"
+                           f" WHERE u.id IN ({q})", ids):
+            out[r["id"]] = {"username": r["username"], "email": r["email"] or "", "verified": bool(r["email_verified_at"]),
+                            "since": r["created_at"], "blocked": bool(r["is_blocked"]),
+                            "plan": r["plan"] if r["sub_status"] == "active" else "free", "expires": r["expires_at"],
+                            "bots": [], "tickets": 0, "last_payment": None, "wallet": 0}
+        for r in c.execute(f"SELECT owner_id, name, channel, is_active FROM bots WHERE owner_id IN ({q}) ORDER BY id", ids):
+            if r["owner_id"] in out:
+                out[r["owner_id"]]["bots"].append({"name": r["name"], "channel": r["channel"] or "telegram", "active": bool(r["is_active"])})
+        for r in c.execute(f"SELECT user_id, COUNT(*) n FROM tickets WHERE user_id IN ({q}) GROUP BY user_id", ids):
+            out[r["user_id"]]["tickets"] = r["n"]
+        for r in c.execute(f"SELECT user_id, plan, amount, status, created_at FROM payments WHERE id IN"
+                           f" (SELECT MAX(id) FROM payments WHERE user_id IN ({q}) GROUP BY user_id)", ids):
+            out[r["user_id"]]["last_payment"] = {"plan": r["plan"], "amount": r["amount"], "status": r["status"], "at": r["created_at"]}
+    for i in out:
+        try:
+            out[i]["wallet"] = wallet_balance(i)
+        except Exception:
+            pass
+    return out
+
+
+def admin_revenue_stats(prices, now=None):
+    """للأدمن: الإيراد الشهري المتكرّر (تقديري بسعر الباقة الشهري) · اشتراكات جديدة وانتهت (30 يوماً) · معتمد 30 يوماً."""
+    now = int(now or time.time())
+    month = now - 30 * 86400
+    with get_conn() as c:
+        active = c.execute("SELECT plan, COUNT(*) n FROM subscriptions WHERE status='active' AND plan<>'free'"
+                           " AND (expires_at IS NULL OR expires_at>?) GROUP BY plan", (now,)).fetchall()
+        new = c.execute("SELECT COUNT(DISTINCT user_id) FROM payments WHERE status='approved' AND decided_at>=?", (month,)).fetchone()[0]
+        ended = c.execute("SELECT COUNT(*) FROM subscriptions WHERE plan<>'free' AND expires_at BETWEEN ? AND ?", (month, now)).fetchone()[0]
+        approved = c.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE status='approved' AND decided_at>=?", (month,)).fetchone()[0]
+        stale = c.execute("SELECT COUNT(*) FROM payments WHERE status='pending' AND created_at<?", (now - 86400,)).fetchone()[0]
+    mrr = sum((prices.get(r["plan"]) or 0) * r["n"] for r in active)
+    return {"mrr": round(mrr, 2), "active_paid": sum(r["n"] for r in active), "new_30": new, "ended_30": ended,
+            "approved_30": round(approved or 0, 2), "stale_payments": stale,
+            "by_plan": {r["plan"]: r["n"] for r in active}}
+
+
+def owner_signals(owner_id, now=None):
+    """ما تُبنى عليه اقتراحات الرئيسية الذكية — أعداد فقط."""
+    now = int(now or time.time())
+    with get_conn() as c:
+        bots = [dict(r) for r in c.execute("SELECT id, channel FROM bots WHERE owner_id=?", (owner_id,))]
+        ids = [b["id"] for b in bots] or [0]
+        q = ",".join("?" * len(ids))
+        one = lambda sql, *a: c.execute(sql, (*ids, *a)).fetchone()[0] or 0
+        return {
+            "channels": sorted({b["channel"] or "telegram" for b in bots}),
+            "dormant": one(f"SELECT COUNT(*) FROM bot_users WHERE bot_id IN ({q}) AND opted_out=0 AND last_in_at<?", now - 30 * 86400),
+            "leads_week": one(f"SELECT COUNT(*) FROM leads WHERE bot_id IN ({q}) AND created_at>=?", now - 7 * 86400),
+            "leads_prev": one(f"SELECT COUNT(*) FROM leads WHERE bot_id IN ({q}) AND created_at>=? AND created_at<?",
+                              now - 14 * 86400, now - 7 * 86400),
+            "stale_pay": c.execute("SELECT COUNT(*) FROM chat_payments WHERE owner_id=? AND status='pending' AND created_at<? AND expires_at>?",
+                                   (owner_id, now - 2 * 3600, now)).fetchone()[0],
+            "teams": c.execute("SELECT COUNT(*) FROM inbox_teams WHERE owner_id=?", (owner_id,)).fetchone()[0],
+            "integrations": c.execute("SELECT COUNT(*) FROM integrations WHERE owner_id=?", (owner_id,)).fetchone()[0],
+            "sequences": c.execute("SELECT COUNT(*) FROM sequences WHERE owner_id=?", (owner_id,)).fetchone()[0],
+            "pay_ready": bool(c.execute("SELECT 1 FROM settings WHERE user_id=? AND key='pay_gateway' AND value<>''", (owner_id,)).fetchone()),
+        }
+
+
+def recent_signups(limit=6):
+    """أحدث المسجّلين للأدمن والدعم — بلا كلمات مرور ولا أسرار."""
+    with get_conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT u.id, u.username, u.created_at, u.email_verified_at IS NOT NULL verified,"
+            " COALESCE((SELECT s.plan FROM subscriptions s WHERE s.user_id=u.id AND s.status='active'), 'free') plan,"
+            " (SELECT COUNT(*) FROM bots b WHERE b.owner_id=u.id) bots"
+            " FROM users u ORDER BY u.id DESC LIMIT ?", (limit,))]
+
+
+# ════════════════════════ الرئيسية — أرقام اليوم لصاحب الحساب ════════════════════════
+def home_metrics(owner_id, tz=3 * 3600, now=None):
+    """أرقام «مركز القيادة» في استعلامات قليلة مفهرسة. `tz` إزاحة المنطقة (السعودية افتراضياً) لحدود اليوم."""
+    now = int(now or time.time())
+    day0 = (now + tz) // 86400 * 86400 - tz
+    week0, span0 = now - 7 * 86400, day0 - 13 * 86400
+    with get_conn() as c:
+        bots = [r[0] for r in c.execute("SELECT id FROM bots WHERE owner_id=?", (owner_id,))]
+        if not bots:
+            return {"bots": 0}
+        q = ",".join("?" * len(bots))
+        one = lambda sql, *a: c.execute(sql, (*bots, *a)).fetchone()[0] or 0
+        out = {
+            "bots": len(bots),
+            "bots_live": one(f"SELECT COUNT(*) FROM bots WHERE id IN ({q}) AND is_active=1"),
+            "msgs_today": one(f"SELECT COUNT(*) FROM messages WHERE bot_id IN ({q}) AND direction='in' AND created_at>=?", day0),
+            "chats_today": one(f"SELECT COUNT(DISTINCT bot_id || '|' || peer) FROM messages WHERE bot_id IN ({q})"
+                               " AND direction='in' AND created_at>=?", day0),
+            "leads_week": one(f"SELECT COUNT(*) FROM leads WHERE bot_id IN ({q}) AND created_at>=?", week0),
+            "subscribers": one(f"SELECT COUNT(*) FROM bot_users WHERE bot_id IN ({q})"),
+            "new_subs_week": one(f"SELECT COUNT(*) FROM bot_users WHERE bot_id IN ({q}) AND created_at>=?", week0),
+        }
+        out["contacts_week"] = c.execute("SELECT COUNT(*) FROM contacts WHERE owner_id=? AND created_at>=?",
+                                         (owner_id, week0)).fetchone()[0]
+        out["paid_week"] = [dict(r) for r in c.execute(
+            "SELECT currency, SUM(amount) total, COUNT(*) n FROM chat_payments WHERE owner_id=? AND status='paid'"
+            " AND paid_at>=? GROUP BY currency ORDER BY total DESC", (owner_id, week0))]
+        out["pay_pending"] = c.execute("SELECT COUNT(*) FROM chat_payments WHERE owner_id=? AND status='pending'"
+                                       " AND expires_at>?", (owner_id, now)).fetchone()[0]
+        out["integ_failed"] = c.execute(
+            "SELECT COUNT(*) FROM integration_events e JOIN integrations i ON i.id=e.integration_id"
+            " WHERE i.owner_id=? AND e.status='failed' AND e.created_at>=?", (owner_id, now - 86400)).fetchone()[0]
+        # نشاط 14 يوماً: الوارد والصادر لكل يوم بتوقيت الحساب
+        series = {}
+        for d, direction, n in c.execute(
+                f"SELECT (created_at + ?) / 86400 d, direction, COUNT(*) FROM messages WHERE bot_id IN ({q})"
+                " AND created_at>=? AND direction IN ('in','out') GROUP BY d, direction", (tz, *bots, span0)):
+            series.setdefault(d, {"in": 0, "out": 0})[direction] = n
+        first = (span0 + tz) // 86400
+        out["activity"] = [{"d": (first + i) * 86400 - tz, **series.get(first + i, {"in": 0, "out": 0})} for i in range(14)]
+    return out
 
 
 def comment_recent(bot_id, limit=30):

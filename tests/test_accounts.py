@@ -290,7 +290,7 @@ class OAuthTests(unittest.TestCase):
         self.assertEqual(c.get("/dashboard").status_code, 200)
         # الدخول التالي بجوجل مباشرة
         r = self._go(_client(), "google", {"sub": "g-1", "email": "mona@gmail.com", "email_verified": True, "name": "M"})
-        self.assertIn("/dashboard", r.headers["Location"])
+        self.assertIn("/home", r.headers["Location"])         # الرئيسية (ومن بلا بوتات تحوّله لـ /dashboard)
 
     def test_facebook_without_email_must_give_and_verify_one(self):
         c = _client()
@@ -305,7 +305,7 @@ class OAuthTests(unittest.TestCase):
         v = db.create_user("verified_acc", auth.hash_password(STRONG_PW), email="v@x.co")
         db.mark_email_verified(v)
         r = self._go(_client(), "google", {"sub": "g-v", "email": "v@x.co", "email_verified": True, "name": "V"})
-        self.assertIn("/dashboard", r.headers["Location"])
+        self.assertIn("/home", r.headers["Location"])
         self.assertEqual(db.get_identity("google", "g-v")["user_id"], v)
         # بريد غير مؤكَّد: من سجّل حساباً ببريد غيره لا يستولي على صاحبه الحقيقي حين يدخل بجوجل
         db.create_user("squatter", auth.hash_password(STRONG_PW), email="victim@x.co")

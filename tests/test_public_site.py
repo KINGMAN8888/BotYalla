@@ -98,7 +98,8 @@ class HomeTests(unittest.TestCase):
         self.assertIn("/login", r.headers["Location"])
         c = _client()
         r = c.post("/login", data={"username": "visitor1", "password": TEST_PW, "csrf_token": "tk"})
-        self.assertTrue(r.headers["Location"].endswith("/dashboard"))
+        self.assertTrue(r.headers["Location"].endswith("/home"))
+        self.assertTrue(c.get("/home").headers["Location"].endswith("/dashboard"), "بلا بوتات ⇒ رحلة الإعداد")
         self.assertEqual(c.get("/dashboard").status_code, 200)
 
     def test_the_old_landing_link_redirects_permanently_and_keeps_the_ref(self):

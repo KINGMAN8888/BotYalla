@@ -1,7 +1,7 @@
 /* الدفع داخل المحادثة — المرحلة 9: بوابة صاحب الحساب (Moyasar/Tap) · سجل الروابط وحالاتها · مجاميع 30 يوماً.
    المفتاح السرّي يُكتب ولا يُقرأ أبداً (مختوم في الخادم)؛ المال يذهب مباشرة لحساب النشاط في البوابة. */
 import { useState } from "react";
-import { BY, P, bi, AR, Icon, Card, Btn, Field, Input, Select, Pill, Empty, PageHead, num, Modal } from "../kit.jsx";
+import { BY, P, bi, AR, Icon, Card, Btn, Field, Input, Select, Pill, Empty, PageHead, num, Modal, Kpi } from "../kit.jsx";
 
 async function call(url, body, method = "POST") {
   try {
@@ -42,15 +42,6 @@ const ST = {
   failed: [bi("فشلت", "Failed"), "off"], expired: [bi("انتهت", "Expired"), "mute"], cancelled: [bi("أُلغيت", "Cancelled"), "mute"],
 };
 
-function Stat({ label, value, sub }) {
-  return (
-    <div className="rounded-2xl bg-ov/[0.04] px-4 py-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.06)]">
-      <div className="text-[11px] font-extrabold uppercase tracking-wider text-ink-3">{label}</div>
-      <div className="tnum mt-1 text-[22px] font-extrabold text-ink">{value}</div>
-      {sub && <div className="tnum text-[11.5px] text-ink-3">{sub}</div>}
-    </div>
-  );
-}
 
 function Gateway({ cfg, setCfg }) {
   const [edit, setEdit] = useState(null);
@@ -167,11 +158,11 @@ export default function ChatPayments() {
                 sub={bi("احجز وادفع دون مغادرة واتساب: رابط دفع بزر من الفلو أو من الصندوق المشترك، تأكيد تلقائي وإيصال للعميل.", "Book and pay without leaving WhatsApp: a pay button from a flow or the Team inbox, automatic confirmation and a receipt.")} />
       <Gateway cfg={cfg} setCfg={setCfg} />
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label={bi("المحصّل (30 يوماً)", "Collected (30 days)")} value={paid.length ? money(paid[0].total, paid[0].currency) : "0"}
+        <Kpi icon="coins" tone="text-au-teal" label={bi("المحصّل (30 يوماً)", "Collected (30 days)")} value={paid.length ? money(paid[0].total, paid[0].currency) : "0"}
               sub={paid.slice(1).map((t) => money(t.total, t.currency)).join(" · ") || null} />
-        <Stat label={bi("دفعات ناجحة", "Paid")} value={num(paidN)} />
-        <Stat label={bi("بانتظار الدفع", "Awaiting")} value={num(count("pending"))} />
-        <Stat label={bi("نسبة الإتمام", "Completion rate")} value={`${all ? Math.round((paidN / all) * 100) : 0}%`} sub={bi(`من ${num(all)} رابط`, `of ${num(all)} links`)} />
+        <Kpi icon="check" label={bi("دفعات ناجحة", "Paid")} value={num(paidN)} />
+        <Kpi icon="clock" tone="text-yellow-300" label={bi("بانتظار الدفع", "Awaiting")} value={num(count("pending"))} />
+        <Kpi icon="chart" label={bi("نسبة الإتمام", "Completion rate")} value={`${all ? Math.round((paidN / all) * 100) : 0}%`} sub={bi(`من ${num(all)} رابط`, `of ${num(all)} links`)} />
       </div>
       <Card>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

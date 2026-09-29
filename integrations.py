@@ -290,6 +290,9 @@ async def run(integ, rule, ev, phone, eid):
         log.exception("integration %s event %s failed", integ["id"], eid)
         status, detail = "failed", type(e).__name__
     db.set_integration_event(eid, status, detail)
+    if status == "failed":                           # إشعار لصاحب الحساب — مرة في الساعة لكل تكامل (لا إغراق)
+        db.notify(integ["owner_id"], "integ_failed", {"name": integ["name"], "detail": str(detail)[:60]},
+                  f"/integrations#i{integ['id']}", dedupe=3600)
     return status, detail
 
 

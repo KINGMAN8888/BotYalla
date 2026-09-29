@@ -32,6 +32,7 @@ const seqs       = () => import("./app/views/Sequences.jsx");
 const growthV    = () => import("./app/views/Growth.jsx");
 const chatPay    = () => import("./app/views/ChatPayments.jsx");
 const integ      = () => import("./app/views/Integrations.jsx");
+const homeV      = () => import("./app/views/Home.jsx");
 const developer = () => import("./app/views/Developer.jsx");
 
 /* خريطة العرض ← [وحدته، اسم المكوّن المصدَّر]. Flask يحدّد العرض عبر data-view. */
@@ -81,6 +82,7 @@ const VIEWS = {
   growth:           [growthV, "default"],
   chat_payments:    [chatPay, "default"],
   integrations:     [integ, "default"],
+  home:             [homeV, "default"],
   developer:        [developer, "default"],
 };
 

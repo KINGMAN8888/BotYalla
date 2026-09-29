@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "motion/react";
 import {
-  BY, P, t, bi, Icon, Card, Btn, Field, Input, Select, Form, Grid, Stat,
+  BY, P, t, bi, Icon, Card, Btn, Field, Input, Select, Form, Kpi, Tabs,
   Pill, Empty, PageHead, SectionTitle, Reveal, num,
 } from "../kit.jsx";
 import { postJSON } from "../media.jsx";
@@ -1274,6 +1274,61 @@ function FirstBotPage() {
   );
 }
 
+/* قائمة البوتات — بحث وتصفية بالحالة والقناة. لحساب فيه بوت أو اثنان لا داعي لشريط أدوات،
+   فيظهر من ثلاثة بوتات فأكثر. التصفية محلية (البوتات كلها في الصفحة أصلاً). */
+const CH_NAME = { telegram: "Telegram", whatsapp: "WhatsApp", messenger: "Messenger", instagram: "Instagram" };
+function BotList({ bots }) {
+  const [q, setQ] = useState("");
+  const [state, setState] = useState("all");
+  const [ch, setCh] = useState("");
+  const chans = [...new Set(bots.map((b) => b.channel || "telegram"))];
+  const on = bots.filter((b) => b.running).length;
+  const needle = q.trim().toLowerCase();
+  const list = bots.filter((b) =>
+    (state === "all" || (state === "on") === !!b.running)
+    && (!ch || (b.channel || "telegram") === ch)
+    && (!needle || (b.name || "").toLowerCase().includes(needle)));
+  const tools = bots.length >= 3;
+  return (
+    <Card className="mb-6">
+      <SectionTitle icon="bot" extra={<span className="text-[13px] text-ink-3">{bots.length}</span>}>
+        {t("my_bots")}
+      </SectionTitle>
+      {tools && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Tabs size="sm" className="!mb-0" value={state} onChange={setState} items={[
+            ["all", bi("الكل", "All"), null, bots.length],
+            ["on", t("running"), null, on],
+            ["off", t("stopped"), null, bots.length - on],
+          ]} />
+          {chans.length > 1 && (
+            <Select className="!w-auto min-w-[150px]" value={ch} onChange={(e) => setCh(e.target.value)}>
+              <option value="">{bi("كل القنوات", "All channels")}</option>
+              {chans.map((c) => <option key={c} value={c}>{CH_NAME[c] || c}</option>)}
+            </Select>
+          )}
+          <div className="relative min-w-[180px] flex-1">
+            <Icon name="search" size={16} className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-ink-3" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} className="!ps-9"
+                   placeholder={bi("ابحث باسم البوت", "Search bot name")} />
+          </div>
+        </div>
+      )}
+      {!bots.length ? (
+        <Empty icon="bot" title={t("no_bots")} text={t("lp_step1_d")}
+               action={<Btn icon="plus" href="#create">{t("create_bot")}</Btn>} />
+      ) : list.length ? (
+        <div className="grid gap-4 md:grid-cols-2">
+          {list.map((b, i) => <BotCard key={b.id} b={b} i={i} />)}
+        </div>
+      ) : (
+        <Empty icon="search" title={bi("لا بوتات مطابقة", "No matching bots")}
+               text={bi("جرّب بحثاً أو تصفية أخرى.", "Try another search or filter.")} />
+      )}
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   if (P.focus === "first_bot") return <FirstBotPage />;
   const { bots = [], total = {}, onboarding = {}, oneTap = {} } = P;
@@ -1282,8 +1337,11 @@ export default function Dashboard() {
   const quick = !!oneTap.available;
   return (
     <>
+      {/* الترحيب صار في «الرئيسية» — هنا صفحة البوتات نفسها. من لم ينشئ بوتاً بعد
+          (تحوّله الرئيسية إلى هنا) يبقى يرى الترحيب. */}
       <PageHead
-        title={`${t("welcome_user")} ${BY.user.name}`}
+        icon={fresh ? undefined : "bot"}
+        title={fresh ? `${t("welcome_user")} ${BY.user.name}` : t("my_bots")}
         sub={t("dash_sub")}
         actions={<Btn icon="plus" href={quick ? "#onetap" : "#create"}>{t("create_bot")}</Btn>}
       />
@@ -1319,29 +1377,15 @@ export default function Dashboard() {
 
       {/* أربعة أصفار في وجه من لم ينشئ بوتاً بعد ليست معلومة — هي إحباط. */}
       {!fresh && (
-        <Grid cols={4} className="mb-7">
-          <Stat icon="users"    value={total.subscribers} label={t("stat_subs")} />
-          <Stat icon="store"    value={total.orders}      label={t("stat_orders")} />
-          <Stat icon="calendar" value={total.bookings}    label={t("stat_bookings")} />
-          <Stat icon="wallet"   value={total.revenue}     label={t("stat_revenue")} />
-        </Grid>
+        <div className="mb-7 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Kpi icon="users"    value={num(total.subscribers)} label={t("stat_subs")} />
+          <Kpi icon="store"    value={num(total.orders)}      label={t("stat_orders")} tone="text-amber-300" />
+          <Kpi icon="calendar" value={num(total.bookings)}    label={t("stat_bookings")} tone="text-au-violet" />
+          <Kpi icon="wallet"   value={num(total.revenue)}     label={t("stat_revenue")} tone="text-au-teal" />
+        </div>
       )}
 
-      {!fresh && (
-        <Card className="mb-6">
-          <SectionTitle icon="bot" extra={<span className="text-[13px] text-ink-3">{bots.length}</span>}>
-            {t("my_bots")}
-          </SectionTitle>
-          {bots.length ? (
-            <div className="grid gap-4 md:grid-cols-2">
-              {bots.map((b, i) => <BotCard key={b.id} b={b} i={i} />)}
-            </div>
-          ) : (
-            <Empty icon="bot" title={t("no_bots")} text={t("lp_step1_d")}
-                   action={<Btn icon="plus" href="#create">{t("create_bot")}</Btn>} />
-          )}
-        </Card>
-      )}
+      {!fresh && <BotList bots={bots} />}
 
       <div className="mb-6"><CreateWizard collapsed={quick} /></div>
 

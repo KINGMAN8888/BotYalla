@@ -2,7 +2,7 @@
    تبويبات: الجهات · الشرائح · الشركات · الحقول · الوسوم. البيانات عبر /api/crm/* (JSON + X-CSRF-Token)
    والخادم هو من يتحقّق من كل شيء — تفعيل الأزرار هنا راحة لا أمان. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BY, P, t, bi, AR, Icon, Card, Btn, Field, Input, Textarea, Select, Pill, Empty, PageHead, num, Modal, Toggle } from "../kit.jsx";
+import { BY, P, t, bi, AR, Icon, Card, Btn, Field, Input, Textarea, Select, Pill, Empty, PageHead, num, Modal, Tabs, Toggle } from "../kit.jsx";
 
 /* ------------------------------------------------------------ شبكة */
 async function call(url, body, method = "POST") {
@@ -1060,15 +1060,7 @@ export default function Contacts() {
       <PageHead icon="users" title={t("contacts_title")}
                 sub={bi("كل عملائك من كل القنوات في مكان واحد — صنّفهم بالوسوم والحقول، واستهدفهم بالشرائح.",
                         "Every customer from every channel in one place — label them with tags and fields, target them with segments.")} />
-      <div role="tablist" className="mb-5 flex gap-1 overflow-x-auto rounded-2xl bg-sink/20 p-1">
-        {tabs.map(([k, l, i]) => (
-          <button key={k} role="tab" type="button" aria-selected={tab === k} onClick={() => go(k)}
-                  className={`flex shrink-0 cursor-pointer items-center gap-2 rounded-xl border-0 px-4 py-2 text-[13.5px] font-bold transition-colors
-                              ${tab === k ? "bg-au-violet/80 text-white shadow" : "bg-transparent text-ink-3 hover:bg-ov/5 hover:text-ink"}`}>
-            <Icon name={i} size={15} />{l}
-          </button>
-        ))}
-      </div>
+      <Tabs items={tabs} value={tab} onChange={go} />
       {tab === "contacts" && <ContactsTab meta={meta} setMeta={setMeta} segment={segment} setSegment={setSegment} />}
       {tab === "segments" && <SegmentsTab meta={meta} setMeta={setMeta} openSegment={(id) => { setSegment(id); go("contacts"); }} />}
       {tab === "companies" && <CompaniesTab meta={meta} setMeta={setMeta} />}

@@ -3,7 +3,7 @@
    إشاراتي · معلّقة · مغلقة · الفِرق) · مسؤول وفريق وحالة · ردّ أو ملاحظة داخلية بـ@إشارة · ردود جاهزة بـ«/» ·
    لوحة جهة الاتصال. الإرسال والتولّي بمسارات صندوق البوت نفسها في الخادم؛ التحديث بالاستطلاع. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BY, P, t, bi, AR, Icon, Card, Btn, Field, Input, Textarea, Select, Pill, Empty, PageHead, num, Modal } from "../kit.jsx";
+import { BY, P, t, bi, AR, Icon, Card, Btn, Field, Input, Textarea, Select, Pill, Empty, PageHead, num, Modal, Tabs } from "../kit.jsx";
 import { AssetPicker } from "../media.jsx";
 import { payErr } from "./ChatPayments.jsx";
 import { CallBar } from "../calls.jsx";
@@ -412,9 +412,7 @@ function Settings({ open, onClose, teams, setTeams, canned, setCanned }) {
     ...((P.bots || []).some((b) => b.channel === "whatsapp") ? [["calls", bi("المكالمات", "Calls")]] : [])];
   return (
     <Modal open={open} onClose={onClose} wide title={bi("إعدادات الصندوق", "Inbox settings")} icon="settings">
-      <div className="mb-4 flex flex-wrap gap-1">
-        {tabs.map(([k, l]) => <button key={k} type="button" onClick={() => setTab(k)} className={`cursor-pointer rounded-lg border-0 px-3 py-1.5 text-[13px] font-bold ${tab === k ? "bg-au-violet/20 text-ink" : "bg-transparent text-ink-3 hover:bg-ov/[0.05]"}`}>{l}</button>)}
-      </div>
+      <Tabs size="sm" items={tabs} value={tab} onChange={setTab} />
       {err && <div className="mb-3 rounded-xl bg-red-400/10 px-3 py-2 text-[13px] font-bold text-red-400">{err}</div>}
 
       {tab === "teams" && (edit ? (

@@ -1,7 +1,7 @@
 /* النمو والإعلانات — المرحلة 7: روابط التتبّع وQR · تقرير إعلانات Click-to-WhatsApp و Conversions API ·
    ودجت الموقع (زر واتساب + محادثة ويب مع البوت). الإحصاءات من الخادم؛ الأسرار (رمز CAPI) لا تعود أبداً. */
 import { useState } from "react";
-import { BY, P, bi, AR, Icon, Card, Btn, Field, Input, Textarea, Select, Pill, Empty, PageHead, num, Modal, Toggle } from "../kit.jsx";
+import { BY, P, bi, AR, Icon, Card, Btn, Field, Input, Textarea, Select, Pill, Empty, PageHead, num, Modal, Tabs, Kpi, Toggle } from "../kit.jsx";
 
 async function call(url, body, method = "POST") {
   try {
@@ -24,15 +24,6 @@ const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const fmt = (ts) => (ts ? new Date(ts * 1000).toLocaleDateString(AR ? "ar-EG" : "en-GB", { day: "2-digit", month: "short" }) : "—");
 const copy = (s) => { try { navigator.clipboard.writeText(s); } catch { /* */ } };
 
-function Stat({ label, value, sub }) {
-  return (
-    <div className="rounded-2xl bg-ov/[0.04] px-4 py-3 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.06)]">
-      <div className="text-[11px] font-extrabold uppercase tracking-wider text-ink-3">{label}</div>
-      <div className="tnum mt-1 text-[22px] font-extrabold text-ink">{value}</div>
-      {sub && <div className="tnum text-[11.5px] text-ink-3">{sub}</div>}
-    </div>
-  );
-}
 
 /* ------------------------------------------------------------ روابط التتبّع */
 function Links() {
@@ -54,10 +45,10 @@ function Links() {
   const tot = links.reduce((a, l) => ({ c: a.c + l.clicks, v: a.v + l.conversations, d: a.d + l.leads }), { c: 0, v: 0, d: 0 });
   return <>
     <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <Stat label={bi("روابط", "Links")} value={num(links.length)} />
-      <Stat label={bi("نقرات", "Clicks")} value={num(tot.c)} />
-      <Stat label={bi("محادثات", "Conversations")} value={num(tot.v)} sub={`${pct(tot.v, tot.c)}% ${bi("من النقرات", "of clicks")}`} />
-      <Stat label={bi("إدخالات", "Leads")} value={num(tot.d)} sub={`${pct(tot.d, tot.v)}% ${bi("من المحادثات", "of chats")}`} />
+      <Kpi icon="link" label={bi("روابط", "Links")} value={num(links.length)} />
+      <Kpi icon="arrow" label={bi("نقرات", "Clicks")} value={num(tot.c)} />
+      <Kpi icon="chat" label={bi("محادثات", "Conversations")} value={num(tot.v)} sub={`${pct(tot.v, tot.c)}% ${bi("من النقرات", "of clicks")}`} />
+      <Kpi icon="download" label={bi("إدخالات", "Leads")} value={num(tot.d)} sub={`${pct(tot.d, tot.v)}% ${bi("من المحادثات", "of chats")}`} />
     </div>
     <Card>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -128,10 +119,10 @@ function Ads() {
   const wa = bots.filter((b) => b.capi);
   return <>
     <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <Stat label={bi("إعلانات جلبت محادثات", "Ads with chats")} value={num(ads.length)} />
-      <Stat label={bi("عملاء من الإعلانات", "Customers from ads")} value={num(tot.p)} />
-      <Stat label={bi("إدخالات", "Leads")} value={num(tot.l)} sub={`${pct(tot.l, tot.p)}%`} />
-      <Stat label={bi("تحويلات أُرسلت لـ Meta", "Conversions sent to Meta")} value={num(tot.c)} />
+      <Kpi icon="megaphone" label={bi("إعلانات جلبت محادثات", "Ads with chats")} value={num(ads.length)} />
+      <Kpi icon="users" label={bi("عملاء من الإعلانات", "Customers from ads")} value={num(tot.p)} />
+      <Kpi icon="download" label={bi("إدخالات", "Leads")} value={num(tot.l)} sub={`${pct(tot.l, tot.p)}%`} />
+      <Kpi icon="bolt" label={bi("تحويلات أُرسلت لـ Meta", "Conversions sent to Meta")} value={num(tot.c)} />
     </div>
     <Card className="mb-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -450,14 +441,7 @@ export default function Growth() {
     <>
       <PageHead icon="rocket" title={bi("النمو والإعلانات", "Growth & ads")}
                 sub={bi("اعرف من أين يأتي عملاؤك: روابط وQR لكل حملة، أداء إعلانات واتساب، وودجت لموقعك.", "Know where customers come from: a link and QR per campaign, WhatsApp ad performance, and a widget for your website.")} />
-      <div className="mb-4 flex flex-wrap gap-1.5">
-        {tabs.map(([k, l, i]) => (
-          <button key={k} type="button" onClick={() => { setTab(k); try { history.replaceState(null, "", `?tab=${k}`); } catch { /* */ } }}
-                  className={`flex cursor-pointer items-center gap-1.5 rounded-xl border-0 px-3.5 py-2 text-[13.5px] font-bold ${tab === k ? "bg-au-violet/20 text-ink" : "bg-ov/[0.04] text-ink-3 hover:bg-ov/[0.07]"}`}>
-            <Icon name={i} size={14} />{l}
-          </button>
-        ))}
-      </div>
+      <Tabs items={tabs} value={tab} onChange={setTab} sync />
       {tab === "links" && <Links />}
       {tab === "ads" && <Ads />}
       {tab === "comments" && <Comments />}

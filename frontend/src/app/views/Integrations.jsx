@@ -1,7 +1,7 @@
 /* التكاملات — المرحلة 9: سلة · زد · Shopify · WooCommerce · Webhook (Zapier / Make / محرك الحجز).
    حدث من المتجر ⇒ قالب واتساب معتمد بمتغيّرات الطلب · وسوم · تسلسل متابعة. السرّ يُكتب ولا يُقرأ أبداً. */
 import { useEffect, useState } from "react";
-import { BY, P, bi, AR, Icon, Card, Btn, Field, Input, Select, Pill, Empty, PageHead, num, Modal, Toggle } from "../kit.jsx";
+import { BY, P, bi, AR, Icon, Card, Btn, Field, Input, Select, Pill, Empty, PageHead, num, Modal, Tabs, Toggle } from "../kit.jsx";
 
 async function call(url, body, method = "POST") {
   try {
@@ -241,11 +241,7 @@ function Editor({ item, onClose, onSaved }) {
   return (
     <Modal open wide onClose={onClose} title={item.name} icon="link"
            footer={<><Btn variant="ghost" onClick={onClose}>{bi("إلغاء", "Cancel")}</Btn>{P.canManage && <Btn onClick={save}>{bi("حفظ", "Save")}</Btn>}</>}>
-      <div className="mb-3 flex gap-1.5">
-        {[["rules", bi("القواعد", "Rules")], ["setup", bi("الربط", "Setup")]].map(([k, l]) => (
-          <button key={k} type="button" onClick={() => setTab(k)} className={`cursor-pointer rounded-xl border-0 px-3.5 py-2 text-[13px] font-bold ${tab === k ? "bg-au-violet/20 text-ink" : "bg-ov/[0.04] text-ink-3"}`}>{l}</button>
-        ))}
-      </div>
+      <Tabs size="sm" className="!mb-3" items={[["rules", bi("القواعد", "Rules"), "bolt"], ["setup", bi("الربط", "Setup"), "link"]]} value={tab} onChange={setTab} />
       {err && <div className="mb-3 rounded-xl bg-red-400/10 px-3 py-2 text-[13px] font-bold text-red-400">{err}</div>}
       {tab === "setup" && <div className="grid gap-3">
         {sheet ? (

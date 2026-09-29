@@ -2,7 +2,7 @@
    نظرة عامة بالحالات · جدول الحملات بدوائر النِّسب · معالج من 3 خطوات (قالب ← جمهور ← جدولة)
    · تفاصيل الحملة وإعادة الاستهداف. التكلفة المعروضة تقدير؛ الخادم يعيد حسابها من Meta عند الإطلاق. */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BY, P, t, bi, AR, Icon, Card, Btn, Field, Input, Select, Pill, Empty, PageHead, num, Modal, Toggle } from "../kit.jsx";
+import { BY, P, t, bi, AR, Icon, Card, Btn, Field, Input, Select, Pill, Empty, PageHead, num, Modal, Toggle, Kpi, Tabs } from "../kit.jsx";
 import { AssetPicker } from "../media.jsx";
 import { WaPreview, fromComponents } from "../wa_preview.jsx";
 
@@ -406,17 +406,19 @@ function Details({ id, onClose, onRetarget, reload }) {
 
 /* ------------------------------------------------------------ الصفحة */
 export default function Broadcasts() {
-  const [data, setData] = useState({ rows: [], total: 0, overview: null });
+  const [data, setData] = useState({ rows: [], total: 0, overview: null, counts: {} });
   const [page, setPage] = useState(1);
+  const [status, setStatus] = useState("");
+  const pickStatus = (k) => { setStatus(k === "all" ? "" : k); setPage(1); };
   const [days, setDays] = useState(7);
   const [wiz, setWiz] = useState(false);
   const [preset, setPreset] = useState(null);
   const [detail, setDetail] = useState(null);
   const per = 20;
   const load = useCallback(async () => {
-    const r = await get(`/api/broadcasts?page=${page}&per=${per}&days=${days}`);
+    const r = await get(`/api/broadcasts?page=${page}&per=${per}&days=${days}${status ? `&status=${status}` : ""}`);
     if (r.ok) setData(r);
-  }, [page, days]);
+  }, [page, days, status]);
   useEffect(() => { load(); }, [load]);
   // حملة تُرسل الآن: تحديث كل 4 ثوانٍ حتى تكتمل
   useEffect(() => {
@@ -448,20 +450,28 @@ export default function Broadcasts() {
           </Select>
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {[["recipients", bi("المستلمون", "Recipients"), "users"], ["sent", bi("أُرسلت", "Sent"), "check"], ["delivered", bi("وصلت", "Delivered"), "check"],
-            ["read", bi("قُرئت", "Read"), "check"], ["replied", bi("ردّوا", "Replied"), "chat"], ["failed", bi("فشلت", "Failed"), "close"]].map(([k, l, i]) => (
-            <div key={k} className="rounded-2xl bg-ov/[0.04] p-4 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.06)]">
-              <div className="flex items-center gap-1.5 text-[11.5px] font-extrabold uppercase tracking-wider text-ink-3"><Icon name={i} size={13} />{l}</div>
-              <div className="tnum mt-1.5 text-[24px] font-extrabold text-ink">{o ? num(o[k]) : "…"}</div>
-              {o && k !== "recipients" && <div className="tnum text-[11.5px] text-ink-3">{pct(o[k], k === "sent" || k === "failed" ? o.recipients : o.sent)}%</div>}
-            </div>
+          {[["recipients", bi("المستلمون", "Recipients"), "users", "text-au-cyan"], ["sent", bi("أُرسلت", "Sent"), "arrow", "text-au-violet"],
+            ["delivered", bi("وصلت", "Delivered"), "check", "text-au-cyan"], ["read", bi("قُرئت", "Read"), "mail", "text-au-teal"],
+            ["replied", bi("ردّوا", "Replied"), "chat", "text-amber-300"], ["failed", bi("فشلت", "Failed"), "close", "text-red-300"]].map(([k, l, i, tone]) => (
+            <Kpi key={k} icon={i} tone={tone} label={l} value={o ? num(o[k]) : "…"}
+                 sub={o && k !== "recipients" ? `${pct(o[k], k === "sent" || k === "failed" ? o.recipients : o.sent)}%` : null} />
           ))}
         </div>
       </Card>
       <Card>
-        <b className="mb-3 block text-[15px] text-ink">{bi("كل الحملات", "All broadcasts")}</b>
+        <b className="mb-3 block text-[15px] text-ink">{bi("الحملات", "Broadcasts")}</b>
+        {Object.keys(data.counts || {}).length > 0 && (() => {
+          const cn = data.counts || {};
+          const all = Object.values(cn).reduce((a, b) => a + b, 0);
+          return <Tabs size="sm" value={status || "all"} onChange={pickStatus} items={[
+            ["all", bi("الكل", "All"), null, all],
+            ...["scheduled", "running", "done", "failed", "cancelled"].filter((k) => cn[k] || status === k)
+              .map((k) => [k, bi(STATUS[k][0], STATUS[k][1]), null, cn[k] || 0]),
+          ]} />;
+        })()}
         {!data.rows.length ? (
-          <Empty icon="megaphone" title={bi("لا حملات بعد", "No broadcasts yet")}
+          status ? <Empty icon="megaphone" title={bi("لا حملات بهذه الحالة", "No broadcasts in this state")} text={bi("اختر تبويباً آخر.", "Pick another tab.")} />
+          : <Empty icon="megaphone" title={bi("لا حملات بعد", "No broadcasts yet")}
                  text={bi("أنشئ أول حملة: اختر قالباً معتمداً، ثم شريحة، ثم أرسل أو جدول.", "Create your first: pick an approved template, a segment, then send or schedule.")} />
         ) : (
           <div className="-mx-2 overflow-x-auto px-2">

@@ -215,6 +215,8 @@ async def after_settle(pid):
     amount = fmt(p["amount"], p["currency"])
     if paid:
         db.log_event(bot_row["id"], "pay_paid")
+        db.notify(p["owner_id"], "paid", {"amount": amount, "desc": (p.get("description") or "")[:80],
+                                          "name": (db.get_conversation(bot_row["id"], p["peer"]) or {}).get("name") or ""}, "/payments")
         import growth
         growth.capi_async(bot_row, p["peer"], "Purchase", p["amount"] / GW.minor_factor(p["currency"]), p["currency"])
         if ch:
