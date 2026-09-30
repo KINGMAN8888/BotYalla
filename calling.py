@@ -85,6 +85,8 @@ def on_webhook(payload):
                     sdp = str((call.get("session") or {}).get("sdp") or "")[:SDP_MAX]
                     if sdp and db.add_call(bot["id"], cid, peer, names.get(peer[3:], ""), sdp):
                         db.log_message(bot["id"], peer, "in", "customer", "📞 مكالمة واردة", name=names.get(peer[3:], ""))
+                        import inbox_relay      # الهاتف يرنّ بإشعار فوري حتى والمتصفح مغلق
+                        inbox_relay.notify_platform(bot, peer, "call", names.get(peer[3:], ""), kind="call")
                         n += 1
                 elif ev == "terminate":
                     c = db.end_call(cid, int(call.get("duration") or 0))

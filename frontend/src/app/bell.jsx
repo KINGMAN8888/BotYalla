@@ -2,6 +2,7 @@
    الإشعار مخزَّن بنوعه وبياناته، والنص هنا بلغة المستخدم. استطلاع كل 45 ثانية والصفحة ظاهرة فقط. */
 import { useEffect, useRef, useState } from "react";
 import { BY, bi, Icon } from "./kit.jsx";
+import { PushToggle } from "./pwa.jsx";
 
 const KIND = {
   assigned: ["user", (d) => bi(`أُسندت إليك محادثة ${d.name || ""}`, `A conversation with ${d.name || ""} was assigned to you`)],
@@ -11,6 +12,13 @@ const KIND = {
   ticket_new: ["help", (d) => bi(`تذكرة جديدة من ${d.user || ""}: ${d.subject || ""}`, `New ticket from ${d.user || ""}: ${d.subject || ""}`)],
   ticket_user: ["chat", (d) => bi(`${d.user || "العميل"} ردّ على تذكرة: ${d.subject || ""}`, `${d.user || "The customer"} replied on a ticket: ${d.subject || ""}`)],
   ticket_reply: ["help", (d) => bi(`فريق الدعم ردّ على تذكرتك: ${d.subject || ""}`, `Support replied to your ticket: ${d.subject || ""}`)],
+  call: ["phone", (d) => bi(`📞 مكالمة واتساب واردة من ${d.name || "عميل"}`, `📞 Incoming WhatsApp call from ${d.name || "a customer"}`)],
+  attention: ["chat", (d) => {
+    const who = [d.name, d.bot].filter(Boolean).join(" · ");
+    const head = { needs_support: bi("🙋 عميل يحتاج مساعدتك", "🙋 A customer needs you"), handoff: bi("🚨 محادثة تحتاج تدخّلك", "🚨 A conversation needs you"),
+                   bad_rating: bi("⚠️ تقييم سلبي", "⚠️ Negative rating"), human_msg: bi("💬 رسالة جديدة", "💬 New message") }[d.why] || bi("💬 عميل ينتظر ردّك", "💬 A customer is waiting");
+    return `${head}${who ? ` — ${who}` : ""}${d.text ? `: «${d.text}»` : ""}`;
+  }],
 };
 const since = (ts) => {
   const s = Math.max(0, Math.floor(Date.now() / 1000) - ts);
@@ -37,9 +45,13 @@ export default function Bell() {
     const tick = () => { if (document.visibilityState === "visible") load(); };
     const t = setInterval(tick, 45000);
     document.addEventListener("visibilitychange", tick);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
+    window.addEventListener("by:notif", load);             // وصل إشعار فوري — حدّث العدّاد فوراً
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); window.removeEventListener("by:notif", load); };
   }, []);
-  useEffect(() => { document.title = (unread ? `(${unread}) ` : "") + base.current; }, [unread]);
+  useEffect(() => {
+    document.title = (unread ? `(${unread}) ` : "") + base.current;
+    try { if (navigator.setAppBadge) (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {}); } catch { /* */ }
+  }, [unread]);
   useEffect(() => {
     if (!open) return undefined;
     load();
@@ -67,7 +79,7 @@ export default function Bell() {
         {unread > 0 && <span className="tnum absolute -end-0.5 -top-0.5 grid min-w-[18px] place-items-center rounded-full bg-red-500 px-1 text-[10.5px] font-extrabold leading-[18px] text-white">{unread > 99 ? "99+" : unread}</span>}
       </button>
       {open && (
-        <div className="absolute end-0 top-12 z-[300] w-[min(380px,92vw)] overflow-hidden rounded-2xl bg-[rgb(var(--menu-rgb))] shadow-2xl ring-1 ring-ov/10" role="dialog" aria-label={bi("الإشعارات", "Notifications")}>
+        <div className="fixed inset-x-3 top-[calc(env(safe-area-inset-top)+68px)] z-[300] overflow-hidden rounded-2xl sm:absolute sm:inset-x-auto sm:end-0 sm:top-12 sm:w-[380px] bg-[rgb(var(--menu-rgb))] shadow-2xl ring-1 ring-ov/10" role="dialog" aria-label={bi("الإشعارات", "Notifications")}>
           <div className="flex items-center justify-between gap-2 border-b border-ov/10 px-4 py-3">
             <b className="text-[14px] text-ink">{bi("الإشعارات", "Notifications")}</b>
             {unread > 0 && <button type="button" onClick={readAll} className="cursor-pointer border-0 bg-transparent text-[12px] font-bold text-au-cyan">{bi("تعليم الكل كمقروء", "Mark all read")}</button>}
@@ -88,6 +100,7 @@ export default function Bell() {
                 );
               })}
           </div>
+          <PushToggle />
         </div>
       )}
     </div>

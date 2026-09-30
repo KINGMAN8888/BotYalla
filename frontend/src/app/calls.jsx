@@ -145,7 +145,7 @@ export function CallBar({ onOpen }) {
 
   if (!active && !ringing.length && !err) return <audio ref={audio} autoPlay hidden />;
   return (
-    <div className="fixed inset-x-3 bottom-3 z-50 mx-auto grid max-w-md gap-2 sm:inset-x-auto sm:end-5" role="status" aria-live="assertive">
+    <div className="by-lift fixed inset-x-3 bottom-3 z-50 mx-auto grid max-w-md gap-2 sm:inset-x-auto sm:end-5" role="status" aria-live="assertive">
       <audio ref={audio} autoPlay hidden />
       {err && <div className="rounded-2xl bg-red-500/90 px-4 py-2.5 text-[13px] font-bold text-white shadow-2xl">
         {err} <button type="button" className="ms-2 cursor-pointer border-0 bg-transparent text-white underline" onClick={() => setErr("")}>{bi("إغلاق", "Close")}</button></div>}

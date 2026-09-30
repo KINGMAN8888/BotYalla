@@ -4,6 +4,7 @@ import { BY, t, Icon, bi, Avatar, Logo } from "./kit.jsx";
 import Backdrop from "../Backdrop.jsx";
 import { SideNav, CommandPalette, prefs, savePrefs } from "./nav.jsx";
 import Bell from "./bell.jsx";
+import { PwaLayer, standalone } from "./pwa.jsx";
 
 /* ============================================================================
    قشرة اللوحة: شريط جانبي ثابت + شريط علوي + درج للجوال + إشعارات.
@@ -95,6 +96,19 @@ function SideContent({ view, compact = false, onCompact, onPalette }) {
       </>}
 
       <div className="mt-auto flex flex-col gap-1 pt-5 shadow-[inset_0_1px_0_rgb(var(--ov-rgb)/0.07)]">
+        {/* على الهاتف: المظهر واللغة وتثبيت التطبيق هنا (الشريط العلوي مزدحم) */}
+        {BY.ui && (
+          <div className="flex items-center gap-2 px-2 pb-2 sm:hidden">
+            <ThemeToggle />
+            <a href={BY.urls.lang} className="inline-flex h-10 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-bold text-ink-2 no-underline shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]">
+              <Icon name="globe" size={15} />{BY.lang === "ar" ? "English" : "العربية"}
+            </a>
+            {!standalone() && <button type="button" onClick={() => window.dispatchEvent(new CustomEvent("by:install"))}
+                    className="ms-auto inline-flex h-10 cursor-pointer items-center gap-1.5 rounded-full border-0 bg-au-violet/20 px-3.5 text-[12.5px] font-bold text-ink">
+              <Icon name="download" size={14} />{bi("التطبيق", "App")}
+            </button>}
+          </div>
+        )}
         {BY.ui && <ScaleControl compact={compact} />}
         {onCompact && (
           <button type="button" onClick={onCompact} title={compact ? bi("توسيع القائمة", "Expand menu") : bi("قائمة مضغوطة", "Compact menu")}
@@ -179,6 +193,53 @@ function AssistBanner() {
   );
 }
 
+/* ============================================================ شريط التطبيق السفلي (الهاتف)
+   مثل التطبيقات الأصلية: أهم 4 وجهات لنوع المستخدم + «المزيد» يفتح القائمة الكاملة. عائم
+   فوق المحتوى بزجاج مموّه، ويحترم منطقة الإيماءات أسفل آيفون (safe-area). */
+const TAB_KEYS = {
+  staff: ["home", "admin_tickets", "admin_users", "admin_overview", "admin_convo"],
+  user: ["home", "shared_inbox", "dashboard", "contacts", "broadcasts", "chat_payments"],
+};
+const TAB_SHORT = {
+  home: ["الرئيسية", "Home"], shared_inbox: ["الوارد", "Inbox"], dashboard: ["البوتات", "Bots"], contacts: ["العملاء", "Contacts"],
+  broadcasts: ["البث", "Broadcasts"], chat_payments: ["المدفوعات", "Payments"], admin_tickets: ["الدعم", "Support"],
+  admin_users: ["المستخدمون", "Users"], admin_overview: ["الإدارة", "Admin"], admin_convo: ["المحادثات", "Chats"],
+};
+function tabItems() {
+  const all = (BY.navGroups || []).flatMap((g) => g.items);
+  const staff = ["admin", "support"].includes(BY.ui && BY.ui.persona);
+  return TAB_KEYS[staff ? "staff" : "user"].map((k) => all.find((x) => x.k === k)).filter(Boolean).slice(0, 4);
+}
+function MobileTabBar({ view, onMore, moreOpen }) {
+  const items = tabItems();
+  const on = moreOpen ? "__more" : items.some((x) => x.k === view) ? view : "__more";
+  const Tab = ({ k, icon, label, href, onClick }) => {
+    const active = on === k;
+    const inner = (
+      <>
+        <span className="relative grid h-8 w-12 place-items-center">
+          {active && <motion.span layoutId="tab-active" transition={{ type: "spring", stiffness: 500, damping: 36 }}
+                                  className="absolute inset-0 rounded-full bg-[linear-gradient(100deg,rgb(124_108_246/0.9),rgb(34_211_238/0.75))] shadow-[0_6px_18px_-6px_rgb(124_108_246/0.8)]" />}
+          <Icon name={icon} size={20} className={`relative ${active ? "text-white" : "text-ink-3"}`} />
+        </span>
+        <span className={`max-w-full truncate text-[10.5px] font-bold ${active ? "text-ink" : "text-ink-3"}`}>{label}</span>
+      </>
+    );
+    const cls = "flex min-w-0 flex-1 cursor-pointer flex-col items-center gap-0.5 border-0 bg-transparent py-1.5 no-underline active:scale-95 transition-transform";
+    return href ? <a href={href} className={cls} aria-current={active ? "page" : undefined}>{inner}</a>
+      : <button type="button" onClick={onClick} className={cls} aria-expanded={moreOpen}>{inner}</button>;
+  };
+  return (
+    <nav aria-label={bi("التنقّل السريع", "Quick navigation")}
+         className="fixed inset-x-2.5 z-[180] flex items-stretch rounded-[26px] bg-ob-1/80 px-1.5 backdrop-blur-2xl backdrop-saturate-150
+                    shadow-[0_14px_40px_-10px_rgb(0_0_0/0.7),inset_0_0_0_1px_rgb(var(--ov-rgb)/0.09)] lg:hidden"
+         style={{ bottom: "calc(env(safe-area-inset-bottom) + 8px)" }}>
+      {items.map((x) => <Tab key={x.k} k={x.k} icon={x.i} label={(TAB_SHORT[x.k] || [x.l, x.l])[BY.lang === "en" ? 1 : 0]} href={x.u} />)}
+      <Tab k="__more" icon="more" label={bi("المزيد", "More")} onClick={onMore} />
+    </nav>
+  );
+}
+
 export default function AppShell({ view, children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopClosed, setDesktopClosed] = useState(false);
@@ -186,9 +247,15 @@ export default function AppShell({ view, children }) {
   const [palette, setPalette] = useState(false);
   const smart = !!(BY.navGroups && BY.navGroups.length && BY.ui);
   const width = compact ? 76 : 264;
+  // العناصر العائمة (المساعد · شريط المكالمة) ترتفع فوق الشريط السفلي عبر هذا الصنف (index.css)
+  useEffect(() => {
+    document.documentElement.classList.toggle("has-tabbar", smart);
+    return () => document.documentElement.classList.remove("has-tabbar");
+  }, [smart]);
 
   useEffect(() => {
     document.body.style.overflow = mobileOpen ? "hidden" : "";
+    document.documentElement.classList.toggle("nav-open", mobileOpen);   // يُخفي زرّ المساعد فوق الدرج
     const esc = (e) => { if (e.key === "Escape") setMobileOpen(false); };
     document.addEventListener("keydown", esc);
     return () => { document.removeEventListener("keydown", esc); document.body.style.overflow = ""; };
@@ -243,8 +310,9 @@ export default function AppShell({ view, children }) {
                 animate={{ x: 0 }}
                 exit={{ x: BY.dir === "rtl" ? "100%" : "-100%" }}
                 transition={{ type: "spring", stiffness: 380, damping: 38 }}
-                className="fixed inset-y-0 z-[200] flex w-[280px] flex-col overflow-y-auto bg-ob-1 p-4
+                className="fixed inset-y-0 z-[200] flex w-[290px] max-w-[86vw] flex-col overflow-y-auto bg-ob-1 p-4
                            shadow-2xl lg:hidden start-0"
+                style={{ paddingTop: "calc(env(safe-area-inset-top) + 16px)", paddingBottom: "calc(env(safe-area-inset-bottom) + 16px)" }}
                 aria-label={bi("التنقّل الرئيسي", "Main navigation")}>
                 <SideContent view={view} onPalette={() => { setMobileOpen(false); setPalette(true); }} />
               </motion.aside>
@@ -255,13 +323,14 @@ export default function AppShell({ view, children }) {
         <div className="flex min-w-0 flex-1 flex-col">
           {/* الشريط العلوي */}
           <header className="sticky top-0 z-[150] bg-ob-0/70 backdrop-blur-xl backdrop-saturate-150
-                             shadow-[inset_0_-1px_0_rgb(var(--ov-rgb)/0.07)]">
-            <div className="flex items-center gap-3 px-5 py-3.5">
+                             shadow-[inset_0_-1px_0_rgb(var(--ov-rgb)/0.07)]"
+                  style={{ paddingTop: "env(safe-area-inset-top)" }}>
+            <div className="flex items-center gap-2 px-4 py-3 sm:gap-3 sm:px-5 sm:py-3.5">
               <button type="button" onClick={() => setMobileOpen((o) => !o)} aria-expanded={mobileOpen}
                       aria-label={bi("القائمة", "Menu")}
-                      className="grid size-10 shrink-0 place-items-center rounded-xl text-ink
+                      className={`${smart ? "hidden" : "grid"} size-10 shrink-0 place-items-center rounded-xl text-ink
                                  shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
-                                 transition-colors hover:bg-ov/[0.06] lg:hidden">
+                                 transition-colors hover:bg-ov/[0.06] lg:hidden`}>
                 <span className="relative block h-0.5 w-[18px] rounded bg-current
                                  before:absolute before:-top-1.5 before:block before:h-0.5 before:w-[18px] before:rounded before:bg-current before:content-['']
                                  after:absolute after:top-1.5 after:block after:h-0.5 after:w-[18px] after:rounded after:bg-current after:content-['']" />
@@ -295,11 +364,11 @@ export default function AppShell({ view, children }) {
                                   className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-transparent text-ink-2 shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)] md:hidden">
                   <Icon name="search" size={16} /></button>}
                 {smart && <Bell />}
-                <ThemeToggle />
+                <span className={smart ? "hidden sm:contents" : "contents"}><ThemeToggle /></span>
                 <a href={BY.urls.lang}
-                   className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-bold
+                   className={`${smart ? "hidden sm:inline-flex" : "inline-flex"} items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-bold
                               text-ink-2 no-underline shadow-[inset_0_0_0_1px_rgb(var(--ov-rgb)/0.1)]
-                              transition-colors hover:text-au-cyan">
+                              transition-colors hover:text-au-cyan`}>
                   <Icon name="globe" size={15} />{BY.lang === "ar" ? "EN" : "ع"}
                 </a>
                 {/* صورة الحساب في الشريط العلوي — تظهر على الموبايل أيضاً (الاسم من sm فأعلى) */}
@@ -314,8 +383,10 @@ export default function AppShell({ view, children }) {
             </div>
           </header>
 
-          <main className="mx-auto w-full max-w-[1180px] flex-1 px-5 py-8">{children}</main>
+          <main className={`mx-auto w-full max-w-[1180px] flex-1 px-4 py-6 sm:px-5 sm:py-8 ${smart ? "pb-[calc(env(safe-area-inset-bottom)+104px)] lg:pb-8" : ""}`}>{children}</main>
           {smart && <CommandPalette open={palette} onClose={() => setPalette(false)} />}
+          {smart && <MobileTabBar view={view} moreOpen={mobileOpen} onMore={() => setMobileOpen((o) => !o)} />}
+          {BY.ui && <PwaLayer />}
         </div>
       </div>
     </>

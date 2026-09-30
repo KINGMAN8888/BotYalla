@@ -87,9 +87,59 @@ def _alert_text(bot_row, peer, headline, detail=""):
     return "\n".join(lines)
 
 
-async def alert(bot_row, peer, headline, detail="", throttle=False):
+# ─────────── مركز الإشعارات + الإشعار الفوري (webpush) لفريق الحساب ───────────
+# نفس رؤية صندوق الوارد: المسندة لموظف ⇐ له وحده · لفريق ⇐ المالك ومديرو الحساب وأعضاء الفريق
+# · غير المسندة ⇐ المالك وكل الفريق. التكرار يمنعه `dedupe` لكل مستخدم ونوع ورابط.
+WHY_DEDUPE = {"human_msg": 300, "needs_support": ALERT_EVERY, "waiting": ALERT_EVERY}
+
+
+def team_targets(bot_row, conv):
+    owner = bot_row["owner_id"]
+    if conv.get("assignee_id"):
+        return [int(conv["assignee_id"])]
+    staff = db.team_members(owner)
+    if conv.get("team_id"):
+        team = next((t for t in db.list_inbox_teams(owner) if t["id"] == conv["team_id"]), None)
+        allowed = set(team["members"]) if team else set()
+        staff = [m for m in staff if m.get("team_role") == "admin" or m["id"] in allowed]
+    return [owner] + [m["id"] for m in staff if m["id"] != owner]
+
+
+def inbox_url(bot_row, peer):
+    """صندوق الوارد المشترك لباقات CRM (وحسابات الإدارة)، وصندوق البوت لغيرها."""
+    import urllib.parse
+    import plans
+    owner = db.get_user(bot_row["owner_id"]) or {}
+    sub = db.get_subscription(bot_row["owner_id"])
+    pid = sub["plan"] if sub and sub.get("status") == "active" else "free"
+    q = urllib.parse.quote(peer)
+    if owner.get("role") in ("admin", "support") or plans.feature(pid, "crm"):
+        return f"/inbox?bot={int(bot_row['id'])}&peer={q}"
+    return f"/bot/{int(bot_row['id'])}/inbox?peer={q}"
+
+
+def notify_platform(bot_row, peer, why, detail="", kind="attention"):
+    """إشعار داخل المنصة (والجرس والهاتف) لمن يحق له رؤية المحادثة. لا يرمي."""
+    try:
+        conv = db.get_conversation(bot_row["id"], peer) or {}
+        text = (detail or "").strip()
+        if not text:
+            last = [m for m in db.recent_history(bot_row["id"], peer, 4) if m.get("direction") == "in"]
+            text = (last[-1].get("text") or "📎") if last else ""
+        cfg = json.loads(bot_row.get("config_json") or "{}")
+        data = {"name": conv.get("name") or (peer.split(":", 1)[-1] if peer.startswith("tg:") or peer[3:].isdigit() else ""),
+                "bot": cfg.get("business_name") or bot_row.get("name") or "", "why": why, "text": text[:200]}
+        url = inbox_url(bot_row, peer)
+        for u in dict.fromkeys(team_targets(bot_row, conv)):
+            db.notify(u, kind, data, url, dedupe=WHY_DEDUPE.get(why, 60))
+    except Exception:
+        log.exception("platform notify failed for bot #%s", bot_row.get("id"))
+
+
+async def alert(bot_row, peer, headline, detail="", throttle=False, why="attention"):
     """يرسل التنبيه لكل المستلمين عبر بوت المنصة. يرجّع True لو وصل لواحد على الأقل
-    (وإلا يستعمل المستدعي طريق الإشعار القديم)."""
+    (وإلا يستعمل المستدعي طريق الإشعار القديم). وقبله إشعار المنصة الفوري للفريق (`why` نوعه)."""
+    notify_platform(bot_row, peer, why, detail)
     key = (bot_row["id"], peer)
     now = time.time()
     if throttle and now - _last_alert.get(key, 0) < ALERT_EVERY:

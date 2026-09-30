@@ -61,6 +61,7 @@ import weekly_report as WR
 import conv_insights as CI
 import wa_signup as WAS
 import ui as UI
+import webpush as WP
 import captcha as CAP
 import msg_status as MS
 import tpl_studio as TS
@@ -305,7 +306,7 @@ def _revalidate_identity():
 _GATE_OPEN = ("/verify-email", "/logout", "/lang/", "/static/", "/wh/", "/email/unsubscribe/",
               "/auth/", "/.well-known/", "/api/check-username", "/api/assistant")
 _GATE_PUBLIC = _PV_PATHS | {"/forgot", "/robots.txt", "/sitemap.xml", "/favicon.ico", "/healthz",
-                            "/manifest.webmanifest", "/site.webmanifest"}
+                            "/manifest.webmanifest", "/site.webmanifest", "/sw.js", "/offline"}
 
 @app.before_request
 def _email_gate():
@@ -864,7 +865,10 @@ def login():
 
 @app.route("/logout", methods=["POST"])
 def logout():
-    """POST فقط (يمرّ بفحص CSRF): بـ GET كان أي موقع يُخرج زائرك بـ <img src=".../logout">."""
+    """POST فقط (يمرّ بفحص CSRF): بـ GET كان أي موقع يُخرج زائرك بـ <img src=".../logout">.
+    جهاز مشترك: الخروج يوقف إشعاراته الفورية — لا تظهر رسائل عملائك على شاشته بعدك."""
+    if session.get("push_ep") and session.get("uid"):
+        db.delete_push_sub(session["push_ep"], session["uid"])
     session.clear(); return redirect(url_for("login"))
 
 # ---------- تأكيد البريد: كود من 6 أرقام + رابط بضغطة ----------
@@ -5364,6 +5368,70 @@ def api_notifications_read():
     return jsonify({"ok": True, "marked": n})
 
 
+# ════════════════ الإشعارات الفورية (Web Push) + تطبيق الهاتف (PWA) ════════════════
+# كل إشعار في المركز يُدفع لأجهزة صاحبه (webpush.install). الاشتراك لكل جهاز، والمفتاح
+# الخاص للمنصة لا يغادر الخادم. انظر AGENTS §75.
+WP.install()
+
+
+@app.route("/api/push/key")
+@login_required
+def api_push_key():
+    return jsonify({"ok": True, "key": WP.public_key(), "devices": len(db.list_push_subs(uid()))})
+
+
+@app.route("/api/push/subscribe", methods=["POST"])
+@login_required
+def api_push_subscribe():
+    if _rate_limited(f"u{uid()}", limit=20, window=3600, bucket="push_sub"):
+        return jsonify({"ok": False, "error": "rate"}), 429
+    d = _json_body()
+    ep = str(d.get("endpoint") or "")
+    keys = d.get("keys") if isinstance(d.get("keys"), dict) else {}
+    p256dh, auth = str(keys.get("p256dh") or ""), str(keys.get("auth") or "")
+    if not WP.endpoint_ok(ep):
+        return jsonify({"ok": False, "error": "endpoint"}), 400
+    if not WP.keys_ok(p256dh, auth):
+        return jsonify({"ok": False, "error": "keys"}), 400
+    if len(db.list_push_subs(uid())) >= 10 and not any(x["endpoint"] == ep for x in db.list_push_subs(uid())):
+        return jsonify({"ok": False, "error": "devices"}), 400
+    db.save_push_sub(uid(), ep, p256dh, auth, request.headers.get("User-Agent", ""))
+    session["push_ep"] = ep                  # الخروج من هذه الجلسة يحذف اشتراك هذا الجهاز
+    return jsonify({"ok": True})
+
+
+@app.route("/api/push/unsubscribe", methods=["POST"])
+@login_required
+def api_push_unsubscribe():
+    ep = str(_json_body().get("endpoint") or "")
+    if ep and session.get("push_ep") == ep:
+        session.pop("push_ep", None)
+    return jsonify({"ok": True, "removed": db.delete_push_sub(ep, uid()) if ep else 0})
+
+
+@app.route("/api/push/test", methods=["POST"])
+@login_required
+def api_push_test():
+    if _rate_limited(f"u{uid()}", limit=6, window=600, bucket="push_test"):
+        return jsonify({"ok": False, "error": "rate"}), 429
+    return jsonify({"ok": True, "sent": WP.test(uid())})
+
+
+@app.route("/sw.js")
+def service_worker():
+    """من الجذر لا من /static — نطاق عامل الخدمة هو مجلّده، ونريده الموقع كله."""
+    r = send_from_directory(app.static_folder, "sw.js", mimetype="text/javascript", max_age=0)
+    r.headers["Cache-Control"] = "no-cache"
+    r.headers["Service-Worker-Allowed"] = "/"
+    return r
+
+
+@app.route("/offline")
+def offline_page():
+    """صفحة «لا اتصال» — يخزّنها عامل الخدمة ويعرضها حين تنقطع الشبكة. ثابتة بلا بيانات."""
+    return send_from_directory(app.static_folder, "offline.html", mimetype="text/html", max_age=3600)
+
+
 @app.route("/api/ui/prefs", methods=["POST"])
 @login_required
 def api_ui_prefs():
@@ -5394,7 +5462,8 @@ def react_page(view, title_key, props=None, needs_chart=False, title=None):
         except Exception:
             log.exception("ui usage tracking failed")
         ui_boot = {"prefs": UI.prefs(uid()), "persona": UI.persona(ctx), "actions": UI.actions(ctx, lang, url_for),
-                   "unread": db.list_notifications(uid(), 1)[1]}
+                   "unread": db.list_notifications(uid(), 1)[1],
+                   "push": bool(session.get("push_ep"))}      # جلسة بلا اشتراك والإذن ممنوح ⇒ المتصفح يعيد الربط
 
     payload = {
         "view": view, "lang": lang, "dir": i18n.dir_for(lang), "brand": "BotYalla",
@@ -6395,11 +6464,21 @@ def webmanifest():
     lang = session.get("lang", i18n.DEFAULT)
     icon = lambda n, s, **kw: dict({"src": _static_v(f"brand/{n}.png"),
                                     "sizes": f"{s}x{s}", "type": "image/png"}, **kw)
-    data = {"name": "BotYalla", "short_name": "BotYalla", "description": i18n.t("lp2_seo_desc", lang),
-            "lang": lang, "dir": i18n.dir_for(lang), "start_url": "/dashboard", "scope": "/",
-            "display": "standalone", "background_color": "#05070D", "theme_color": "#05070D",
+    ar = lang != "en"
+    # تطبيق الهاتف (PWA): يُفتح على «الرئيسية» ملء الشاشة. id ثابت — تغييره يجعل المتصفح يعدّه
+    # تطبيقاً آخر فيطلب التثبيت من جديد. الاختصارات تظهر بالضغط المطوّل على أيقونة التطبيق.
+    shortcut = lambda name_ar, name_en, url, ic: {"name": name_ar if ar else name_en, "short_name": name_ar if ar else name_en,
+                                                  "url": url, "icons": [icon(ic, 192)]}
+    data = {"id": "/home", "name": "BotYalla", "short_name": "BotYalla", "description": i18n.t("lp2_seo_desc", lang),
+            "lang": lang, "dir": i18n.dir_for(lang), "start_url": "/home?source=pwa", "scope": "/",
+            "display": "standalone", "display_override": ["standalone", "minimal-ui"],
+            "orientation": "any", "categories": ["business", "productivity"],
+            "background_color": "#05070D", "theme_color": "#05070D",
             "icons": [icon("icon-192", 192), icon("icon-512", 512),
-                      icon("icon-512", 512, purpose="maskable")]}
+                      icon("icon-512", 512, purpose="maskable")],
+            "shortcuts": [shortcut("الرئيسية", "Home", "/home?source=pwa", "icon-192"),
+                          shortcut("صندوق الوارد", "Inbox", "/inbox?source=pwa", "icon-192"),
+                          shortcut("بوتاتي", "My bots", "/dashboard?source=pwa", "icon-192")]}
     return Response(json.dumps(data, ensure_ascii=False), mimetype="application/manifest+json")
 
 

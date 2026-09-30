@@ -393,3 +393,17 @@ html[data-theme="light"] [data-backdrop] { opacity: 0.35; }
 .logo-on-light { display: none; }
 html[data-theme="light"] .logo-on-dark { display: none; }
 html[data-theme="light"] .logo-on-light { display: inline-block; }
+
+/* ------------------------------------------------------------ تطبيق الهاتف (PWA) — AGENTS §75
+   الشريط السفلي في اللوحة (html.has-tabbar على أقل من lg): العناصر العائمة ترتفع فوقه.
+   وضع التطبيق المثبّت: لا ارتداد للصفحة عند السحب ولا وميض رمادي عند اللمس. */
+html { -webkit-tap-highlight-color: transparent; }
+@media (display-mode: standalone) {
+  html, body { overscroll-behavior-y: none; }
+}
+@media (max-width: 1023.98px) {
+  html.has-tabbar .by-fab { bottom: calc(env(safe-area-inset-bottom) + 88px) !important; }
+  html.has-tabbar .by-fab-hint { bottom: calc(env(safe-area-inset-bottom) + 160px) !important; }
+  html.has-tabbar .by-lift { bottom: calc(env(safe-area-inset-bottom) + 84px) !important; }
+}
+html.nav-open .by-fab, html.nav-open .by-fab-hint { display: none !important; }

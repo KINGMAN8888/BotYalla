@@ -193,7 +193,7 @@ async def notify_human_inbound(bot_row, channel, peer, text):
         return
     name = conv.get("name") or peer
     import inbox_relay
-    if await inbox_relay.alert(bot_row, peer, "💬 رسالة جديدة من عميل متولّي محادثته في"):
+    if await inbox_relay.alert(bot_row, peer, "💬 رسالة جديدة من عميل متولّي محادثته في", why="human_msg"):
         return
     await notify_owner(bot_row, channel,
                        f"💬 رسالة جديدة من {name} في «{_cfg_of(bot_row).get('business_name', '')}»"
@@ -458,7 +458,7 @@ async def _escalate(bot_row, channel, peer, reason, lang="ar", say=True, team_id
         await channel.remove_keyboard(peer, "Let me connect you with our team — they'll continue with you right here 🙏"
                                       if lang == "en" else
                                       "خليني أوصّلك بحد من فريقنا يكمّل معاك هنا بشكل أسرع 🙏")
-    if not await inbox_relay.alert(bot_row, peer, "🚨 محادثة محتاجة تدخّلك في", reason):
+    if not await inbox_relay.alert(bot_row, peer, "🚨 محادثة محتاجة تدخّلك في", reason, why="handoff"):
         await notify_owner(bot_row, channel, f"🚨 عميل محتاج تدخّلك في «{_cfg_of(bot_row).get('business_name', '')}»"
                                              f" ({peer}): {reason}\nافتح صندوق الوارد.")
 
@@ -522,7 +522,7 @@ async def _closing(bot_row, cfg, channel, peer, text):
         _comment_wait.pop(key, None)
         db.add_lead(bot_row["id"], _peer_num(peer), {"التقييم": "محتاج تحسين", "ملاحظة العميل": raw[:500]})
         import inbox_relay
-        await inbox_relay.alert(bot_row, peer, "⚠️ تقييم سلبي وملاحظة من عميل في", raw[:200])
+        await inbox_relay.alert(bot_row, peer, "⚠️ تقييم سلبي وملاحظة من عميل في", raw[:200], why="bad_rating")
         await channel.remove_keyboard(peer, "Thanks — your note reached our team and we'll use it to improve 🙏"
                                       if lang == "en" else
                                       "وصلت ملاحظتك لفريقنا، وشكراً إنك بتساعدنا نتحسّن 🙏")
@@ -700,7 +700,7 @@ async def _ai_action(bot_row, cfg, raw_channel, peer, action):
         # الفعلي يبدأ بأول رد بشري (صندوق الوارد أو تليجرام) — حتى ذلك يكمل البوت.
         import inbox_relay
         reason = str(action.get("reason") or "")[:200]
-        if not await inbox_relay.alert(bot_row, peer, "🙋 عميل محتاج دعم في", reason, throttle=True):
+        if not await inbox_relay.alert(bot_row, peer, "🙋 عميل محتاج دعم في", reason, throttle=True, why="needs_support"):
             conv = db.get_conversation(bot_id, peer) or {}
             await notify_owner(bot_row, raw_channel,
                                f"🙋 العميل {conv.get('name') or peer} في «{biz}» يطلب التحدث مع موظف."

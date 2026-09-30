@@ -971,7 +971,7 @@ class BotManager:
         لذلك `_submit` لا النداء المباشر (AGENTS §32)."""
         import inbox_relay
         try:
-            return self._submit(inbox_relay.alert(bot_row, peer, head, detail))
+            return self._submit(inbox_relay.alert(bot_row, peer, head, detail, why="waiting"))
         except Exception:
             log.warning("waiting alert not delivered for bot #%s", bot_row.get("id"))
             return False

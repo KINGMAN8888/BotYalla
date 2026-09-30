@@ -312,7 +312,7 @@ export default function Assistant() {
         {teaser && !open && (
           <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.97 }}
-            className="fixed bottom-[92px] end-5 z-[340] w-[250px] rounded-2xl bg-[#0b0f1a]/95 p-3.5 pe-8 text-[13px] leading-relaxed
+            className="by-fab-hint fixed bottom-[92px] end-5 z-[340] w-[250px] rounded-2xl bg-[#0b0f1a]/95 p-3.5 pe-8 text-[13px] leading-relaxed
                        text-[#dfe6f7] shadow-[0_18px_50px_-12px_rgb(0_0_0/0.7),inset_0_0_0_1px_rgb(143_233_255/0.25)] backdrop-blur-xl">
             <button type="button" onClick={hideTeaser} aria-label={bi("إغلاق", "Close")}
               className="absolute end-2 top-2 grid size-6 cursor-pointer place-items-center rounded-full border-0 bg-transparent text-[#7b87a8] hover:text-white">
@@ -335,7 +335,7 @@ export default function Assistant() {
             whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }}
             transition={{ type: "spring", stiffness: 420, damping: 24 }}
             aria-label={bi("افتح مساعد BotYalla", "Open BotYalla assistant")}
-            className="group fixed bottom-5 end-5 z-[340] grid size-[62px] cursor-pointer place-items-center rounded-full border-0 p-0
+            className="by-fab group fixed bottom-5 end-5 z-[340] grid size-[62px] cursor-pointer place-items-center rounded-full border-0 p-0
                        bg-transparent shadow-[0_14px_40px_-10px_rgb(124_108_246/0.85)]">
             <motion.span aria-hidden="true" className="absolute inset-0 rounded-full"
               style={{ background: "conic-gradient(from 0deg, #7c6cf6, #22d3ee, #2dd4a7, #7c6cf6)" }}

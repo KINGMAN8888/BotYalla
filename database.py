@@ -7073,6 +7073,52 @@ def ringing_calls(owner_id, since):
 # ════════════════════════ مركز الإشعارات ════════════════════════
 # تُخزَّن بنوعها وبياناتها (لا نصاً جاهزاً) — الواجهة تكتبها بلغة المستخدم. آخر 200 لكل مستخدم.
 NOTIFY_KEEP = 200
+NOTIFY_HOOKS = []          # webpush.install() يضيف دالته: تُستدعى بكل إشعار جديد ولا ترمي
+
+
+def save_push_sub(user_id, endpoint, p256dh, auth, ua=""):
+    """اشتراك جهاز ⇒ id. نفس الـendpoint لمستخدم آخر (جهاز مشترك سجّل غيره دخوله) يُنقل له."""
+    now = int(time.time())
+    with get_conn() as c:
+        c.execute("INSERT INTO push_subs(user_id,endpoint,p256dh,auth,ua,created_at) VALUES(?,?,?,?,?,?)"
+                  " ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id, p256dh=excluded.p256dh,"
+                  " auth=excluded.auth, ua=excluded.ua, fails=0",
+                  (user_id, endpoint, p256dh, auth, (ua or "")[:200], now))
+        return c.execute("SELECT id FROM push_subs WHERE endpoint=?", (endpoint,)).fetchone()[0]
+
+
+def delete_push_sub(endpoint, user_id=None):
+    with get_conn() as c:
+        if user_id is None:
+            return c.execute("DELETE FROM push_subs WHERE endpoint=?", (endpoint,)).rowcount
+        return c.execute("DELETE FROM push_subs WHERE endpoint=? AND user_id=?", (endpoint, user_id)).rowcount
+
+
+def list_push_subs(user_id):
+    with get_conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM push_subs WHERE user_id=? ORDER BY id", (user_id,))]
+
+
+def push_sub_result(sub_id, ok, drop_after=5):
+    """نتيجة إرسال: نجاح يصفّر العدّاد، والفشل المتتالي يحذف الاشتراك عند `drop_after`."""
+    with get_conn() as c:
+        if ok:
+            c.execute("UPDATE push_subs SET last_ok=?, fails=0 WHERE id=?", (int(time.time()), sub_id))
+        else:
+            c.execute("UPDATE push_subs SET fails=fails+1 WHERE id=?", (sub_id,))
+            c.execute("DELETE FROM push_subs WHERE id=? AND fails>=?", (sub_id, drop_after))
+
+
+def unread_notifications(user_id):
+    with get_conn() as c:
+        return c.execute("SELECT COUNT(*) FROM notifications WHERE user_id=? AND read_at IS NULL", (user_id,)).fetchone()[0]
+
+
+def platform_once(key, value):
+    """يكتب القيمة فقط إن لم توجد ⇒ القيمة المخزّنة فعلاً (عمّال متعددون يولّدون معاً — واحد يفوز)."""
+    with get_conn() as c:
+        c.execute("INSERT OR IGNORE INTO platform(key,value) VALUES(?,?)", (key, value))
+        return c.execute("SELECT value FROM platform WHERE key=?", (key,)).fetchone()[0]
 
 
 def _notify_tables(c):
@@ -7088,6 +7134,21 @@ def _notify_tables(c):
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS ix_notify_user ON notifications(user_id, id);
+        -- أجهزة الإشعارات الفورية (Web Push): اشتراك لكل متصفح/هاتف. endpoint فريد — نفس
+        -- الجهاز يعيد الاشتراك فيُحدَّث صاحبه ولا يتكرر. fails: رفضات متتالية ⇒ حذف عند 5.
+        CREATE TABLE IF NOT EXISTS push_subs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            endpoint TEXT UNIQUE NOT NULL,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            ua TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            last_ok INTEGER,
+            fails INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_push_user ON push_subs(user_id);
     """)
 
 
@@ -7104,8 +7165,13 @@ def _notify(c, user_id, kind, data, url="", dedupe=0):
     if dedupe and c.execute("SELECT 1 FROM notifications WHERE user_id=? AND kind=? AND url=? AND created_at>? LIMIT 1",
                             (user_id, kind, url, now - dedupe)).fetchone():
         return
-    c.execute("INSERT INTO notifications(user_id,kind,data_json,url,created_at) VALUES(?,?,?,?,?)",
-              (user_id, kind, json.dumps(data or {}, ensure_ascii=False)[:2000], url[:500], now))
+    nid = c.execute("INSERT INTO notifications(user_id,kind,data_json,url,created_at) VALUES(?,?,?,?,?)",
+                    (user_id, kind, json.dumps(data or {}, ensure_ascii=False)[:2000], url[:500], now)).lastrowid
+    for hook in NOTIFY_HOOKS:           # الإشعار الفوري (webpush) — طابور في الذاكرة، لا شبكة داخل المعاملة
+        try:
+            hook({"id": nid, "user_id": user_id, "kind": kind, "data": data or {}, "url": url[:500], "created_at": now})
+        except Exception:
+            pass
     c.execute("DELETE FROM notifications WHERE user_id=? AND id <= (SELECT id FROM notifications WHERE user_id=?"
               " ORDER BY id DESC LIMIT 1 OFFSET ?)", (user_id, user_id, NOTIFY_KEEP))
 
