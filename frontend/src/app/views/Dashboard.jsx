@@ -5,6 +5,7 @@ import {
   Pill, Empty, PageHead, SectionTitle, Reveal, num,
 } from "../kit.jsx";
 import { postJSON } from "../media.jsx";
+import MetaOneTap from "../meta_onetap.jsx";
 
 /* ============================================================================
    إنشاء بوت تليجرام بضغطة (Telegram Managed Bots) — بلا BotFather ولا توكن.
@@ -1247,6 +1248,8 @@ function FirstBotPage() {
           {bi("لوحتي", "My dashboard")}</Btn>} />
 
       {quick ? <OneTapCreate /> : <FirstBotGuide />}
+      {/* صفحة البداية بسيطة عمداً: كارت ماسنجر/إنستجرام لمن تتيحه باقته فقط، بلا دعوة ترقية هنا */}
+      {P.metaLogin && P.metaLogin.allowed && <MetaOneTap cfg={P.metaLogin} />}
       <CreateWizard collapsed={quick} />
 
       {dfy.allowed && !grant && (
@@ -1354,6 +1357,8 @@ export default function Dashboard() {
       {P.waEs && <WaOneTapTop cfg={P.waEs} />}
       {!P.waEs && P.waEsLocked && <WaOneTapLocked />}
       {quick && <OneTapCreate />}
+      {/* ماسنجر + إنستجرام بضغطة للجميع (مقفول بدعوة للترقية لمن لا تتيحه باقته) */}
+      {P.metaLogin && <MetaOneTap cfg={P.metaLogin} />}
       {P.metaConnect && <MetaConnect />}
       {!quick && BY.user.role === "admin" && (
         <Card className="mb-6 flex items-start gap-3 bg-yellow-400/[0.06] shadow-[inset_0_0_0_1px_rgb(250_204_21/0.25)]">

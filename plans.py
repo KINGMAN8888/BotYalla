@@ -8,6 +8,10 @@
 فألف رسالة = 3,123ج — أكثر من أي باقة هنا. تُسعَّر بالاستهلاك من محفظة رصيد
 منفصلة. `wa_msgs` أدناه هو حدّ الرسائل **الخدمية** وحدها.
 
+**ماسنجر وإنستجرام** (`meta`) من باقة التاجر: Meta لا تحاسب على رسائل الخدمة فيهما
+(ردود خلال 24 ساعة من رسالة العميل) — تكلفتهما الحدّية كتليجرام، فلا داعي لحجزهما خلف
+باقة واتساب. المجانية تبقى تليجرام وحده (باب الترقية). كل قناة مربوطة = بوت يُحسب من `max_bots`.
+
 **الدورة السنوية** = 70% من (السعر × 12)، أي خصم 30%. سببها ليس الخصم بل
 الاحتفاظ: الدفع السنوي يحتفظ بـ62% من العملاء مقابل 41% للشهري.
 """
@@ -22,31 +26,33 @@ PLANS = {
                     "بدون سجل تجاري", "مجانية للأبد"],
     "features_en": ["1 Telegram bot", "Unlimited messages", "Ready-made templates",
                     "No commercial register needed", "Free forever"],
-    "ai": False, "broadcast": False, "whatsapp": False, "white_label": False,
+    "ai": False, "broadcast": False, "whatsapp": False, "meta": False, "white_label": False,
     "wa_msgs": 0, "media_files": 100,
  },
  "merchant": {
     "name_ar": "تاجر", "name_en": "Merchant", "price": 299, "max_bots": 3,
     # سطور وكيل الإعداد وعقل البوت وصندوق الوارد تُضاف من FEATURES (app._plan_feature_lines)
     # تحصيل مدفوعات العملاء إضافة مدفوعة لكل بوت (app.addon_pay) — لا مشمولة في الباقة
-    "features_ar": ["3 بوتات على تليجرام", "تحصيل مدفوعات عملائك (إضافة لكل بوت)",
+    "features_ar": ["3 بوتات على تليجرام وماسنجر وإنستجرام", "ربط ماسنجر وإنستجرام بضغطة واحدة",
+                    "تحصيل مدفوعات عملائك (إضافة لكل بوت)",
                     "حملات Broadcast", "تحليلات كاملة ودعم الصور", "بدون تذييل BotYalla"],
-    "features_en": ["3 Telegram bots", "Customer payment collection (per-bot add-on)",
+    "features_en": ["3 bots on Telegram, Messenger and Instagram", "One-tap Messenger and Instagram connection",
+                    "Customer payment collection (per-bot add-on)",
                     "Broadcast campaigns", "Full analytics and media support", "No BotYalla footer"],
-    "ai": True, "broadcast": True, "whatsapp": False, "white_label": False,
+    "ai": True, "broadcast": True, "whatsapp": False, "meta": True, "white_label": False,
     "wa_msgs": 0, "media_files": 1000,
  },
  "whatsapp": {
     "name_ar": "واتساب", "name_en": "WhatsApp", "price": 899, "max_bots": 5,
-    "features_ar": ["كل مميزات باقة التاجر", "قناة واتساب الرسمية",
+    "features_ar": ["كل مميزات باقة التاجر", "قناة واتساب الرسمية + ماسنجر + إنستجرام",
                     "فريقنا يربط واتساب لك بنفسه",
                     "2000 رسالة خدمية شهرياً", "قوالب Meta",
                     "يتطلب سجلاً تجارياً وبطاقة ضريبية"],
-    "features_en": ["Everything in Merchant", "Official WhatsApp channel",
+    "features_en": ["Everything in Merchant", "Official WhatsApp + Messenger + Instagram",
                     "Our team connects WhatsApp for you",
                     "2,000 service messages/month", "Meta templates",
                     "Requires a commercial register and tax card"],
-    "ai": True, "broadcast": True, "whatsapp": True, "white_label": False,
+    "ai": True, "broadcast": True, "whatsapp": True, "meta": True, "white_label": False,
     "wa_msgs": 2000, "media_files": 3000,
  },
  # «راحة البال» — للمصانع وكبار التجار: فريقنا يبني البوت ويشغّله (done-for-you).
@@ -61,7 +67,7 @@ PLANS = {
     "features_en": ["Everything in WhatsApp", "Our team builds and runs your bot end to end",
                     "Replies, catalog and WhatsApp connection set up for you", "5,000 service messages/month",
                     "Priority support and a monthly performance review", "Annual subscription"],
-    "ai": True, "broadcast": True, "whatsapp": True, "white_label": False,
+    "ai": True, "broadcast": True, "whatsapp": True, "meta": True, "white_label": False,
     "wa_msgs": 5000, "media_files": 10000, "annual_only": True, "by_call": True,
  },
  "agency": {
@@ -72,7 +78,7 @@ PLANS = {
     "features_en": ["Unlimited client bots", "White-label branding",
                     "10,000 service messages/month", "Client management console",
                     "Priority support", "Full export"],
-    "ai": True, "broadcast": True, "whatsapp": True, "white_label": True,
+    "ai": True, "broadcast": True, "whatsapp": True, "meta": True, "white_label": True,
     "wa_msgs": 10000, "media_files": 20000,
  },
 
@@ -87,7 +93,7 @@ PLANS = {
     "features_en": ["Everything in Agency", "Contacts, segments and custom fields",
                     "Scheduled broadcasts with delivery/read analytics", "WhatsApp template studio",
                     "Teams and conversation routing", "Dedicated success manager"],
-    "ai": True, "broadcast": True, "whatsapp": True, "white_label": True,
+    "ai": True, "broadcast": True, "whatsapp": True, "meta": True, "white_label": True,
     "wa_msgs": 50000, "media_files": 50000, "by_call": True,
  },
 
@@ -103,7 +109,7 @@ PLANS = {
                     "وكيل الذكاء الاصطناعي", "حملات Broadcast", "تحليلات كاملة", "دعم الصور"],
     "features_en": ["Up to 5 bots", "WhatsApp + Telegram", "1,000 WhatsApp messages/month",
                     "AI agent", "Broadcast campaigns", "Full analytics", "Media support"],
-    "ai": True, "broadcast": True, "whatsapp": True, "white_label": False,
+    "ai": True, "broadcast": True, "whatsapp": True, "meta": True, "white_label": False,
     "wa_msgs": 1000, "media_files": 2000, "legacy": True,
  },
  "business": {
@@ -112,7 +118,7 @@ PLANS = {
                     "كل مميزات الاحترافية", "أولوية الدعم", "تصدير كامل"],
     "features_en": ["Unlimited bots", "5,000 WhatsApp messages/month",
                     "Everything in Pro", "Priority support", "Full export"],
-    "ai": True, "broadcast": True, "whatsapp": True, "white_label": False,
+    "ai": True, "broadcast": True, "whatsapp": True, "meta": True, "white_label": False,
     "wa_msgs": 5000, "media_files": 10000, "legacy": True,
  },
 }

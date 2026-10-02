@@ -1287,8 +1287,10 @@ def dashboard():
                        "waEs": WAS.client_config() if wa_ok else None,
                        # للباقات بدون واتساب: كارت مقفول يعرض الميزة ويدعو للترقية (بلا أي إعدادات Meta)
                        "waEsLocked": (not wa_ok) and WAS.configured(),
-                       # ماسنجر + إنستجرام: المرحلة الأولى للفريق وحده (meta_connect)
+                       # ماسنجر + إنستجرام: الربط اليدوي بتوكن للفريق وحده (meta_connect)
                        "metaConnect": current_role() in ("admin", "support"),
+                       # … والربط بضغطة (نافذة فيسبوك) للجميع: مقفول بدعوة للترقية لمن لا تتيحه باقته
+                       "metaLogin": _meta_login_card(),
                        "waAssist": {"open": db.open_ticket_of_kind(uid(), "wa_setup") if wa_plan else None},
                        "onboarding": _onboarding(bots),
                        # لحظة القيمة: عرض الترقية يظهر بعد أول نتيجة حقيقية لا قبلها
@@ -1301,6 +1303,15 @@ def dashboard():
                        # الإنشاء بضغطة متاح فقط لو بوت المنصة يعمل وفيه «وضع إدارة البوتات»
                        "oneTap": {"available": bool(info.get("username") and info.get("can_manage")),
                                   "platformRunning": manager.platform_running()}})
+
+
+def _meta_login_card():
+    """None (غير مضبوط في المنصة) | {allowed, reason, upgrade} — كارت «ماسنجر وإنستجرام بضغطة»."""
+    if not (WAS.app_id() and _meta_secret()):
+        return None
+    gate = _meta_gate()
+    return {"allowed": gate is None, "reason": gate[0] if gate else "", "upgrade": bool(gate and gate[1]),
+            "pricing": url_for("pricing")}
 
 
 @app.route("/start")
@@ -1321,7 +1332,7 @@ def first_bot():
     return react_page("dashboard", "start_title", {
         "focus": "first_bot", "bots": [], "total": {}, "onboarding": {"stage": "first_bot"},
         "journey": {}, "waAllowed": False, "waEs": None, "waEsLocked": False,
-        "metaConnect": False, "waAssist": {"open": None}, "waPlan": False,
+        "metaConnect": False, "metaLogin": _meta_login_card(), "waAssist": {"open": None}, "waPlan": False,
         "doneForYou": {"grant": _grant_view(uid()), "allowed": current_role() == "user"
                        and not session.get("assist")},
         "oneTap": {"available": bool(info.get("username") and info.get("can_manage")),
@@ -3983,6 +3994,196 @@ def meta_connect():
                    url=made[0]["url"])
 
 
+# ════════════════ ماسنجر + إنستجرام بضغطة — للعملاء (AGENTS §76) ════════════════
+# start ← نافذة فيسبوك ← return (تسلّم الكود للصفحة) ← pages (يبدّل الكود ويعرض الصفحات)
+# ← finish (الصفحة المختارة ⇒ بوتات). توكن المستخدم في الخادم مختوماً 20 دقيقة ولا يصل المتصفح.
+META_LOGIN_TTL = 20 * 60
+
+
+def _meta_login_ready():
+    import meta_pages as MP
+    return bool(WAS.app_id() and _meta_secret()), MP
+
+
+def _meta_gate(needed=1):
+    """(None | (رسالة, upgrade?)) — الباقة (ميزة `meta`) وعدد البوتات وصلاحية الفريق، بحساب صاحب العمل."""
+    ar = session.get("lang") != "en"
+    if current_role() in ("admin", "support"):
+        return None
+    if my_team_role() not in ("owner", "admin"):
+        return (("ربط الصفحات لصاحب الحساب ومديري الفريق." if ar else
+                 "Connecting pages is for the account owner and team admins."), False)
+    pid = _acct_plan()
+    if not plans.plan(pid).get("meta"):
+        return (("ماسنجر وإنستجرام متاحان من باقة «تاجر» فأعلى." if ar else
+                 "Messenger and Instagram start at the «Merchant» plan."), True)
+    if db.count_user_bots(acct()) + needed > plans.plan(pid)["max_bots"]:
+        return (("وصلت للحد الأقصى لبوتات باقتك — رقّي الباقة لإضافة المزيد." if ar else
+                 "You reached your plan's bot limit — upgrade to add more."), True)
+    return None
+
+
+@app.route("/meta/login/start", methods=["POST"])
+@login_required
+def meta_login_start():
+    ready, MP = _meta_login_ready()
+    if not ready:
+        return jsonify(ok=False, error="not configured"), 404
+    gate = _meta_gate()
+    if gate:
+        return jsonify(ok=False, error=gate[0], upgrade=gate[1]), 403
+    ret = _public_url("meta_login_return")
+    if not ret:
+        return jsonify(ok=False, error="PUBLIC_URL is not configured"), 500
+    state = _secrets.token_urlsafe(24)
+    session["meta_login_state"] = state
+    return jsonify(ok=True, url=MP.login_url(WAS.app_id(), ret, state, MP.login_config_id()))
+
+
+@app.route("/meta/login/return")
+@login_required
+def meta_login_return():
+    """عودة نافذة فيسبوك: تسلّم الكود لصفحة اللوحة (نفس الأصل) وتقفل نفسها. الكود بلا سرّ
+    التطبيق لا يفيد أحداً، ويُستهلك مرة واحدة في /meta/login/pages."""
+    ar = session.get("lang") != "en"
+    ok = (request.args.get("state") or "") == (session.pop("meta_login_state", "") or "\0")
+    code = (request.args.get("code") or "").strip()[:1024]
+    if not ok:
+        payload = {"type": "BY_META", "error": "state"}
+    elif code:
+        session["meta_login_code"] = True         # لا يُقبل كود في /pages بلا نافذة بدأتها هذه الجلسة
+        payload = {"type": "BY_META", "code": code}
+    else:
+        payload = {"type": "BY_META", "error": (request.args.get("error_reason") or request.args.get("error")
+                                                or "cancelled")[:200]}
+    origin = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    html = _WA_ES_RETURN % {"msg": ("اتقفلت النافذة… ارجع للصفحة." if ar else "Closing… back to the page."),
+                            "nonce": getattr(g, "nonce", ""),
+                            "data": _js_json(payload), "origin": _js_json(origin or "*")}
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+def _meta_login_token():
+    raw = db.get_setting(uid(), "meta_login_tmp")
+    try:
+        d = json.loads(raw or "{}")
+    except ValueError:
+        return ""
+    if int(_time.time()) - int(d.get("at") or 0) > META_LOGIN_TTL:
+        db.pop_setting(uid(), "meta_login_tmp")
+        return ""
+    return db.unseal(d.get("t") or "")
+
+
+def _meta_page_view(pages):
+    """الصفحات للمتصفح + هل كل قناة مربوطة بالفعل (عندك ⇒ تحديث، عند غيرك ⇒ مقفولة)."""
+    out = []
+    for p in pages:
+        state = {}
+        for ch, pfx, own in (("messenger", "fb", p["id"]), ("instagram", "ig", (p["ig"] or {}).get("id"))):
+            b = db.get_bot_by_token(f"{pfx}:{own}") if own else None
+            state[ch] = "" if not b else ("mine" if b["owner_id"] == acct() else "taken")
+        out.append(dict(p, linked=state))
+    return out
+
+
+@app.route("/meta/login/pages", methods=["POST"])
+@login_required
+def meta_login_pages():
+    ar = session.get("lang") != "en"
+    ready, MP = _meta_login_ready()
+    if not ready:
+        return jsonify(ok=False, error="not configured"), 404
+    if _rate_limited(f"u{uid()}", limit=12, window=600, bucket="meta_login"):
+        return jsonify(ok=False, error=("محاولات كتير — استنى دقايق." if ar else "Too many attempts.")), 429
+    d = _json_body()
+    if d.get("code"):
+        if not session.pop("meta_login_code", False):
+            return jsonify(ok=False, error="state"), 400
+        try:
+            tok = MP.login_exchange(d.get("code"), _public_url("meta_login_return"), WAS.app_id(), _meta_secret())
+        except MP.PagesError as e:
+            log.warning("meta login exchange failed for user=%s: %s", uid(), e)
+            return jsonify(ok=False, error=(f"فيسبوك رفض تسجيل الدخول: {e}" if ar else f"Facebook refused the login: {e}"))
+        db.set_setting(uid(), "meta_login_tmp", json.dumps({"t": db.seal(tok), "at": int(_time.time())}))
+    else:
+        tok = _meta_login_token()                 # «تحديث القائمة» بلا نافذة جديدة
+        if not tok:
+            return jsonify(ok=False, error="expired"), 400
+    try:
+        pages = MP.list_pages(tok)
+    except MP.PagesError as e:
+        return jsonify(ok=False, error=(f"تعذّر جلب صفحاتك: {e}" if ar else f"Couldn't load your Pages: {e}"))
+    pid = _acct_plan()
+    staff = current_role() in ("admin", "support")
+    left = 9999 if staff else max(0, plans.plan(pid)["max_bots"] - db.count_user_bots(acct()))
+    return jsonify(ok=True, pages=_meta_page_view(pages), slots=left)
+
+
+@app.route("/meta/login/finish", methods=["POST"])
+@login_required
+def meta_login_finish():
+    """الصفحة المختارة ⇒ بوت ماسنجر و/أو إنستجرام في حساب صاحب العمل **بحدود باقته**.
+    `connect` تتحقّق أن للتوكن وصولاً لهذه الصفحة (من /me/accounts) — فلا تُربط صفحة لم يمنحها."""
+    ar = session.get("lang") != "en"
+    ready, MP = _meta_login_ready()
+    if not ready:
+        return jsonify(ok=False, error="not configured"), 404
+    if _rate_limited(f"u{uid()}", limit=10, window=600, bucket="meta_finish"):
+        return jsonify(ok=False, error=("محاولات كتير — استنى دقايق." if ar else "Too many attempts.")), 429
+    d = _json_body()
+    want_fb, want_ig = d.get("messenger") is True, d.get("instagram") is True
+    if not (want_fb or want_ig):
+        return jsonify(ok=False, error=("اختار ماسنجر أو إنستجرام أو الاتنين." if ar else
+                                        "Choose Messenger, Instagram or both.")), 400
+    page_id = str(d.get("page_id") or "").strip()
+    tok = _meta_login_token()
+    if not tok:
+        return jsonify(ok=False, error="expired"), 400
+    gate = _meta_gate(int(want_fb) + int(want_ig))
+    if gate:
+        return jsonify(ok=False, error=gate[0], upgrade=gate[1]), 403
+    template = d.get("template") if d.get("template") in T.TEMPLATES else "customer_service"
+    try:
+        res = MP.connect(page_id, tok, WAS.app_id(), _meta_secret())
+    except MP.PagesError as e:
+        log.warning("meta login connect failed at %s for user=%s: %s", e.step, uid(), e)
+        return jsonify(ok=False, step=e.step, error=(f"Meta رفضت الربط ({e.step}): {e}" if ar else
+                                                     f"Meta refused the connection ({e.step}): {e}"))
+    except Exception:
+        log.exception("meta login connect crashed for user=%s", uid())
+        return jsonify(ok=False, error=("خطأ غير متوقع — جرّب تاني." if ar else "Unexpected error — try again.")), 500
+    if want_ig and not res["ig_id"]:
+        if not want_fb:
+            return jsonify(ok=False, step="instagram", error=(
+                "الصفحة دي مش مربوط بها حساب إنستجرام احترافي — اربطه من إعدادات الصفحة على فيسبوك ثم أعد المحاولة."
+                if ar else "This Page has no linked Instagram professional account — link it in the Page settings, then retry."))
+        want_ig = False
+    name = (str(d.get("name") or "").strip() or res["name"])[:60]
+    made, failed = _meta_make_bots(acct(), res, page_id, want_fb, want_ig, name, template)
+    if not made:
+        return jsonify(ok=False, error=("الحساب ده مربوط ببوت عند مستخدم تاني." if ar else
+                                        "This account is already connected to another user's bot."))
+    db.pop_setting(uid(), "meta_login_tmp")
+    for m in made:
+        if not m.get("updated"):
+            # يرد فوراً — لا خطوة «تشغيل» زائدة. نشط في القاعدة أولاً: لو تعذّر التشغيل الآن (سقف
+            # الخادم مثلاً) يُشغَّل مع الإقلاع التالي بدل أن يبقى متوقفاً بصمت
+            db.set_bot_active(m["id"], True)
+            ok_run, why = manager.start_bot(m["id"])
+            if not ok_run:
+                log.warning("meta login: bot %s not started now: %s", m["id"], why)
+    log.info("meta login: user=%s page=%s bots=%s warning=%s", uid(), page_id, [m["id"] for m in made], bool(res["warning"]))
+    chans = " + ".join("Messenger" if m["channel"] == "messenger" else "Instagram" for m in made)
+    notify_admins(f"🤖 ربط بضغطة / One-tap connect: {chans} «{name}» — {session.get('uname')}"
+                  + (f"\n⚠️ {res['warning']}" if res["warning"] else ""))
+    for m in made:
+        AN.queue(session, "bot_created", channel=m["channel"], template=template)
+    flash((f"✅ اتربط {chans} ببوت «{name}» وبدأ يرد على عملائك." if ar else
+           f"✅ {chans} connected to «{name}» and already replying to your customers."), "ok")
+    return jsonify(ok=True, bots=made, failed=failed, warning=res["warning"], url=made[0]["url"] + "?new=1")
+
+
 @app.route("/whatsapp/es/start", methods=["POST"])
 @login_required
 def wa_es_start():
@@ -5771,7 +5972,7 @@ def _public_plan(p, lang):
             "annual_has_discount": p["annual_has_discount"],
             "annual_saving_pct": p["annual_saving_pct"],
             "annual_monthly_equiv": p["annual_monthly_equiv"],
-            "whatsapp": bool(p.get("whatsapp")), "hot": p["id"] == "whatsapp",
+            "whatsapp": bool(p.get("whatsapp")), "meta": bool(p.get("meta")), "hot": p["id"] == "whatsapp",
             "by_call": bool(p.get("by_call")), "annual_only": bool(p.get("annual_only"))}
 
 
@@ -5879,7 +6080,7 @@ def segment_page(code):
 #    لا إرسال حملات ولا حذف ولا تصدير، ولا ربط بحساب فيسبوك/تليجرام الموظف.
 #  • كل طلب يغيّر شيئاً يُسجَّل (staff_actions) ويراه العميل، ولافتة ظاهرة طول الوقت.
 _ASSIST_BLOCK = ("/account", "/billing", "/subscribe", "/wallet", "/affiliate", "/admin", "/api/admin",
-                 "/support", "/settings", "/whatsapp/", "/verify-email", "/meta/connect", "/auth/",
+                 "/support", "/settings", "/whatsapp/", "/verify-email", "/meta/connect", "/meta/login", "/auth/",
                  "/register", "/login", "/request-bot", "/api/promo", "/assist/request", "/assist/revoke",
                  "/logout")
 _ASSIST_BLOCK_RE = _re.compile(r"^/(?:api/)?bot/\d+/(?:inbox|broadcast|delete|export|payments|pay-settings|"

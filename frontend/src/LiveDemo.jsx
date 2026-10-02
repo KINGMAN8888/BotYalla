@@ -9,6 +9,12 @@ import { BY, t, Icon, Counter, useSpotlight, useAnimEnabled } from "./ui.jsx";
    ========================================================================== */
 export default function LiveDemo({ channel = "telegram" }) {
   const wa = channel === "whatsapp";
+  // فقاعة العميل بلون كل قناة كما يعرفه الزائر، ورابط المحادثة بصيغتها الرسمية
+  const ME = {
+    whatsapp: "bg-[linear-gradient(115deg,#25D366,#1DAA61)] font-bold text-[#04130A] shadow-[0_8px_22px_-10px_rgb(37_211_102/0.8)]",
+    messenger: "bg-[linear-gradient(115deg,#0A7CFF,#4F9DFF)] font-bold text-white shadow-[0_8px_22px_-10px_rgb(10_124_255/0.85)]",
+    instagram: "bg-[linear-gradient(115deg,#833AB4,#E1306C_60%,#F77737)] font-bold text-white shadow-[0_8px_22px_-10px_rgb(225_48_108/0.8)]",
+  }[channel];
   const demos = BY.demos || [];
   const [idx, setIdx] = useState(0);
   const [auto, setAuto] = useState(true);
@@ -46,7 +52,8 @@ export default function LiveDemo({ channel = "telegram" }) {
             <i className="block size-[11px] rounded-full bg-[#FEBC2E]" />
             <i className="block size-[11px] rounded-full bg-[#28C840]" />
             <span className="ms-3.5 rounded-full bg-black/35 px-4 py-1 text-[11.5px] tracking-wide text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]">
-              {wa ? "wa.me/20 10•• ••• ••••" : `t.me/${d.handle}`}
+              {wa ? "wa.me/20 10•• ••• ••••" : channel === "messenger" ? `m.me/${d.handle.replace(/_bot$/, "")}`
+                : channel === "instagram" ? `ig.me/m/${d.handle.replace(/_bot$/, "")}` : `t.me/${d.handle}`}
             </span>
             <span className="ms-auto inline-flex items-center gap-1.5 rounded-full bg-au-teal/15 px-3 py-1 text-[11px] font-extrabold text-au-teal">
               <i className="block size-1.5 rounded-full bg-current blip" />
@@ -70,8 +77,8 @@ export default function LiveDemo({ channel = "telegram" }) {
                       }}
                       className={
                         "max-w-[84%] rounded-[19px] px-4 py-2.5 text-[13.5px] leading-relaxed " +
-                        (m.me && wa
-                          ? "self-end rounded-ee-[6px] bg-[linear-gradient(115deg,#25D366,#1DAA61)] font-bold text-[#04130A] shadow-[0_8px_22px_-10px_rgb(37_211_102/0.8)]"
+                        (m.me && ME
+                          ? "self-end rounded-ee-[6px] " + ME
                           : m.me
                           ? "self-end rounded-ee-[6px] bg-[linear-gradient(115deg,#7C6CF6,#22D3EE)] font-bold text-[#08111C] shadow-[0_8px_22px_-10px_rgb(34_211_238/0.9)]"
                           : "self-start rounded-es-[6px] bg-white/[0.07] text-ink shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)]")

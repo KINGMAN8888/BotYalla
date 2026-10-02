@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useInView, useReducedMotion } from "motion/react";
 import { BY, t, Icon, Magnetic, useAnimEnabled } from "./ui.jsx";
+import { CH } from "./Channels.jsx";
 
 /* ============================================================================
    البطل: النافذة أولاً، والكلام تحتها.
@@ -344,6 +345,19 @@ export default function Hero() {
               </p>
             </div>
           )}
+        </div>
+
+        {/* القنوات الأربع في سطر واحد تحت الأزرار — كل شريحة تنزل لقسم القنوات */}
+        <div className="hr-in mt-9 flex flex-wrap items-center justify-center gap-2" style={{ transitionDelay: "0.8s" }}>
+          <span className="me-1 text-[12.5px] font-bold text-ink-3">{t("lp2_ch_strip")}</span>
+          {Object.entries(CH).map(([id, c]) => (
+            <a key={id} href="#channels"
+               className="inline-flex items-center gap-2 rounded-full bg-white/[0.04] px-3 py-1.5 text-[12.5px] font-bold text-ink-2 no-underline
+                          shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09)] transition-colors hover:bg-white/[0.08] hover:text-ink
+                          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30">
+              <img src={c.logo} alt="" className="size-4 object-contain" />{c.name}
+            </a>
+          ))}
         </div>
       </div>
     </section>

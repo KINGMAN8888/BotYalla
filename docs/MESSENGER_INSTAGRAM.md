@@ -63,11 +63,15 @@ Meta توحّد ماسنجر ورسائل إنستجرام في **Messenger Plat
 | قراءة · تسليم · تفاعل · تعديل · تعليقات · تسميات · سياسات · نماذج عملاء | سجل الأحداث |
 | حدث لصفحة بلا بوت/بوت متوقف | `unrouted` في السجل بدل أن يضيع |
 
-### المرحلة 2 — الربط بضغطة (بعد الاعتماد)
-نافذة Facebook Login for Business بتكوين **صفحات** مستقل (`META_PAGES_CONFIG_ID`) بنفس
-مسار النافذة المنبثقة الموجود لواتساب (`dialog_url` + `/…/return`) ← `code` ← توكن مستخدم
-← قائمة الصفحات ← العميل يختار ← **`meta_pages.connect` نفسها**. ثم يُفتح الكارت لباقات
-مدفوعة (قرار تسعير: ضمن «التاجر» أم إضافة؟).
+### المرحلة 2 — الربط بضغطة للعملاء (منفَّذة 2026-10-02)
+كارت «اربط ماسنجر وإنستجرام بضغطة» في «بوتاتي» (وصفحة البداية لمن تتيحه باقته):
+**متابعة بفيسبوك** ← نافذة فيسبوك (`meta_pages.login_url`) ← `/meta/login/return` يسلّم
+الكود للصفحة ← `/meta/login/pages` (يبدّل الكود بتوكن مستخدم طويل الأمد يُحفظ **مختوماً 20
+دقيقة** في الخادم، ويعرض الصفحات وحساب إنستجرام كل صفحة — بلا أي توكن للمتصفح) ← العميل
+يختار الصفحة والقنوات ونوع البوت ← `/meta/login/finish` ← **`meta_pages.connect` نفسها** ←
+البوتات في حساب صاحب العمل وتبدأ الرد فوراً. الباقة: ميزة `meta` من «التاجر» فأعلى (Meta لا
+تحاسب على رسائل الخدمة)، وكل قناة بوت من `max_bots`. موظف الفريق العادي لا يربط (المالك
+ومديرو الفريق فقط). AGENTS §76.
 
 ### المرحلة 3 — الطرح الكامل
 صفحة هبوط/قطاع · تعليقات إنستجرام → رد خاص (Private Replies) · زر «ابدأ» وقائمة ثابتة
@@ -87,6 +91,15 @@ Meta توحّد ماسنجر ورسائل إنستجرام في **Messenger Plat
    `instagram_manage_messages`, `business_management` ← Generate.
 6. **App Review (للمرحلة 2)**: وصول متقدم لـ `pages_messaging`, `pages_manage_metadata`,
    `instagram_manage_messages`, `instagram_basic` بنفس أسلوب مراجعة واتساب (نداء API + فيديو).
+7. **الربط بضغطة (المرحلة 2)** — في نفس التطبيق:
+   - منتج **Facebook Login for Business** ← الإعدادات ← **Valid OAuth Redirect URIs**:
+     `https://botyalla.com/meta/login/return` (يجب أن يطابق `PUBLIC_URL` حرفياً).
+   - (مستحسن) **Configurations** ← تكوين جديد «Messenger & Instagram» بأذونات:
+     `pages_show_list`, `pages_messaging`, `pages_manage_metadata`, `pages_read_engagement`,
+     `instagram_basic`, `instagram_manage_messages`, `business_management` — ثم ضع معرّفه في
+     `.env` كـ `META_PAGES_CONFIG_ID`. بدونه تُطلب الأذونات بأسمائها (يعمل أيضاً).
+   - ⚠️ **قبل اعتماد App Review** لا يستطيع تسجيل الدخول إلا من له دور في التطبيق (Admin /
+     Developer / Tester). للعامة: وصول متقدم (Advanced Access) للأذونات أعلاه + التحقق من النشاط.
 
 ## حدود المرحلة 1 المعروفة
 - وسائط مكتبة الوسائط تُرسل كتعليق وأزرار فقط (الرفع عبر Attachment Upload API لاحقاً).

@@ -1,4 +1,4 @@
-"""ربط صفحة فيسبوك (ماسنجر) وحساب إنستجرام الاحترافي المربوط بها — المرحلة الأولى (للفريق).
+"""ربط صفحة فيسبوك (ماسنجر) وحساب إنستجرام الاحترافي المربوط بها — يدوياً للفريق، وبضغطة للعملاء (login_*).
 
 الربط اليدوي بتوكن: الأدمن يلصق Page ID + توكن. يُقبل نوعان:
   * **توكن صفحة** (أفضلها من System User في Business Settings — لا ينتهي).
@@ -13,7 +13,9 @@
 التطبيق = `META_APP_ID` (تطبيق الـTech Provider حيث أُضيف منتجا Messenger وInstagram)،
 والسرّ = `wa_es_app_secret` ثم `wa_app_secret` — نفس ما يتحقق به الويبهوك من التوقيع."""
 import logging
+import os
 import re
+from urllib.parse import urlencode
 
 import httpx
 
@@ -148,6 +150,78 @@ def _page_token(c, page_id, token, app_id="", secret=""):
     if not match or not match[0].get("access_token"):
         raise PagesError("page", "this token has no access to that Page")
     return match[0]["access_token"]
+
+
+# ════════════════ «اربط ماسنجر وإنستجرام بضغطة» — للعملاء (المرحلة الثانية) ════════════════
+# نافذة تسجيل دخول فيسبوك (redirect كامل، لا SDK — نفس سبب واتساب: FedCM يسقط config_id) ←
+# كود ← توكن مستخدم طويل الأمد ← قائمة صفحاته (وحساب إنستجرام كل صفحة) ← يختار صفحة ←
+# `connect` نفسها أعلاه. التوكن لا يصل المتصفح أبداً: يُحفظ مختوماً في الخادم دقائق معدودة.
+# config_id اختياري: تكوين «Facebook Login for Business» (أفضل: اختيار الصفحات في النافذة
+# نفسها)؛ بدونه نطلب الأذونات بأسمائها (Facebook Login العادي).
+LOGIN_SCOPES = ("pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement",
+                "instagram_basic", "instagram_manage_messages", "business_management")
+
+
+def login_config_id():
+    v = os.getenv("META_PAGES_CONFIG_ID", "").strip()
+    return v if _ID.match(v) else ""
+
+
+def login_url(app_id, redirect_uri, state, config_id=""):
+    """رابط نافذة فيسبوك كاملاً. `state` يعود كما هو (يمنع تمرير كود من نافذة لم نبدأها)."""
+    if not (_ID.match(str(app_id or "")) and redirect_uri and state):
+        return None
+    q = {"client_id": app_id, "redirect_uri": redirect_uri, "state": state, "response_type": "code"}
+    if config_id:
+        q.update(config_id=config_id, override_default_response_type="true")
+    else:
+        q["scope"] = ",".join(LOGIN_SCOPES)
+    return f"https://www.facebook.com/{GRAPH.rsplit('/', 1)[-1]}/dialog/oauth?" + urlencode(q)
+
+
+def login_exchange(code, redirect_uri, app_id, secret):
+    """كود النافذة ⇒ توكن مستخدم **طويل الأمد** (60 يوماً؛ توكنات الصفحات المستخرجة منه لا تنتهي).
+    `redirect_uri` يجب أن يطابق حرفياً ما فُتحت به النافذة — شرط Meta. يرمي PagesError('login')."""
+    code = str(code or "").strip()
+    if not (code and secret and _ID.match(str(app_id or ""))):
+        raise PagesError("login", "missing code or app secret")
+    with httpx.Client(timeout=TIMEOUT) as c:
+        r = c.get(f"{GRAPH}/oauth/access_token", params={"client_id": app_id, "client_secret": secret,
+                                                          "redirect_uri": redirect_uri, "code": code})
+        tok = (r.json() or {}).get("access_token") if r.status_code == 200 else None
+        if not tok:
+            raise PagesError("login", _err(r))
+        x = c.get(f"{GRAPH}/oauth/access_token", params={"grant_type": "fb_exchange_token", "client_id": app_id,
+                                                          "client_secret": secret, "fb_exchange_token": tok})
+        if x.status_code == 200 and (x.json() or {}).get("access_token"):
+            tok = x.json()["access_token"]
+    return tok
+
+
+def list_pages(user_token):
+    """صفحات المستخدم التي منحها للتطبيق ⇒ [{id, name, picture, category, can_message, ig}] بلا أي توكن.
+    `can_message`: للمستخدم دور يسمح بالرسائل (MESSAGING/MODERATE) — بدونه لن يعمل البوت."""
+    with httpx.Client(timeout=TIMEOUT) as c:
+        r = c.get(f"{GRAPH}/me/accounts", params={
+            "fields": "id,name,category,tasks,picture.width(120).height(120){url},"
+                      "instagram_business_account{id,username,profile_picture_url}",
+            "limit": 100, "access_token": user_token})
+        if r.status_code != 200:
+            raise PagesError("pages", _err(r))
+        out = []
+        for p in (r.json() or {}).get("data") or []:
+            pid = str(p.get("id") or "")
+            if not _ID.match(pid):
+                continue
+            ig = p.get("instagram_business_account") or {}
+            tasks = set(p.get("tasks") or [])
+            out.append({"id": pid, "name": str(p.get("name") or pid)[:120], "category": str(p.get("category") or "")[:80],
+                        "picture": (((p.get("picture") or {}).get("data") or {}).get("url") or "")[:600],
+                        "can_message": not tasks or bool(tasks & {"MESSAGING", "MODERATE", "MANAGE"}),
+                        "ig": ({"id": str(ig["id"]), "username": str(ig.get("username") or "")[:60],
+                                "picture": str(ig.get("profile_picture_url") or "")[:600]}
+                               if _ID.match(str(ig.get("id") or "")) else None)})
+    return out
 
 
 def leads_connect(page_id, token, app_id="", secret=""):

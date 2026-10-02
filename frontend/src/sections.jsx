@@ -5,6 +5,7 @@ import Aurora from "./Aurora.jsx";
 import Hero, { QR } from "./Hero.jsx";
 import Journey from "./Journey.jsx";
 import Channels from "./Channels.jsx";
+import MetaShowcase from "./MetaShowcase.jsx";
 import PricingPublic from "./PricingPublic.jsx";
 import Trust from "./Trust.jsx";
 
@@ -653,6 +654,8 @@ export default function App() {
       <main id="main">
         <Hero />
         <Facts />
+        {/* الميزة الأبرز الجديدة مباشرة بعد الأرقام: ماسنجر وإنستجرام بضغطة */}
+        <MetaShowcase />
         <OfficialBots />
         <Marquee />
         <Journey />
