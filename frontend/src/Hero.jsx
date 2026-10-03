@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useInView, useReducedMotion } from "motion/react";
 import { BY, t, Icon, Magnetic, useAnimEnabled } from "./ui.jsx";
 import { CH } from "./Channels.jsx";
+import HeroVideo from "./HeroVideo.jsx";
 
 /* ============================================================================
    البطل: النافذة أولاً، والكلام تحتها.
@@ -307,6 +308,8 @@ export default function Hero() {
   return (
     <section ref={ref} aria-labelledby="hero-t"
              className="relative mx-auto max-w-[1240px] px-4 pt-[clamp(8px,2vw,28px)] pb-[clamp(48px,7vw,96px)] sm:px-6">
+      {/* فيديو الخلفية: دوّامة الرسايل حوالين نواة البوت — صامت ولوب متصل */}
+      <HeroVideo />
       {/* النافذة أولاً: أول ما يراه الزائر هو المنتج نفسه */}
       <div className="hr-in" style={{ transitionDelay: "0.05s" }}>
         <Window />
