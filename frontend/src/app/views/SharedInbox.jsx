@@ -578,7 +578,8 @@ export default function SharedInbox() {
   const [teams, setTeams] = useState(P.allTeams || []);
   const [canned, setCanned] = useState(P.canned || []);
   const [settings, setSettings] = useState(false);
-  const [side, setSide] = useState(true);
+  // لوحة جهة الاتصال تفتح وحدها على الشاشات العريضة جداً فقط — دونها تضيّق المحادثة؛ زرّها في رأس المحادثة
+  const [side, setSide] = useState(() => { try { return window.innerWidth >= 1800; } catch { return true; } });
   const [payOpen, setPayOpen] = useState(false);
   const lastId = useRef(0);
   const scroller = useRef(null);
@@ -638,9 +639,12 @@ export default function SharedInbox() {
       <PageHead icon="inbox" title={bi("الصندوق المشترك", "Team inbox")}
                 sub={bi("كل محادثات قنواتك لفريقك: إسناد وفِرق بالتناوب، ملاحظات داخلية، وردود جاهزة.", "Every channel's conversations for your team: assignment, round-robin teams, internal notes and canned replies.")}
                 actions={P.canManage && <Btn variant="ghost" sm icon="settings" onClick={() => setSettings(true)}>{bi("الإعدادات", "Settings")}</Btn>} />
-      <div className="grid gap-3 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[190px_300px_minmax(0,1fr)] 2xl:grid-cols-[190px_310px_minmax(0,1fr)_280px]">
+      {/* تطبيق بارتفاع الشاشة: كل عمود يمرّر داخله، والصفحة نفسها لا تمرّر على الشاشات الكبيرة */}
+      <div className={"grid gap-3 lg:h-[calc(100dvh-248px)] lg:min-h-[500px] lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[210px_330px_minmax(0,1fr)] " +
+                      // عمود جهة الاتصال يُحجز فقط وهو ظاهر — وإلا ضاقت المحادثة وبقي فراغ فارغ بجانبها
+                      (cur && side ? "2xl:grid-cols-[220px_350px_minmax(0,1fr)_300px]" : "2xl:grid-cols-[220px_360px_minmax(0,1fr)]")}>
         {/* العروض — عمود في الشاشات العريضة، وقائمة منسدلة فوق المحادثات فيما دونها */}
-        <Card className="hidden !p-2 xl:block">
+        <Card className="hidden min-h-0 overflow-y-auto !p-2 xl:block">
           <nav className="flex gap-1 overflow-x-auto lg:flex-col">
             {[...views, ...(P.teams || []).map((tm) => [`team:${tm.id}`, tm.name, "users"])].map(([k, l, i]) => (
               <button key={k} type="button" onClick={() => { setView(k); setCur(null); }}
@@ -653,7 +657,7 @@ export default function SharedInbox() {
         </Card>
 
         {/* القائمة */}
-        <Card className={"flex flex-col !p-2 " + (cur ? "hidden lg:flex" : "")}>
+        <Card className={"flex min-h-0 flex-col !p-2 " + (cur ? "hidden lg:flex" : "")}>
           <div className="grid gap-2 p-1">
             <Select className="xl:hidden" value={view} onChange={(e) => { setView(e.target.value); setCur(null); }}>
               {[...views, ...(P.teams || []).map((tm) => [`team:${tm.id}`, tm.name])].map(([k, l]) => (
@@ -668,14 +672,14 @@ export default function SharedInbox() {
               </Select>
             )}
           </div>
-          <div className="mt-1 flex max-h-[68vh] flex-col gap-0.5 overflow-y-auto">
+          <div className="mt-1 flex max-h-[68vh] min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto lg:max-h-none">
             {data.rows.map((x) => <Row key={x.bot_id + x.peer} c={x} active={cur && cur.bot_id === x.bot_id && cur.peer === x.peer} onOpen={(r) => setCur({ bot_id: r.bot_id, peer: r.peer })} />)}
             {!data.rows.length && <Empty icon="inbox" title={bi("لا محادثات هنا", "No conversations here")} />}
           </div>
         </Card>
 
         {/* المحادثة */}
-        <Card className={"flex min-h-[70vh] flex-col !p-0 " + (cur ? "" : "hidden lg:flex")}>
+        <Card className={"flex min-h-[70vh] flex-col overflow-hidden !p-0 lg:min-h-0 " + (cur ? "" : "hidden lg:flex")}>
           {!cur ? <div className="grid flex-1 place-items-center p-8"><Empty icon="inbox" title={t("inbox_pick")} /></div> : <>
             <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 shadow-[inset_0_-1px_0_rgb(var(--ov-rgb)/0.08)]">
               <div className="flex min-w-0 items-center gap-2">
@@ -698,12 +702,12 @@ export default function SharedInbox() {
                 <Btn sm variant="ghost" className="hidden 2xl:inline-flex" onClick={() => setSide(!side)} aria-label={bi("لوحة جهة الاتصال", "Contact panel")}><Icon name="user" size={14} /></Btn>
               </div>
             </div>
-            <div ref={scroller} className="flex flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-4" style={{ maxHeight: "56vh" }} aria-live="polite">
+            <div ref={scroller} className="flex max-h-[56vh] min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-4 lg:max-h-none" aria-live="polite">
               {msgs.map((m) => <Bubble key={m.id} m={m} botId={cur.bot_id} />)}
               {!msgs.length && <div className="m-auto text-[13px] text-ink-3">…</div>}
             </div>
             {cur.peer !== "wa:" && <Composer conv={{ ...conv, bot_id: cur.bot_id, peer: cur.peer }} contact={contact} canned={canned} windowClosed={windowClosed} onSend={send} onNote={note} />}
-            <details className="border-t border-ov/10 2xl:hidden">
+            <details className={"shrink-0 border-t border-ov/10 [&[open]>div]:max-h-[38vh] [&[open]>div]:overflow-y-auto " + (side ? "2xl:hidden" : "")}>
               <summary className="cursor-pointer px-4 py-2.5 text-[13px] font-bold text-ink-2">{bi("الحالة والإسناد وجهة الاتصال", "Status, assignment & contact")}</summary>
               <ContactPanel conv={conv} contact={contact} teams={teams} onAssign={assign} onStatus={status} />
             </details>
@@ -711,7 +715,7 @@ export default function SharedInbox() {
         </Card>
 
         {/* لوحة جهة الاتصال (الشاشات الواسعة) */}
-        {cur && side && <Card className="hidden !p-0 2xl:block"><ContactPanel conv={conv} contact={contact} teams={teams} onAssign={assign} onStatus={status} /></Card>}
+        {cur && side && <Card className="hidden min-h-0 overflow-y-auto !p-0 2xl:block"><ContactPanel conv={conv} contact={contact} teams={teams} onAssign={assign} onStatus={status} /></Card>}
       </div>
       {P.callsOn && <CallBar onOpen={(c) => setCur(c)} />}
       {cur && <PayRequest open={payOpen} onClose={() => setPayOpen(false)} cur={cur} onSent={() => loadThread(false)} />}

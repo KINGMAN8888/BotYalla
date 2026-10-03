@@ -240,6 +240,9 @@ function MobileTabBar({ view, onMore, moreOpen }) {
   );
 }
 
+/* صفحات تطبيقية تحتاج عرض الشاشة كله (أعمدة متجاورة) — باقي الصفحات تبقى بعرض القراءة */
+const WIDE = new Set(["shared_inbox"]);
+
 export default function AppShell({ view, children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopClosed, setDesktopClosed] = useState(false);
@@ -383,7 +386,7 @@ export default function AppShell({ view, children }) {
             </div>
           </header>
 
-          <main className={`mx-auto w-full max-w-[1180px] flex-1 px-4 py-6 sm:px-5 sm:py-8 ${smart ? "pb-[calc(env(safe-area-inset-bottom)+104px)] lg:pb-8" : ""}`}>{children}</main>
+          <main className={`mx-auto w-full ${WIDE.has(view) ? "max-w-[1760px] py-4 sm:py-4" : "max-w-[1180px] py-6 sm:py-8"} flex-1 px-4 sm:px-5 ${smart ? "pb-[calc(env(safe-area-inset-bottom)+104px)] lg:pb-8" : ""}`}>{children}</main>
           {smart && <CommandPalette open={palette} onClose={() => setPalette(false)} />}
           {smart && <MobileTabBar view={view} moreOpen={mobileOpen} onMore={() => setMobileOpen((o) => !o)} />}
           {BY.ui && <PwaLayer />}
