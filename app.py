@@ -6287,6 +6287,33 @@ def _assistant_user():
     pages = {k: v[0] for k, v in _assistant_pages(lang).items()}
     return SA.user_context(u, sub, bots, plans.plan_name(sub.get("plan") or "free", lang), pages, metrics)
 
+def _assistant_report():
+    """بيانات «التقرير» للمساعد — أعداد فقط: بوتات الحساب، ولوحة المنصة للإدارة (الإيراد والزوار للأدمن وحده)."""
+    u = getattr(g, "user", None)
+    if not u:
+        return None
+    rep = {}
+    try:
+        rep["bots"] = db.assistant_bot_stats(u["id"])
+        rep["today"] = db.home_metrics(u["id"])
+        role = current_role()
+        if role in ("admin", "support"):
+            ps = db.platform_stats()
+            if role != "admin":
+                ps = {k: v for k, v in ps.items() if k not in ("revenue",)}
+            rep["platform"] = ps
+            rep["support_tickets"] = db.support_metrics()
+            if role == "admin":
+                rep["revenue_30d"] = db.admin_revenue_stats({k: plans.plan(k)["price"] for k in plans.PLANS})
+                a = db.analytics_summary(7)
+                rep["website_7d"] = {"visitors": a.get("visitors"), "page_views": a.get("views"),
+                                     "pricing_visitors": a.get("pricing_visitors"), "signup_funnel": a.get("funnel"),
+                                     "top_pages": (a.get("pages") or [])[:5], "top_sources": (a.get("sources") or [])[:5],
+                                     "devices": (a.get("devices") or [])[:4]}
+    except Exception:
+        log.exception("assistant report failed")
+    return rep or None
+
 def _assistant_go(page, lang):
     """صفحة إجراء «navigate» ← (الرابط، الاسم) أو None. البوت يُفحص بالملكية مرة ثانية هنا."""
     kind, _, rest = page.partition(":")
@@ -6329,8 +6356,9 @@ def api_assistant():
         return jsonify(ok=False, error="…"), 400
     view = _re.sub(r"[^a-z_]", "", str(d.get("view") or "home"))[:40] or "home"
     uctx = _assistant_user()
+    report = _assistant_report() if uid() and SA.wants_report(text) else None
     out = SA.answer(text, SA.clean_history(d.get("history")), view, lang, uctx,
-                    ai.key_chain(db.get_platform), voice=d.get("voice") is True)
+                    ai.key_chain(db.get_platform), voice=d.get("voice") is True, report=report)
     AN.queue(session, "assistant_ask", ai=out["ai"])
     card = go = None
     act = out.get("action") if uid() else None
@@ -6347,7 +6375,7 @@ def api_assistant():
         pend[tok] = dict(act, at=int(_time.time()))
         session["assist_act"] = pend
         card = {"token": tok, "type": act["type"], "label": label, "warn": warn}
-    return jsonify(ok=True, reply=out["reply"], suggestions=out["suggestions"], handoff=out["handoff"],
+    return jsonify(ok=True, reply=out["reply"], detail=out.get("detail") or "", suggestions=out["suggestions"], handoff=out["handoff"],
                    links=_assistant_links(out["links"], lang), action=card, go=go)
 
 
@@ -6498,8 +6526,8 @@ def api_assistant_tts():
     """صوت طبيعي لرد المساعد (Gemini). أي فشل = 204 والمتصفح ينطق بصوته المحلي."""
     import voice_ai as VA
     lang = session.get("lang", i18n.DEFAULT)
-    if _rate_limited(request.remote_addr or "?", limit=40, window=600, bucket="assist_tts") or \
-            (uid() and _rate_limited(f"u{uid()}", limit=120, window=3600, bucket="assist_tts_u")):
+    if _rate_limited(request.remote_addr or "?", limit=120, window=600, bucket="assist_tts") or \
+            (uid() and _rate_limited(f"u{uid()}", limit=400, window=3600, bucket="assist_tts_u")):
         return ("", 204)
     text = str((request.get_json(silent=True) or {}).get("text") or "")[:VA.MAX_TTS_CHARS * 2]
     wav = VA.speak(text, lang, ai.key_chain(db.get_platform))

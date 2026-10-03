@@ -7314,6 +7314,33 @@ def recent_signups(limit=6):
 
 
 # ════════════════════════ الرئيسية — أرقام اليوم لصاحب الحساب ════════════════════════
+def assistant_bot_stats(owner_id, now=None, limit=10):
+    """تقرير «مساعد BotYalla» لكل بوت (7 أيام و30 يوماً) — أعداد فقط، بلا بيانات عملاء."""
+    now = int(now or time.time())
+    w, m = now - 7 * 86400, now - 30 * 86400
+    out = []
+    with get_conn() as c:
+        for b in c.execute("SELECT id, name, channel, template, is_active FROM bots WHERE owner_id=? ORDER BY id LIMIT ?",
+                           (owner_id, limit)).fetchall():
+            bid = b["id"]
+            one = lambda q, *a: c.execute(q, (bid, *a)).fetchone()[0] or 0
+            out.append({
+                "bot": b["name"], "channel": b["channel"] or "telegram", "template": b["template"],
+                "active": bool(b["is_active"]),
+                "subscribers": one("SELECT COUNT(*) FROM bot_users WHERE bot_id=?"),
+                "new_subscribers_7d": one("SELECT COUNT(*) FROM bot_users WHERE bot_id=? AND created_at>=?", w),
+                "messages_in_7d": one("SELECT COUNT(*) FROM messages WHERE bot_id=? AND direction='in' AND created_at>=?", w),
+                "messages_out_7d": one("SELECT COUNT(*) FROM messages WHERE bot_id=? AND direction='out' AND created_at>=?", w),
+                "leads_7d": one("SELECT COUNT(*) FROM leads WHERE bot_id=? AND created_at>=?", w),
+                "leads_30d": one("SELECT COUNT(*) FROM leads WHERE bot_id=? AND created_at>=?", m),
+                "orders_30d": one("SELECT COUNT(*) FROM orders WHERE bot_id=? AND created_at>=?", m),
+                "orders_total_30d": round(one("SELECT SUM(total) FROM orders WHERE bot_id=? AND created_at>=?", m), 2),
+                "bookings_30d": one("SELECT COUNT(*) FROM bookings WHERE bot_id=? AND created_at>=?", m),
+                "human_chats_open": one("SELECT COUNT(*) FROM conversations WHERE bot_id=? AND mode='human'"),
+            })
+    return out
+
+
 def home_metrics(owner_id, tz=3 * 3600, now=None):
     """أرقام «مركز القيادة» في استعلامات قليلة مفهرسة. `tz` إزاحة المنطقة (السعودية افتراضياً) لحدود اليوم."""
     now = int(now or time.time())

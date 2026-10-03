@@ -58,7 +58,8 @@ class Base(unittest.TestCase):
             A._rate.clear()
         except AttributeError:
             pass
-        self.uid = user(f"owner{self.id()[-12:].replace('.', '')}")
+        Base.n = getattr(Base, "n", 0) + 1
+        self.uid = user(f"owner{Base.n}")
         self.store = db.create_bot(self.uid, "متجري", f"1{self.uid}:AAstoreTOKENxxxxxxxxxxxxxxxxxxxxxxxxx", "store",
                                    {"welcome": "قديم", "products": [{"name": "تيشيرت", "price": 100}]})
         self.c = client(self.uid)
@@ -124,6 +125,52 @@ class NavigateTests(Base):
             ai_agent._call = orig
         self.assertIn("<mode>voice</mode>", seen["ctx"])
         self.assertIn('"metrics"', seen["ctx"])
+
+
+class RouterTests(Base):
+    """التنقّل الواضح بلا نموذج، و«نفّذ» بعد وعد، ووعد النموذج بلا إجراء يُصحَّح."""
+    def test_clear_navigation_skips_the_model(self):
+        REPLY["v"] = {"reply": "لازم ما يتنادى"}
+        called = []
+        orig = ai_agent._call
+        ai_agent._call = lambda *a: called.append(1) or json.dumps(REPLY["v"])
+        try:
+            d = ask(self.c, "افتحلي صفحة الاشتراك")
+        finally:
+            ai_agent._call = orig
+        self.assertEqual(d["go"]["url"], "/billing")
+        self.assertFalse(called, "تنقّل واضح لا ينتظر نموذجاً")
+
+    def test_yes_after_a_promise_executes_it(self):
+        REPLY["v"] = {"reply": "مش فاهم"}
+        hist = [{"role": "user", "text": "عايز رصيدي"}, {"role": "bot", "text": "أفتح لك صفحة الرصيد الآن. أنفّذ؟"}]
+        for yes in ("نفذ", "اه", "نفس"):
+            d = self.c.post("/api/assistant", json={"text": yes, "history": hist, "view": "dashboard"}, headers=H).get_json()
+            self.assertEqual((d["go"] or {}).get("url"), "/wallet", yes)
+
+    def test_model_promise_without_action_is_completed(self):
+        REPLY["v"] = {"reply": "حاضر، هفتحلك صفحة الرصيد.", "links": ["dashboard"]}
+        d = ask(self.c, "الرصيد بتاعي فين")
+        self.assertEqual(d["go"]["url"], "/wallet")
+        self.assertEqual(d["links"], [])
+
+    def test_admin_pages_only_for_admin(self):
+        REPLY["v"] = {"reply": "هفتحلك صفحة إحصائيات الزوار."}
+        self.assertIsNone(ask(self.c, "افتح احصائيات الزوار")["go"], "عميل لا يصل لصفحة أدمن")
+
+    def test_report_data_reaches_the_model(self):
+        seen = {}
+        orig = ai_agent._call
+        ai_agent._call = lambda p, k, system, ctx: seen.update(ctx=ctx) or json.dumps(
+            {"reply": "عندك بوت واحد", "detail": "• المشتركين: 0"})
+        try:
+            d = ask(self.c, "عايز تقرير كامل عن بوتاتي")
+        finally:
+            ai_agent._call = orig
+        self.assertIn("<report>", seen["ctx"])
+        self.assertIn('"messages_in_7d"', seen["ctx"])
+        self.assertNotIn('"platform"', seen["ctx"].split("<report>")[1], "أرقام المنصة للإدارة وحدها")
+        self.assertEqual(d["detail"], "• المشتركين: 0")
 
 
 class EditTests(Base):

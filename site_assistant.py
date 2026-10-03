@@ -312,6 +312,8 @@ def clean_action(raw, bot_ids, pages=(), templates=None):
             out["args"] = {"page": f"{kind}:{int(rest)}"}
         elif page in pages:
             out["args"] = {"page": page}
+        elif isinstance(pages, dict) and match_page(page.replace("_", " "), pages):
+            out["args"] = {"page": match_page(page.replace("_", " "), pages)}   # النموذج كتب الاسم لا المفتاح
         else:
             return None
         return out
@@ -408,6 +410,107 @@ def action_label(act, lang, bot_names):
     return (L[0] if en else L[1]), ((warn[0] if en else warn[1]) if warn else "")
 
 
+# ------------------------------------------------------------------ موجّه سريع بلا نموذج
+# «افتح/ودّيني/حوّلني + اسم صفحة» لا يحتاج ذكاءً: يُطابَق هنا في أجزاء من الثانية ويُنفَّذ فوراً.
+# و«نفّذ/اه» بعد وعد بفتح صفحة يعيد تشغيل الطلب السابق هنا — فلا يعلق المساعد إن نسي النموذج الإجراء.
+NAV_VERBS = ("فتح", "حولني", "حوليني", "تحولني", "تحول ل", "ودي", "افتح", "افتحلي", "افتحها", "وديني", "ودني", "خدني", "حولني", "حولني", "روح", "روحني", "وريني",
+             "اعرض", "اعرضلي", "دخلني", "ادخل", "انقلني", "عايز اشوف", "عاوز اشوف", "صفحه", "صفحة",
+             "open", "go to", "take me", "show me", "navigate", "page")
+SYNONYMS = {
+    "admin_analytics": ("احصائيات الزوار", "الزوار", "زوار الموقع", "احصائيات الموقع", "visitors", "analytics", "traffic"),
+    "admin_report": ("التقرير الاسبوعي", "تقرير الاسبوع", "weekly report"),
+    "admin_overview": ("لوحه الادمن", "لوحة الادارة", "الادمن", "الادارة", "الاداره", "admin"),
+    "admin_users": ("المستخدمين", "اداره المستخدمين", "users"),
+    "admin_payments": ("مراجعه المدفوعات", "الايصالات", "المدفوعات المعلقه", "payments review", "receipts"),
+    "admin_tickets": ("التذاكر", "تذاكر الدعم", "tickets"),
+    "admin_pricing": ("الاسعار والخصومات", "اسعار الباقات"),
+    "admin_promos": ("اكواد الخصم", "الكوبونات", "promo"),
+    "admin_convo": ("تحليل المحادثات",),
+    "admin_platform": ("اعدادات المنصه",),
+    "settings": ("اعدادات الذكاء", "مفاتيح الذكاء", "ai settings"),
+    "shared_inbox": ("الصندوق المشترك", "صندوق الوارد", "الوارد", "المحادثات", "الرسائل", "inbox", "chats"),
+    "contacts": ("جهات الاتصال", "الكونتاكت", "contacts"),
+    "dashboard": ("بوتاتي", "البوتات", "my bots", "bots"),
+    "broadcasts": ("البث", "الحملات", "حمله", "broadcast", "campaigns"),
+    "billing": ("اشتراكي", "الاشتراك", "الفواتير", "subscription", "billing"),
+    "wallet": ("الرصيد", "المحفظه", "wallet", "balance"),
+    "pricing": ("الباقات", "الاسعار", "plans", "pricing"),
+    "media": ("الوسائط", "مكتبه الصور", "media"),
+    "support": ("الدعم", "الشكاوي", "support"),
+    "team": ("الفريق", "الموظفين", "team"),
+    "home": ("الرئيسيه", "home"),
+    "growth": ("النمو", "الاعلانات", "growth"),
+    "integrations": ("التكاملات", "الربط", "integrations"),
+    "sequences": ("التسلسلات", "sequences"),
+    "tpl_studio": ("القوالب", "templates"),
+    "chat_payments": ("المدفوعات", "payments"),
+    "affiliate": ("الشركاء", "الافلييت", "affiliate"),
+}
+_YES = re.compile(r"(^| )(نعم|اه|ايوه|ايوا|تمام|موافق|ماشي|نفذ|نفذها|نفذه|اعملها|اعمله|يلا|اوك|اوكي|اكيد|طبعا|"
+                  r"ok|okay|yes|yeah|yep|sure|go ahead|do it)( |$)")
+_PROMISE = re.compile(r"(افتح|بفتح|هفتح|اوديك|حولك|احولك|open|opening|take you)")
+
+
+def _n(s):
+    t = _norm(s)
+    for a, b in (("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ة", "ه"), ("ى", "ي"), ("ّ", "")):
+        t = t.replace(a, b)
+    return re.sub(r"[^\w\s]", " ", t)
+
+
+def is_yes(text):
+    t = _n(text).strip()
+    return bool(t) and len(t.split()) <= 5 and bool(_YES.search(t)) and not re.search(r"(^| )(لا|مش|no)( |$)", t)
+
+
+def match_page(text, pages, bots=(), view=None):
+    """أفضل صفحة يقصدها النص ⇒ مفتاح navigate أو None. `pages` {مفتاح: الاسم}."""
+    t = " " + _n(text) + " "
+    best, score = None, 0
+    for k, label in (pages or {}).items():
+        for cand in (label,) + SYNONYMS.get(k, ()):
+            c = _n(cand).strip()
+            if len(c) >= 3 and (" " + c + " ") in t or (len(c) >= 5 and c in t):
+                if len(c) > score:
+                    best, score = k, len(c)
+    if best == "shared_inbox" or (not best and re.search(r"(الوارد|inbox|المحادثات)", t)):
+        if "shared_inbox" not in (pages or {}) and bots:
+            return f"inbox:{bots[0]['id']}"
+    if best and best == view:
+        return None
+    return best
+
+
+def route(text, history, user_ctx, view=None):
+    """طلب تنقّل واضح ⇒ إجراء navigate جاهز (بلا نموذج)، وإلا None."""
+    if not user_ctx.get("signed_in"):
+        return None
+    pages, bots = user_ctx.get("pages") or {}, user_ctx.get("bot_list") or []
+    t = _n(text)
+    src = text
+    if is_yes(text) or t.strip() in ("نفس", "نفد", "نفز"):   # «نفّذ» (أو ما يسمعه المتصفح منها) بعد وعد ⇒ الطلب السابق
+        prev_bot = next((h["text"] for h in reversed(history) if not h["me"]), "")
+        prev_me = next((h["text"] for h in reversed(history) if h["me"]), "")
+        if not _PROMISE.search(_n(prev_bot)):
+            return None
+        src = prev_me + " " + prev_bot
+    elif not any((" " + _n(v) + " ") in (" " + t + " ") or _n(v) in t for v in NAV_VERBS):
+        return None
+    page = match_page(src, pages, bots, view)
+    if not page:
+        return None
+    return {"type": "navigate", "args": {"page": page}}
+
+
+REPORT_WORDS = ("تقرير", "احصائيات", "إحصائيات", "ارقام", "أرقام", "اداء", "أداء", "ملخص", "كام عميل", "كام رساله",
+                "الايراد", "الإيراد", "مبيعات", "report", "stats", "statistics", "numbers", "summary", "revenue", "performance")
+
+
+def wants_report(text):
+    t = _n(text)
+    return any(_n(w) in t for w in REPORT_WORDS)
+
+
 _INFO_NAMES = {"about": ("عن النشاط", "About"), "hours": ("المواعيد", "Hours"), "location": ("العنوان", "Location"),
                "delivery": ("التوصيل", "Delivery"), "payment": ("الدفع", "Payment")}
 
@@ -445,12 +548,24 @@ short question first if missing. People may have weak tech skills: be patient, s
 Prefer DOING over explaining: if an action does what they asked, propose it instead of listing steps. If they have
 several bots and it's unclear which one, ask in one short line. Answer questions about their numbers (messages
 today, leads this week, subscribers) from <user>.metrics only — never guess numbers that aren't there.
-If <mode> is "voice", your reply is SPOKEN aloud: 1-2 short natural sentences, no lists, no emoji, no symbols;
-when proposing an action, end with a short question like "أنفّذ؟" / "Shall I go ahead?".
+HARD RULES for actions:
+- If your reply says you will do/open something, the matching "action" MUST be in the SAME JSON. Never promise
+  without the action, and never repeat a promise — act.
+- navigate runs immediately with NO confirmation: say "بفتحلك «…»" / "Opening …" — never ask "أنفّذ؟" for it.
+  Page keys and their names are in <user>.pages; use the KEY.
+- If the user says yes/نفّذ/اه after you described an action, output that action now.
+- Other actions show a "Do it" card: describe what will happen in one line.
+Reports: when <report> is present and the user asks for a report/stats/numbers, write a real report from it:
+"reply" = 2-3 sentence headline (the most important numbers and one insight) and "detail" = the full report as
+short lines: key numbers grouped by section (use "•" bullets), what's going well, what needs attention, and
+2-3 concrete next steps. Only numbers that exist in <report>/<user>.metrics — never invent.
+If <mode> is "voice", "reply" is SPOKEN aloud: 1-2 short natural sentences, no lists, no emoji, no symbols
+(put anything long in "detail", which is shown on screen, not spoken). Only for non-navigate actions end with a
+short question like "أنفّذ؟" / "Shall I?".
 Available actions:
 {actions}
 
-Return JSON only: {{"reply": "...", "links": [], "suggestions": [], "handoff": false, "action": null}}"""
+Return JSON only: {{"reply": "...", "detail": "", "links": [], "suggestions": [], "handoff": false, "action": null}}"""
 
 
 def _clip(v, n):
@@ -472,16 +587,17 @@ def clean_history(raw):
 def _finish(out, lang, user_ctx=None):
     u = user_ctx or {}
     bots = (u.get("bot_list") or []) if u.get("signed_in") else []
-    act = clean_action(out.get("action"), {b["id"] for b in bots}, set(u.get("pages") or {}),
+    act = clean_action(out.get("action"), {b["id"] for b in bots}, dict(u.get("pages") or {}),
                        {b["id"]: b.get("template") for b in bots})
-    links = [k for k in (out.get("links") or []) if k in LINK_KEYS][:2]
+    # رابط بجانب إجراء = ضجيج، ورابط للصفحة التي يقف عليها المستخدم بلا معنى
+    links = [] if act else [k for k in (out.get("links") or []) if k in LINK_KEYS and k != u.get("view")][:1]
     sugg = []
     for s in out.get("suggestions") or []:
         s = _clip(s, 40)
         if s and len(s) <= 24 and s not in sugg:
             sugg.append(s)
-    return {"reply": (out.get("reply") or "").strip()[:1500], "links": links, "suggestions": sugg[:3],
-            "handoff": out.get("handoff") is True, "action": act}
+    return {"reply": (out.get("reply") or "").strip()[:1500], "detail": str(out.get("detail") or "").strip()[:4000],
+            "links": links, "suggestions": sugg[:3], "handoff": out.get("handoff") is True, "action": act}
 
 
 def offline(text, view="home", lang="ar"):
@@ -503,18 +619,37 @@ def offline(text, view="home", lang="ar"):
             "suggestions": [b for b in btns if len(b) <= 24][:3], "handoff": human, "action": None}
 
 
-def answer(text, history, view, lang, user_ctx, key_chain, voice=False):
-    """{"reply", "links", "suggestions", "handoff", "ai"} — لا يرمي أبداً."""
+def _go_reply(act, user_ctx, lang):
+    k = act["args"]["page"]
+    kind, _, rest = k.partition(":")
+    if rest.isdigit():
+        name = next((b["name"] for b in user_ctx.get("bot_list") or [] if b["id"] == int(rest)), "")
+        label = {"inbox": ("صندوق الوارد", "the inbox"), "flow": ("باني الفلو", "the flow builder"),
+                 "bot": ("صفحة البوت", "the bot page")}[kind][lang == "en"] + (f" — {name}" if name else "")
+    else:
+        label = (user_ctx.get("pages") or {}).get(k, k)
+    return ("Opening “%s”…" % label) if lang == "en" else ("بفتحلك «%s»…" % label)
+
+
+def answer(text, history, view, lang, user_ctx, key_chain, voice=False, report=None):
+    """{"reply", "detail", "links", "suggestions", "handoff", "action", "ai"} — لا يرمي أبداً.
+    الترتيب: الموجّه السريع (تنقّل واضح أو «نفّذ» بعد وعد) ← النموذج ← تصحيح وعد بلا إجراء ← الدليل."""
     import ai_agent
     lang = "en" if lang == "en" else "ar"
+    user_ctx = dict(user_ctx or {}, view=view)
+    fast = route(text, history, user_ctx, view)
+    if fast:
+        return {"reply": _go_reply(fast, user_ctx, lang), "detail": "", "links": [], "suggestions": [],
+                "handoff": False, "action": fast, "ai": False}
     if not key_chain:
         return dict(offline(text, view, lang), ai=False)
     guide = {k: g[lang] for k, g in GUIDE.items()}
     ctx = ("<mode>" + ("voice" if voice else "text") + "</mode>\n<platform>\n" + _json.dumps(platform_kb.facts(), ensure_ascii=False)[:9000] + "\n</platform>\n"
            "<guide>\n" + _json.dumps(guide, ensure_ascii=False)[:9000] + "\n</guide>\n"
            "<page>\n" + _json.dumps(dict(page_guide(view, lang), view=view), ensure_ascii=False) + "\n</page>\n"
-           "<user>\n" + _json.dumps(user_ctx, ensure_ascii=False) + "\n</user>\n<history>\n" +
-           "\n".join(("USER: " if h["me"] else "ASSISTANT: ") + h["text"] for h in history) +
+           "<user>\n" + _json.dumps(user_ctx, ensure_ascii=False) + "\n</user>\n" +
+           ("<report>\n" + _json.dumps(report, ensure_ascii=False, default=str)[:7000] + "\n</report>\n" if report else "") +
+           "<history>\n" + "\n".join(("USER: " if h["me"] else "ASSISTANT: ") + h["text"] for h in history[-8:]) +
            "\n</history>\n<message>\n" + _clip(text, 1200) + "\n</message>")
     # النموذج السريع (flash-lite ~1-2ث) ومهلة قصيرة — مساعد يرد في ثوانٍ لا يُنتظر
     ai_agent._speed.fast, ai_agent._speed.timeout = True, 15
@@ -523,9 +658,15 @@ def answer(text, history, view, lang, user_ctx, key_chain, voice=False):
             links=", ".join(LINK_KEYS), actions=ACTION_SPEC), ctx))
         out = _finish(raw if isinstance(raw, dict) else {}, lang, user_ctx)
         if out["reply"]:
+            if not out["action"] and user_ctx.get("signed_in") and _PROMISE.search(_n(out["reply"])):
+                page = match_page(text + " " + out["reply"], user_ctx.get("pages") or {},
+                                  user_ctx.get("bot_list") or [], view)
+                if page:                                  # وعد بفتح صفحة بلا إجراء ⇒ ننفّذ الوعد
+                    out["action"] = {"type": "navigate", "args": {"page": page}}
+                    out["links"] = []
             return dict(out, ai=True)
     except Exception:
         pass
     finally:
         ai_agent._speed.fast, ai_agent._speed.timeout = False, None
-    return dict(offline(text, view, lang), ai=False)
+    return dict(offline(text, view, lang), detail="", ai=False)

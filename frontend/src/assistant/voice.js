@@ -85,17 +85,25 @@ export function createListener({ lang, boot, csrf, onInterim, onFinal, onLevel =
     rec = new SR();
     rec.lang = lang === "en" ? "en-US" : "ar-EG";
     rec.interimResults = true;
-    rec.continuous = false;
+    // الحاسب: استماع متصل ونحن نقرّر نهاية الكلام (أسرع بكثير من انتظار المتصفح ~2ث).
+    // أندرويد: الوضع المتصل يكرّر النتائج — نتركه للمتصفح ونختصر بنفس المؤقّت.
+    rec.continuous = !coarse();
     rec.maxAlternatives = 1;
+    let silence = null;
+    const hardStop = setTimeout(() => { try { rec.stop(); } catch { /* */ } }, 20000);
     rec.onresult = (e) => {
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
-        if (r.isFinal) finalText += r[0].transcript; else interim += r[0].transcript;
+        if (r.isFinal) finalText += (finalText ? " " : "") + r[0].transcript.trim(); else interim += r[0].transcript;
       }
       onInterim && onInterim((finalText + " " + interim).trim());
       if (!stopMeter) onLevel(0.35 + Math.random() * 0.4);   // بلا مقياس حقيقي: نبضة مع كل كلمة
+      clearTimeout(silence);
+      // سكتّ بعد جملة كاملة ⇒ 650ms · وسط جملة ⇒ 1100ms
+      silence = setTimeout(() => { try { rec.stop(); } catch { /* */ } }, interim.trim() ? 1100 : 650);
     };
+    rec.addEventListener("end", () => { clearTimeout(silence); clearTimeout(hardStop); });
     rec.onerror = (e) => {
       if (e.error === "no-speech" || e.error === "aborted") return;
       done = true; cleanup();
@@ -204,7 +212,7 @@ function sentences(t) {
   const parts = t.split(/(?<=[.!?؟\n،])\s+/).map((s) => s.trim()).filter(Boolean);
   const out = [];
   for (const p of parts) {
-    if (out.length && (out[out.length - 1] + " " + p).length < 160) out[out.length - 1] += " " + p; else out.push(p);
+    if (out.length && out.length > 1 && (out[out.length - 1] + " " + p).length < 200) out[out.length - 1] += " " + p; else out.push(p);
   }
   return out;
 }
@@ -245,14 +253,30 @@ export function createSpeaker({ boot, csrf, lang, onLevel = () => {} }) {
     });
   }
 
+  /* الجُمل تُطلب كلها معاً وتُشغَّل بالترتيب: الصوت يبدأ مع أول جملة لا بعد الرد كله */
+  const fetchTts = (text) => fetch(boot.tts, { method: "POST", credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" }, body: JSON.stringify({ text }) })
+    .then((r) => (r.status === 200 ? r.blob() : null)).then((b) => (b && b.size ? b : null)).catch(() => null);
+
   async function serverSay(text, my) {
-    try {
-      const r = await fetch(boot.tts, { method: "POST", credentials: "same-origin",
-        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" }, body: JSON.stringify({ text }) });
+    const parts = sentences(text).slice(0, 5);
+    const jobs = parts.map(fetchTts);
+    for (let i = 0; i < parts.length; i++) {
+      const blob = await jobs[i];
       if (my !== token) return true;
-      if (r.status !== 200) return false;
-      const blob = await r.blob();
-      if (my !== token || !blob.size) return my !== token;
+      if (!blob) {
+        if (i === 0) return false;                       // الخادم لا ينطق ⇒ صوت المتصفح للرد كله
+        await browserSay(parts.slice(i).join(" "), my);
+        return true;
+      }
+      if (!(await playBlob(blob, my))) return true;
+    }
+    return true;
+  }
+
+  async function playBlob(blob, my) {
+    try {
+      if (my !== token) return false;
       url = URL.createObjectURL(blob);
       audio = new Audio(url);
       try {
@@ -279,7 +303,8 @@ export function createSpeaker({ boot, csrf, lang, onLevel = () => {} }) {
       });
       release = null;
       stopMeter && stopMeter(); stopMeter = null; clearInterval(pulse); pulse = null; onLevel(0);
-      return true;
+      if (url) { URL.revokeObjectURL(url); url = null; }
+      return my === token;
     } catch { return false; }
   }
 

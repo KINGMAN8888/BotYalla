@@ -214,7 +214,8 @@ function Rich({ text }) {
   return (
     <div className="flex flex-col gap-2">
       {blocks.map((b, i) => b.kind === "p"
-        ? <p key={i} className="m-0"><Inline text={b.items[0]} /></p>
+        ? <p key={i} className={"m-0 " + (b.items[0].length <= 30 && !/[.!?؟:،,]$/.test(b.items[0]) && blocks[i + 1] && blocks[i + 1].kind !== "p"
+              ? "mt-1 font-extrabold text-white" : "")}><Inline text={b.items[0]} /></p>
         : b.kind === "ol"
           ? <ol key={i} className="m-0 flex list-none flex-col gap-1.5 p-0">
               {b.items.map((it, j) => (
@@ -363,6 +364,15 @@ function Bubble({ m, last, busy, voice, onPick, onHandoff, onAct, onSkip, onGo, 
              (m.err ? "rounded-2xl bg-red-400/10 px-3.5 py-2.5 text-red-200 shadow-[inset_0_0_0_1px_rgb(248_113_113/0.3)]" : "pt-0.5 text-[#e8edf9]")}>
           <Rich text={m.text} />
         </div>
+        {m.detail && (
+          <div dir="auto" className="mt-2.5 rounded-2xl bg-white/[0.035] p-4 text-[13.5px] leading-[1.75] text-[#dfe6f7]
+                          shadow-[inset_0_0_0_1px_rgb(143_233_255/0.18)]">
+            <div className="mb-2 flex items-center gap-1.5 text-[10.5px] font-extrabold uppercase tracking-[0.08em] text-[#8FE9FF]">
+              <Ic n="chart" size={13} />{bi("التقرير", "Report")}
+            </div>
+            <Rich text={m.detail} />
+          </div>
+        )}
         <ResultExtra r={m.result} />
         {m.go && <GoCard go={m.go} onNow={() => onGo(m)} onCancel={() => onGoCancel(m)} />}
         {m.action && <ActionCard m={m} voice={voice} onDo={() => onAct(m)} onSkip={() => onSkip(m)} />}
@@ -380,7 +390,7 @@ function Bubble({ m, last, busy, voice, onPick, onHandoff, onAct, onSkip, onGo, 
             {m.suggestions.map((s) => <Chip key={s} onClick={() => onPick(s)}>{s}</Chip>)}
           </div>
         )}
-        {!m.err && <MsgTools text={m.text} onSpeak={onSpeak ? () => onSpeak(m.text) : null} />}
+        {!m.err && <MsgTools text={m.detail ? m.text + "\n\n" + m.detail : m.text} onSpeak={onSpeak ? () => onSpeak(m.text) : null} />}
       </div>
     </motion.div>
   );
@@ -617,7 +627,7 @@ export default function Assistant() {
     const r = await post(BOOT.api, { text: body, history: hist, view: BOOT.view, voice: !!opts.voice });
     setBusy(false);
     const reply = r.ok
-      ? { text: r.reply, links: r.links, suggestions: r.suggestions, handoff: r.handoff || false, action: r.action || null,
+      ? { text: r.reply, detail: r.detail || "", links: r.links, suggestions: r.suggestions, handoff: r.handoff || false, action: r.action || null,
           go: r.go && r.go.url ? { ...r.go, auto: !opts.voice } : null }
       : { text: r.error || bi("حصلت مشكلة — جرّب تاني.", "Something went wrong — try again."), err: true };
     reply.id = Date.now();
@@ -712,7 +722,7 @@ export default function Assistant() {
   };
   const afterSpeech = (reply) => {
     if (!vRef.current) return;
-    if (reply && reply.go) { markGo(reply.id, "done"); navigate(reply.go.url); return; }
+    if (reply && reply.go) { markGo(reply.id, "done"); SS.set(KEY + ":voice", "1"); navigate(reply.go.url); return; }
     if (vRef.current === "speaking") listen();
   };
   const heard = async (t) => {
@@ -763,7 +773,7 @@ export default function Assistant() {
     if (muted) return;
     if (vRef.current === "speaking") { speaker?.stop(); listen(); }
     else if (vRef.current === "listening") listener.current?.stop();
-    else if (vRef.current === "idle") { empties.current = 0; listen(); }
+    else if (vRef.current === "idle") { speaker?.unlock(); empties.current = 0; listen(); }
   };
   const toggleMute = () => {
     if (muted) { setMuted(false); empties.current = 0; listen(); }
@@ -795,6 +805,17 @@ export default function Assistant() {
     setToast(bi("الزر اتخفى — هتلاقيه على حافة الشاشة، أو اضغط Ctrl + /", "Hidden — find it on the screen edge, or press Ctrl + /"));
   };
   const reset = () => { endVoice(); commit(() => []); setText(""); setMenu(false); };
+
+  /* رجعنا من تنقّل أثناء محادثة صوتية: الوضع الصوتي جاهز وضغطة واحدة تكمل
+     (المتصفح لا يسمح بالنطق في صفحة جديدة قبل لمسة من المستخدم) */
+  useEffect(() => {
+    if (SS.get(KEY + ":voice", "") !== "1" || !voiceOk) return;
+    SS.set(KEY + ":voice", "");
+    vRef.current = "idle";
+    setV("idle");
+    setCaption(bi("فتحتلك الصفحة ✓ — المس الكرة ونكمل كلامنا.", "Page opened ✓ — tap the orb to keep talking."));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* باقي الصفحة (رحلة النجاح في اللوحة) تفتح المساعد بطلب جاهز: window.BYAssistant.open("…") */
   useEffect(() => {
