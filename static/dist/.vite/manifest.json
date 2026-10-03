@@ -1,319 +1,319 @@
 {
-  "_chunk-VipCall-C7rTcr4R.js": {
-    "file": "chunk-VipCall-C7rTcr4R.js",
+  "_chunk-VipCall-DmNzmnlk.js": {
+    "file": "chunk-VipCall-DmNzmnlk.js",
     "name": "VipCall",
     "imports": [
-      "_chunk-src-DRBlrMMM.js"
+      "_chunk-src-Dz4ORXP_.js"
     ]
   },
-  "_chunk-kit-Do7hJRFN.js": {
-    "file": "chunk-kit-Do7hJRFN.js",
+  "_chunk-kit-BplY_7oH.js": {
+    "file": "chunk-kit-BplY_7oH.js",
     "name": "kit",
     "imports": [
-      "_chunk-src-DRBlrMMM.js"
+      "_chunk-src-Dz4ORXP_.js"
     ]
   },
-  "_chunk-src-DRBlrMMM.js": {
-    "file": "chunk-src-DRBlrMMM.js",
+  "_chunk-src-Dz4ORXP_.js": {
+    "file": "chunk-src-Dz4ORXP_.js",
     "name": "src"
   },
-  "_chunk-wa_preview-t68V8e0T.js": {
-    "file": "chunk-wa_preview-t68V8e0T.js",
+  "_chunk-wa_preview-Cln23w1J.js": {
+    "file": "chunk-wa_preview-Cln23w1J.js",
     "name": "wa_preview",
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/auth.jsx": {
-    "file": "chunk-auth-CYbFCx5Q.js",
+    "file": "chunk-auth-DkQDRJH_.js",
     "name": "auth",
     "src": "src/app/auth.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/console-main.jsx"
     ]
   },
   "src/app/media.jsx": {
-    "file": "chunk-media-BKWR2BdJ.js",
+    "file": "chunk-media-ftZccWVp.js",
     "name": "media",
     "src": "src/app/media.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/Account.jsx": {
-    "file": "chunk-Account-CQypbuhe.js",
+    "file": "chunk-Account-BIOCmWqG.js",
     "name": "Account",
     "src": "src/app/views/Account.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-VipCall-C7rTcr4R.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-VipCall-DmNzmnlk.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/app/auth.jsx"
     ]
   },
   "src/app/views/Admin.jsx": {
-    "file": "chunk-Admin-CWMk1FAv.js",
+    "file": "chunk-Admin-BwJHt0xl.js",
     "name": "Admin",
     "src": "src/app/views/Admin.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/app/auth.jsx",
       "src/app/media.jsx",
       "src/app/views/Account.jsx"
     ]
   },
   "src/app/views/BotDetail.jsx": {
-    "file": "chunk-BotDetail-DAdYl4Yz.js",
+    "file": "chunk-BotDetail-asWefOTi.js",
     "name": "BotDetail",
     "src": "src/app/views/BotDetail.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/app/media.jsx"
     ]
   },
   "src/app/views/Broadcasts.jsx": {
-    "file": "chunk-Broadcasts-rzfisZj-.js",
+    "file": "chunk-Broadcasts-PDN9zLK_.js",
     "name": "Broadcasts",
     "src": "src/app/views/Broadcasts.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/app/media.jsx",
-      "_chunk-wa_preview-t68V8e0T.js"
+      "_chunk-wa_preview-Cln23w1J.js"
     ]
   },
   "src/app/views/ChatPayments.jsx": {
-    "file": "chunk-ChatPayments-KNCZf4Fs.js",
+    "file": "chunk-ChatPayments-Dd-TEPkS.js",
     "name": "ChatPayments",
     "src": "src/app/views/ChatPayments.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/Contacts.jsx": {
-    "file": "chunk-Contacts-BPsuB_QI.js",
+    "file": "chunk-Contacts-0GZb_BVf.js",
     "name": "Contacts",
     "src": "src/app/views/Contacts.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/Dashboard.jsx": {
-    "file": "chunk-Dashboard-30lO7cFP.js",
+    "file": "chunk-Dashboard-o1J-VIzP.js",
     "name": "Dashboard",
     "src": "src/app/views/Dashboard.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/app/media.jsx"
     ]
   },
   "src/app/views/Developer.jsx": {
-    "file": "chunk-Developer-DNBxkxo5.js",
+    "file": "chunk-Developer-Y4yp3Ih8.js",
     "name": "Developer",
     "src": "src/app/views/Developer.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/Emails.jsx": {
-    "file": "chunk-Emails-DLmf-hcq.js",
+    "file": "chunk-Emails-Bt_PKXT_.js",
     "name": "Emails",
     "src": "src/app/views/Emails.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/console-main.jsx"
     ]
   },
   "src/app/views/Flows.jsx": {
-    "file": "chunk-Flows-NGOjq_lk.js",
+    "file": "chunk-Flows-Dgo1Vr86.js",
     "name": "Flows",
     "src": "src/app/views/Flows.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/app/media.jsx"
     ]
   },
   "src/app/views/Growth.jsx": {
-    "file": "chunk-Growth-BgNne231.js",
+    "file": "chunk-Growth-BeGKD2at.js",
     "name": "Growth",
     "src": "src/app/views/Growth.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/Home.jsx": {
-    "file": "chunk-Home-CdnNIFru.js",
+    "file": "chunk-Home-CM9diOza.js",
     "name": "Home",
     "src": "src/app/views/Home.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/console-main.jsx"
     ]
   },
   "src/app/views/Inbox.jsx": {
-    "file": "chunk-Inbox-ch7NX-CV.js",
+    "file": "chunk-Inbox-COABKXh9.js",
     "name": "Inbox",
     "src": "src/app/views/Inbox.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/app/media.jsx"
     ]
   },
   "src/app/views/Integrations.jsx": {
-    "file": "chunk-Integrations-DfbKNDkK.js",
+    "file": "chunk-Integrations-CQvmT4HF.js",
     "name": "Integrations",
     "src": "src/app/views/Integrations.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/Legal.jsx": {
-    "file": "chunk-Legal-Cdk-T4JQ.js",
+    "file": "chunk-Legal-C6u00FYH.js",
     "name": "Legal",
     "src": "src/app/views/Legal.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/Reports.jsx": {
-    "file": "chunk-Reports-CMzxvtJt.js",
+    "file": "chunk-Reports-CSK2M1pn.js",
     "name": "Reports",
     "src": "src/app/views/Reports.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/Revenue.jsx": {
-    "file": "chunk-Revenue-CqUKxzNa.js",
+    "file": "chunk-Revenue-CYJdiVWr.js",
     "name": "Revenue",
     "src": "src/app/views/Revenue.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/Sequences.jsx": {
-    "file": "chunk-Sequences-BRJAc3ug.js",
+    "file": "chunk-Sequences-Dj3uAY5Z.js",
     "name": "Sequences",
     "src": "src/app/views/Sequences.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/SharedInbox.jsx": {
-    "file": "chunk-SharedInbox-B0Ha-wQZ.js",
+    "file": "chunk-SharedInbox-BAVGrtrM.js",
     "name": "SharedInbox",
     "src": "src/app/views/SharedInbox.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/app/media.jsx",
       "src/app/views/ChatPayments.jsx"
     ]
   },
   "src/app/views/Team.jsx": {
-    "file": "chunk-Team-Bwtuidy7.js",
+    "file": "chunk-Team-CBs9VdgY.js",
     "name": "Team",
     "src": "src/app/views/Team.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/TemplateStudio.jsx": {
-    "file": "chunk-TemplateStudio-Cn01Qdr6.js",
+    "file": "chunk-TemplateStudio-O8e1K0cf.js",
     "name": "TemplateStudio",
     "src": "src/app/views/TemplateStudio.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/app/media.jsx",
-      "_chunk-wa_preview-t68V8e0T.js"
+      "_chunk-wa_preview-Cln23w1J.js"
     ]
   },
   "src/app/views/Tools.jsx": {
-    "file": "chunk-Tools-DMMr8Xvo.js",
+    "file": "chunk-Tools-CK3HTYL7.js",
     "name": "Tools",
     "src": "src/app/views/Tools.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js",
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js",
       "src/console-main.jsx",
       "src/app/auth.jsx",
       "src/app/media.jsx"
     ]
   },
   "src/app/views/WaTemplates.jsx": {
-    "file": "chunk-WaTemplates-c-zNmMn9.js",
+    "file": "chunk-WaTemplates-D_R-mnRe.js",
     "name": "WaTemplates",
     "src": "src/app/views/WaTemplates.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/app/views/Wallet.jsx": {
-    "file": "chunk-Wallet-D47_O7vS.js",
+    "file": "chunk-Wallet-DMWjXoBz.js",
     "name": "Wallet",
     "src": "src/app/views/Wallet.jsx",
     "isDynamicEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ]
   },
   "src/console-main.jsx": {
-    "file": "console-C6gPTG0X.js",
+    "file": "console-CjlYFNQU.js",
     "name": "console",
     "src": "src/console-main.jsx",
     "isEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-kit-Do7hJRFN.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-kit-BplY_7oH.js"
     ],
     "dynamicImports": [
       "src/app/views/Dashboard.jsx",
@@ -345,13 +345,13 @@
     ]
   },
   "src/main.jsx": {
-    "file": "landing-CoKaOP2A.js",
+    "file": "landing-Ce1DmUjd.js",
     "name": "landing",
     "src": "src/main.jsx",
     "isEntry": true,
     "imports": [
-      "_chunk-src-DRBlrMMM.js",
-      "_chunk-VipCall-C7rTcr4R.js"
+      "_chunk-src-Dz4ORXP_.js",
+      "_chunk-VipCall-DmNzmnlk.js"
     ]
   },
   "style.css": {

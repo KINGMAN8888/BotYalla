@@ -407,3 +407,14 @@ html { -webkit-tap-highlight-color: transparent; }
   html.has-tabbar .by-lift { bottom: calc(env(safe-area-inset-bottom) + 84px) !important; }
 }
 html.nav-open .by-fab, html.nav-open .by-fab-hint { display: none !important; }
+
+/* ------------------------------------------------------------ «مساعد BotYalla» (Assistant.jsx)
+   دوران كرة المساعد ولمعة «بشتغل على طلبك…». بلا حركة لمن يفضّل تقليلها. */
+@keyframes by-orb-spin { to { transform: rotate(360deg); } }
+@keyframes by-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.by-shimmer {
+  background: linear-gradient(90deg, #8b97b8 30%, #e4f9ff 50%, #8b97b8 70%) 0 0 / 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: by-shimmer 1.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .by-shimmer { animation: none; color: #8b97b8; } }

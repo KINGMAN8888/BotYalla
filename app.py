@@ -339,6 +339,7 @@ _CSP_BASE = {
     "font-src":        ["'self'", "https://fonts.gstatic.com"],
     "img-src":         ["'self'", "data:", "https:"],
     "connect-src":     ["'self'"],
+    "media-src":       ["'self'", "blob:"],     # صوت المساعد الطبيعي (/api/assistant/tts) يُشغَّل من blob
     "form-action":     ["'self'"],
     "base-uri":        ["'self'"],
     "object-src":      ["'none'"],
@@ -6247,21 +6248,62 @@ def assist_exit():
 # ---------- «مساعد BotYalla» داخل الموقع (site_assistant.py) ----------
 def _assistant_boot(view, lang):
     """ما تحتاجه الفقاعة عند الفتح: دليل الصفحة وأسئلة البداية — بلا طلب شبكة."""
-    import site_assistant as SA
+    import site_assistant as SA, voice_ai as VA
     g_ = SA.page_guide(view, lang)
+    try:
+        chain = ai.key_chain(db.get_platform)
+    except Exception:
+        chain = []
     return {"view": view, "title": g_["title"], "tips": g_["tips"], "starters": g_["starters"],
-            "api": "/api/assistant", "handoff": "/api/assistant/handoff", "act": "/api/assistant/act"}
+            "api": "/api/assistant", "handoff": "/api/assistant/handoff", "act": "/api/assistant/act",
+            "stt": "/api/assistant/stt", "tts": "/api/assistant/tts", "signed": bool(uid()),
+            # الصوت: المتصفح أولاً دائماً، وهذان احتياطه بمفاتيح المنصة (voice_ai)
+            "voice": {"stt": VA.can_transcribe(chain), "tts": VA.has_gemini(chain)}}
+
+def _assistant_pages(lang):
+    """{مفتاح: (الاسم، الرابط)} للصفحات التي يحقّ للمستخدم فتحها — نفس كتالوج التنقّل وفحصه."""
+    try:
+        _g, flat, admin_flat = UI.build_nav(_ui_ctx(), lang, url_for)
+    except Exception:
+        return {}
+    return {it["k"]: (it["l"], it["u"]) for it in flat + admin_flat}
 
 def _assistant_user():
     import site_assistant as SA
     u = getattr(g, "user", None)
     if not u:
         return SA.user_context(None, None, [], None)
+    lang = session.get("lang", i18n.DEFAULT)
     bots = db.list_bots(u["id"])
     for b in bots:
         b["running"] = manager.is_running(b["id"])
     sub = db.get_subscription(u["id"]) or {}
-    return SA.user_context(u, sub, bots, plans.plan_name(sub.get("plan") or "free", session.get("lang", i18n.DEFAULT)))
+    try:
+        m = db.home_metrics(u["id"])
+        metrics = {k: m[k] for k in ("bots_live", "msgs_today", "chats_today", "leads_week", "subscribers",
+                                     "new_subs_week") if k in m}
+    except Exception:
+        metrics = {}
+    pages = {k: v[0] for k, v in _assistant_pages(lang).items()}
+    return SA.user_context(u, sub, bots, plans.plan_name(sub.get("plan") or "free", lang), pages, metrics)
+
+def _assistant_go(page, lang):
+    """صفحة إجراء «navigate» ← (الرابط، الاسم) أو None. البوت يُفحص بالملكية مرة ثانية هنا."""
+    kind, _, rest = page.partition(":")
+    ar = lang != "en"
+    if rest.isdigit():
+        b = db.get_bot(int(rest), uid())
+        if not b:
+            return None
+        if kind == "bot":
+            return url_for("bot_detail", bot_id=b["id"]), b["name"]
+        if kind == "inbox":
+            return url_for("inbox", bot_id=b["id"]),("صندوق الوارد — " if ar else "Inbox — ") + b["name"]
+        if kind == "flow":
+            return url_for("flow_builder", bot_id=b["id"]), ("باني الفلو — " if ar else "Flow builder — ") + b["name"]
+        return None
+    hit = _assistant_pages(lang).get(page)
+    return (hit[1], hit[0]) if hit else None
 
 def _assistant_links(keys, lang):
     import site_assistant as SA
@@ -6288,10 +6330,14 @@ def api_assistant():
     view = _re.sub(r"[^a-z_]", "", str(d.get("view") or "home"))[:40] or "home"
     uctx = _assistant_user()
     out = SA.answer(text, SA.clean_history(d.get("history")), view, lang, uctx,
-                    ai.key_chain(db.get_platform))
+                    ai.key_chain(db.get_platform), voice=d.get("voice") is True)
     AN.queue(session, "assistant_ask", ai=out["ai"])
-    card = None
+    card = go = None
     act = out.get("action") if uid() else None
+    if act and act["type"] in SA.AUTO:                    # تنقّل: بلا بطاقة — الواجهة تفتح الصفحة
+        hit = _assistant_go(act["args"]["page"], lang)
+        go = {"url": hit[0], "label": hit[1]} if hit else None
+        act = None
     if act:
         names = {b["id"]: b["name"] for b in uctx.get("bot_list") or []}
         label, warn = SA.action_label(act, lang, names)
@@ -6302,7 +6348,7 @@ def api_assistant():
         session["assist_act"] = pend
         card = {"token": tok, "type": act["type"], "label": label, "warn": warn}
     return jsonify(ok=True, reply=out["reply"], suggestions=out["suggestions"], handoff=out["handoff"],
-                   links=_assistant_links(out["links"], lang), action=card)
+                   links=_assistant_links(out["links"], lang), action=card, go=go)
 
 
 @app.route("/api/assistant/act", methods=["POST"])
@@ -6354,6 +6400,8 @@ def api_assistant_act():
                        ("✅ Smart replies are on — send the bot a question from your phone." if a["on"] else
                         "✅ Smart replies are off — the bot follows its steps."),
                        url=url_for("bot_detail", bot_id=b["id"]))
+    if t in ("set_welcome", "update_info", "add_faq", "add_product"):
+        return jsonify(_assistant_edit(b, t, a, lang))
     if t in ("start_bot", "stop_bot"):
         ok, msg = (manager.start_bot if t == "start_bot" else manager.stop_bot)(b["id"])
         if ok and t == "start_bot":
@@ -6380,6 +6428,84 @@ def api_assistant_act():
         return jsonify(ok=True, msg=("✅ بلّغت الفريق — هيبدأ يجهّز بوتك ويبلّغك. تقدر توقف الإذن في أي وقت من لوحة التحكم."
                                      if ar else "✅ The team is notified and will set up your bot. You can stop the permission any time."))
     abort(400)
+
+
+def _assistant_edit(b, t, a, lang):
+    """تعديلات الوكيل الصغيرة على إعداد البوت: الإعداد كاملاً ← نسخة للتراجع ← التعديل ← حفظ الكل
+    (update_bot_config يستبدل الإعداد كله — §63) ← إعادة تشغيل البوت الشغّال ليقرأ الجديد."""
+    ar = lang != "en"
+    raw = json.loads(b["config_json"] or "{}")
+    cfg = json.loads(b["config_json"] or "{}")
+    if t == "set_welcome":
+        cfg["welcome"] = a["text"]
+        if isinstance(cfg.get("flow"), dict):            # بوتات الفلو تبدأ بـ start_message قبل welcome
+            cfg["flow"]["start_message"] = a["text"]
+        msg = "✅ غيّرت رسالة الترحيب — ابعت «/start» للبوت وشوفها." if ar else "✅ Welcome message updated — send /start to see it."
+    elif t == "update_info":
+        kb = dict(cfg.get("kb") or {})
+        kb.update({k: v for k, v in a.items() if k != "bot_id"})
+        cfg["kb"] = ai._coerce_kb(kb)
+        msg = "✅ حدّثت معلومات نشاطك — البوت هيرد منها." if ar else "✅ Business info updated — the bot answers from it now."
+    elif t == "add_faq":
+        kb = dict(cfg.get("kb") or {})
+        faqs = [f for f in kb.get("faqs") or [] if ai._norm(f.get("q")) != ai._norm(a["q"])]
+        if len(faqs) >= 12:
+            return {"ok": False, "url": url_for("bot_detail", bot_id=b["id"]) + "#brain",
+                    "error": "البوت فيه 12 سؤال (الحد الأقصى) — امسح سؤال قديم الأول." if ar else
+                             "The bot already has 12 Q&As (the maximum) — remove an old one first."}
+        kb["faqs"] = faqs + [{"q": a["q"], "a": a["a"]}]
+        cfg["kb"] = ai._coerce_kb(kb)
+        msg = "✅ اتعلّمها — جرّب تسأل البوت نفس السؤال." if ar else "✅ Learned — try asking the bot the same question."
+    else:                                                  # add_product — clean_action حصره في بوت المتجر
+        if b["template"] != "store":
+            return {"ok": False, "error": "البوت ده مش متجر." if ar else "This bot isn't a store."}
+        item = {"name": a["name"], "price": float(a["price"])}
+        if a.get("desc"):
+            item["desc"] = a["desc"]
+        cfg["products"] = [p for p in cfg.get("products") or [] if p.get("name") != a["name"]] + [item]
+        msg = ("✅ أضفت «%s» — تقدر تضيفله صورة من «المنتجات» في صفحة البوت." % a["name"]) if ar else \
+              ("✅ Added “%s” — you can add a photo under “Products” on the bot page." % a["name"])
+    db.save_config_version(b["id"], raw, "assistant")
+    db.update_bot_config(b["id"], cfg)
+    if manager.is_running(b["id"]):
+        manager.restart_bot(b["id"])
+    return {"ok": True, "msg": msg, "url": url_for("bot_detail", bot_id=b["id"])}
+
+
+@app.route("/api/assistant/stt", methods=["POST"])
+def api_assistant_stt():
+    """تفريغ مقطع صوتي للمساعد — احتياط المتصفح بلا SpeechRecognition. الصوت لا يُحفظ."""
+    import voice_ai as VA
+    lang = session.get("lang", i18n.DEFAULT)
+    if _rate_limited(request.remote_addr or "?", limit=20, window=600, bucket="assist_stt") or \
+            (uid() and _rate_limited(f"u{uid()}", limit=60, window=3600, bucket="assist_stt_u")):
+        return jsonify(ok=False, error=i18n.t("ai_rate", lang)), 429
+    mime = VA.base_mime(request.headers.get("Content-Type"))
+    if not mime or (request.content_length or 0) > VA.MAX_AUDIO:
+        return jsonify(ok=False, error="bad audio"), 400
+    audio = request.get_data(cache=False)[:VA.MAX_AUDIO + 1]
+    if not audio or len(audio) > VA.MAX_AUDIO:
+        return jsonify(ok=False, error="bad audio"), 400
+    text = VA.transcribe(audio, mime, lang, ai.key_chain(db.get_platform))
+    if text is None:
+        return jsonify(ok=False, error=("مقدرتش أسمعك كويس — جرّب تاني أو اكتب." if lang != "en" else
+                                        "I couldn't hear that — try again or type.")), 502
+    return jsonify(ok=True, text=text)
+
+
+@app.route("/api/assistant/tts", methods=["POST"])
+def api_assistant_tts():
+    """صوت طبيعي لرد المساعد (Gemini). أي فشل = 204 والمتصفح ينطق بصوته المحلي."""
+    import voice_ai as VA
+    lang = session.get("lang", i18n.DEFAULT)
+    if _rate_limited(request.remote_addr or "?", limit=40, window=600, bucket="assist_tts") or \
+            (uid() and _rate_limited(f"u{uid()}", limit=120, window=3600, bucket="assist_tts_u")):
+        return ("", 204)
+    text = str((request.get_json(silent=True) or {}).get("text") or "")[:VA.MAX_TTS_CHARS * 2]
+    wav = VA.speak(text, lang, ai.key_chain(db.get_platform))
+    if not wav:
+        return ("", 204)
+    return Response(wav, mimetype="audio/wav", headers={"Cache-Control": "no-store"})
 
 
 def _agent_design(b, desc, lang):
